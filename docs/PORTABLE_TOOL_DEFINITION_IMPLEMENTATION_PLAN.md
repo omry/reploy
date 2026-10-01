@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-09-30
+updated: 2026-10-01
 summary: Reviewable delivery plan for portable-tool authoring, definitions, and the embedded Java and Playwright implementations.
 implements: docs/PORTABLE_TOOL_DEFINITION_DESIGN.md
 ---
@@ -31,7 +31,7 @@ are nested delivery containers. Their first-class delivery IDs are `PTD-21.1` th
 `PTD-23.2.1` through `PTD-23.2.5`, and `PTD-23.3.1` through
 `PTD-23.3.7`, `PTD-24.1` through `PTD-24.2`, `PTD-25.1` through
 `PTD-25.2`, `PTD-25.3.1` through `PTD-25.3.2`, `PTD-25.3.3.1`,
-`PTD-25.3.3.2.1` through `PTD-25.3.3.2.5`, `PTD-25.3.3.3`, and
+`PTD-25.3.3.2.1` through `PTD-25.3.3.2.8`, `PTD-25.3.3.3`, and
 `PTD-25.4` through `PTD-25.6`; every other active
 milestone is itself one delivery item. The
 preparation gates are prerequisites, not
@@ -206,66 +206,64 @@ independent boundary pauses for an explicit authority correction, not an
 automatic split; no candidate hunk is silently dropped or owned by two
 children.
 
-Plan correction note (2026-09-30): the constructed but unapproved
-PTD-25.3.3.2 candidate at `362aa75ce8d323a00def2fab881a8eb4c0bac89a`
-(parent approved PTD-25.3.3.1 head
-`635328d95171368ebf082012cbb74bdc3636844b`, PR #197) changed 42 paths,
-with 4,215 additions and 178 deletions. Its seven required CI jobs passed at
-that head, and earlier review rounds are extraction evidence only: neither
-those checks nor the prior whole-candidate review approve any reconstructed
-head. The accepted PTD-25.3.3.2 responsibility was too broad for one reliable
-review. PTD-25.3.3.2 is now a nested container with no owning commit or PR,
-delivered in five dependent review-sized children. One plan-only correction
-must gain current-head approval directly above the approved PTD-25.3.3.1 head
-and before the first child. The existing PR #197 must be narrowed to exactly
-one child and restacked on that correction, or closed and superseded; it must
-never be approved with the whole candidate diff. The correction does not
-rewrite or invalidate the approved PTD-25.3.3.1 head. Each child owns one
-commit, PR, local review, all required checks, and a remote PR cycle before
-its successor activates.
+Plan correction history (2026-09-30): unapproved PR #197 at
+`362aa75ce8d323a00def2fab881a8eb4c0bac89a` (parent approved PR #196,
+`635328d95171368ebf082012cbb74bdc3636844b`) changed 42 paths, with
+4,215 additions and 178 deletions. Approved plan-only PR #198 at
+`617090674f585c145140180bfbe524d92c867cdc` divided it into five children
+and pinned an extraction ledger at `temp/ptd25332-recovery/ownership-ledger.json`,
+SHA-256 `b68865d17d00634e723e4cd8ec9dc1a3e0773e7438c1b7513984de5bcbf4dd79`.
+That partition and extraction obligation are historical, superseded by the
+2026-10-01 correction below. No child gained implementation approval.
+PR #197 is closed and unapproved; preserve its head and branch as evidence,
+not a delivery item. PR #198 remains unchanged approved ancestry.
 
-The five children own, in order, portable reference and durable-intent
-contracts; primary final-image publication and pending-reference recovery;
-current-image portable-layer verification; validated-candidate publication and
-failure cleanup; and installed-generation plus retirement/uninstall cleanup.
-The source commit is immutable extraction evidence, not approval of an
-intermediate head. A pre-extraction ownership ledger binds its 42 paths and
-every hunk to exactly one child or a recorded behavior-preserving reshape;
-write that ledger to the ignored repository-local scratch path
-`temp/ptd25332-recovery/ownership-ledger.json`. It records the exact source
-and parent heads, every source path and hunk digest, its owning child and
-retained, reshaped, or excluded disposition, the child's expected envelope,
-and its focused checks. Never add the ledger or other recovery scratch to
-Sapling, and preserve it until all five child PRs have current-head approval.
-A missing, changed, or incomplete ledger stops reconstruction.
-Ledger identity: `temp/ptd25332-recovery/ownership-ledger.json` has SHA-256
-`b68865d17d00634e723e4cd8ec9dc1a3e0773e7438c1b7513984de5bcbf4dd79`. It is
-bound to parent head `635328d95171368ebf082012cbb74bdc3636844b`, source head
-`362aa75ce8d323a00def2fab881a8eb4c0bac89a`, and source-diff SHA-256
-`f456e4a70904d9eed2f7b089ddb4a606f2e52fe1ceb82dd605a97e460a85bae2`; its
-complete coverage is exactly 42 source paths and 193 diff hunks, with 4,215
-added lines and 178 removed lines. Before first extraction and before every
-child construction or review, recompute and require this exact ledger SHA-256,
-both recorded heads, the source-diff SHA-256, and the complete 42-path/193-hunk
-coverage. Any ledger-byte change or source-to-child ownership reassignment
-requires a new plan-only corrective commit and PR. When it affects only
-children that have not been constructed, place that correction above the last
-approved child and before the earliest affected child. When it affects any
-constructed child, place the correction immediately before the earliest
-affected child; current-head approval and all seven exact-head CI results for
-that child and every descendant become stale, and the affected suffix must be
-restacked, revalidated, and re-reviewed in order. A correction may never
-descend from history whose ledger ownership it changes. No chat or PR-body-only
-override is valid. Preserve the ledger through current-head approval of all
-five children.
-The initial file-level envelope is 13 paths/1,062 changed lines, 6/792,
-5/456, 7/1,224, and 11/859 respectively. These are review-estimation signals,
-not permission to absorb another independent boundary. Before each child review,
-reconcile its actual tracked and untracked diff with that ledger; a material
-overrun or newly independent responsibility pauses for authority correction.
-Every intermediate head compiles and fails closed, and ordinary application
-requests remain rejected until PTD-25.3.3.3. No accepted behavior, support
-claim, or PTD-25.3.3.3 through PTD-25.6 ownership changes.
+Plan correction note (2026-10-01): the third recovery replaces the unpublished
+five-child partition of PTD-25.3.3.2 with eight flat siblings,
+PTD-25.3.3.2.1 through PTD-25.3.3.2.8. No further nested container is added.
+The new plan-only correction owns one commit/PR above the exact approved PR #198
+head, with its own deep design review, all seven exact-head CI jobs and remote
+approval before the first replacement child. Approved PR #196/#198 ancestry
+must not be rewritten. Each new leaf is freshly implemented from accepted
+behavior and approved production, independently reviewed and remotely approved
+before its successor is constructed. Former child labels are reassigned before
+any approved implementation exists; no earlier checks or approval transfer.
+
+The abandoned 18-path worktree is preserved at
+`temp/ptd25332-recovery-third/frozen-source/candidate-files.tar`, SHA-256
+`5141003cdd37f772d0cb7ec60a1398600d476cc776aa64293320c7099354325e`,
+with per-path manifest `manifest.json`, SHA-256
+`b018a68ccde75c3db374a9531d0cbff438ea32f26f0d7aef402087b9e0cf22e3`.
+Its frozen target identity is
+`bbddc121898babc70d3355127d99bdf7f668cd96722f49fe1cd739933ad939c3`;
+the Sapling shelf `ptd253321_abandoned_third_recovery_20261001` is an
+independent preservation copy. Earlier archives, shelves, source PR #197 and
+the old extraction ledger remain retained as forensic evidence only. They are
+not implementation donors, hunk-ownership constraints, or inherited review
+approval. The 2026-09-29 source-extraction requirement also does not apply to
+fresh replacement PTD-25.3.3.2 children. Never unshelve or transplant those
+candidates to construct a replacement leaf. The accepted parent behavior and
+PTD-25.3.3.1/.3 boundaries remain unchanged.
+
+Recovery inventory, exact review reports and historical finding dispositions
+live under ignored `temp/ptd25332-recovery-third/`; no `temp/` file may
+be tracked in Sapling. Keep those verified preservation copies through all
+replacement approvals. For every fresh leaf record its approved predecessor,
+owned responsibility/interfaces, expected tracked and untracked files/line
+envelope, production versus test delta, focused checks and actual growth.
+Reconcile historical findings as acceptance discoveries after independent design,
+not as code donors. All carried cases are stated below so construction does not
+depend on chat or an unavailable scratch archive.
+
+More than 1,000 changed lines, more than eight changed paths, or a new independent
+behavioral boundary triggers a recorded pause and proceed-or-replan assessment
+before deep review, commit or publication. Crossing a leaf's ownership requires
+an approved plan correction before coding. No leaf may silently accumulate a
+multi-thousand-line core review. Prospective-only corrections sit above the
+current approved tip before the affected unconstructed leaf. A correction
+affecting any constructed leaf must precede the earliest affected leaf and
+invalidate, restack, rerun exact-head CI and re-review the whole affected suffix.
+The preserved source ledger cannot override these fresh boundaries.
 
 Plan correction note (2026-09-01): PTD-21.4 review exposed duplicate ownership
 of canonical portable-tool record structures and validation between catalog
@@ -481,7 +479,8 @@ PTD-25.3.2 head owns one commit and PR, is not a `PTD-*` delivery item, and
 must retain current-head approval before PTD-25.3.3.1 activates.
 The stamped PTD-25.3.3.2 plan-only corrective predecessor after the approved
 PTD-25.3.3.1 head likewise owns one commit and PR, is not a delivery item, and
-must retain current-head approval before PTD-25.3.3.2.1 activates.
+must retain current-head approval; the additive replacement correction above
+its unchanged PR #198 head must also be approved before PTD-25.3.3.2.1 activates.
 Their explicitly enumerated leaf slices are first-class delivery items: each
 owns one commit and one PR, while a container owns neither.
 The sole authorized review-subdivision exception is `PTD-23.1.4`, which remains
@@ -498,7 +497,7 @@ approval; `PTD-22` completes only when `PTD-22.1` through `PTD-22.3` do;
 completes only when all three nested containers do. `PTD-24` completes only
 when `PTD-24.1` through `PTD-24.2` have current-head approval.
 `PTD-25.3.3.2` completes only when `PTD-25.3.3.2.1` through
-`PTD-25.3.3.2.5` have current-head approval. `PTD-25.3.3` completes only
+`PTD-25.3.3.2.8` have current-head approval. `PTD-25.3.3` completes only
 when `PTD-25.3.3.1` and `PTD-25.3.3.3` have current-head approval and
 `PTD-25.3.3.2` is complete. `PTD-25.3` completes only when `PTD-25.3.1`,
 `PTD-25.3.2`, and the `PTD-25.3.3` nested container do. `PTD-25` completes only when
@@ -559,13 +558,13 @@ flowchart TD
 
 Remote review capacity is a shared, exhaustible resource, so construction does
 not generally wait for it. The explicit exception is the dependent
-`PTD-25.3.3.2.1` through `PTD-25.3.3.2.5` series: construct each child only
+`PTD-25.3.3.2.1` through `PTD-25.3.3.2.8` series: construct each child only
 after its immediate predecessor has current-head approval and all seven
 required CI jobs from `.github/workflows/ci.yml` have passed on that exact
-predecessor head. For `PTD-25.3.3.2.1`, the predecessor is the stamped
-PTD-25.3.3.2 plan-only correction after the approved PTD-25.3.3.1 head. A
+predecessor head. For `PTD-25.3.3.2.1`, the predecessor is the stamped 2026-10-01 replacement
+plan-only correction above unchanged approved PR #198. A
 changed predecessor head invalidates both approval and CI evidence for this
-gate. For `PTD-25.3.3.3`, its predecessor `PTD-25.3.3.2.5` must have
+gate. For `PTD-25.3.3.3`, its predecessor `PTD-25.3.3.2.8` must have
 current-head approval and all seven required CI jobs from
 `.github/workflows/ci.yml` passed on that exact head before its construction.
 Construction and review are separate phases with separate evidence.
@@ -579,7 +578,7 @@ Construction phase, per delivery item, without remote review:
 
 1. Verify all dependencies are constructed, locally reviewed, and passing their
    checks. Remote approval is not a construction prerequisite except for
-   `PTD-25.3.3.2.1` through `PTD-25.3.3.2.5` and `PTD-25.3.3.3`, which follow
+   `PTD-25.3.3.2.1` through `PTD-25.3.3.2.8` and `PTD-25.3.3.3`, which follow
    the exact-head predecessor gates above.
 2. Establish intent, owned scope, acceptance criteria, and non-goals from this
    plan and the normative design. A milestone container supplies shared scope
@@ -682,13 +681,16 @@ the campaign until durable authority is updated.
 | PTD-25.3.2 | Acquire and Replay Selected Python Bindings | PTD-25.3.1 | New work |
 | PTD-25.3.3 | Materialize Runtime Payloads in the Final Application Image | PTD-25.3.2, then approved PTD-25.3.3 plan-only correction | Nested container; no owning PR |
 | PTD-25.3.3.1 | Establish Verified Runtime Layers and Lock Contracts | approved PTD-25.3.3 plan-only correction after PTD-25.3.2 | New work |
-| PTD-25.3.3.2 | Make Runtime Publication and Reuse Recoverable | PTD-25.3.3.1, then approved PTD-25.3.3.2 plan-only correction | Nested container; no owning PR |
-| PTD-25.3.3.2.1 | Define Portable Image References, Cleanup Primitives, and Durable Intents | approved PTD-25.3.3.2 plan-only correction after PTD-25.3.3.1 | Reconstruct from unapproved PR #197 source |
-| PTD-25.3.3.2.2 | Publish Final Generations and Recover Pending References | PTD-25.3.3.2.1 | Reconstruct from unapproved PR #197 source |
-| PTD-25.3.3.2.3 | Verify Selected Content Before Current-Image Reuse | PTD-25.3.3.2.2 | Reconstruct from unapproved PR #197 source |
-| PTD-25.3.3.2.4 | Publish and Recover Validated-Candidate References | PTD-25.3.3.2.3 | Reconstruct from unapproved PR #197 source |
-| PTD-25.3.3.2.5 | Publish Installed References and Retire Replaced Generations | PTD-25.3.3.2.4 | Reconstruct from unapproved PR #197 source; completes PTD-25.3.3.2 |
-| PTD-25.3.3.3 | Activate Complete Application-Tool Materialization | PTD-25.3.3.2.5 | New work; completes PTD-25.3.3 and PTD-25.3 |
+| PTD-25.3.3.2 | Make Runtime Publication and Reuse Recoverable | PTD-25.3.3.1, approved PR #198, then approved 2026-10-01 replacement plan correction | Nested container; no owning PR |
+| PTD-25.3.3.2.1 | Project Exact Owned References and Companion Docker Operations | approved 2026-10-01 replacement plan correction above PR #198 | Fresh implementation |
+| PTD-25.3.3.2.2 | Publish Current Generations and Recover Pending Ownership | PTD-25.3.3.2.1 | Fresh implementation |
+| PTD-25.3.3.2.3 | Publish Validated Candidates with Durable Intent | PTD-25.3.3.2.2 | Fresh implementation |
+| PTD-25.3.3.2.4 | Retire Validated Candidates and Preserve Provider Failure Roots | PTD-25.3.3.2.3 | Fresh implementation |
+| PTD-25.3.3.2.5 | Transfer and Publish Installed Ownership | PTD-25.3.3.2.4 | Fresh implementation |
+| PTD-25.3.3.2.6 | Retire Staged and Installed Owners Before Directory Removal | PTD-25.3.3.2.5 | Fresh implementation |
+| PTD-25.3.3.2.7 | Retire Former Owners Before Forced Replacement | PTD-25.3.3.2.6 | Fresh implementation |
+| PTD-25.3.3.2.8 | Verify Exact Final Content and Close Publication Acceptance | PTD-25.3.3.2.7 | Fresh implementation; completes PTD-25.3.3.2 |
+| PTD-25.3.3.3 | Activate Complete Application-Tool Materialization | PTD-25.3.3.2.8 | New work; completes PTD-25.3.3 and PTD-25.3 |
 | PTD-25.4 | Validate the Exact Application Image | PTD-25.3.3.3 | New work |
 | PTD-25.5 | Persist and Match External Validation Evidence | PTD-25.4 | New work |
 | PTD-25.6 | Prove the Generic Integration Harness End to End | PTD-25.5 | New work; completes PTD-25 |
@@ -2234,7 +2236,7 @@ Prerequisite: current-head approval for the stamped PTD-25 plan-only correction
 above the approved PTD-24.2 head. This container owns no implementation commit
 or PR; its contract is delivered by `PTD-25.1`, `PTD-25.2`,
 `PTD-25.3.1`, `PTD-25.3.2`, `PTD-25.3.3.1`,
-`PTD-25.3.3.2.1` through `PTD-25.3.3.2.5`, `PTD-25.3.3.3`,
+`PTD-25.3.3.2.1` through `PTD-25.3.3.2.8`, `PTD-25.3.3.3`,
 and `PTD-25.4` through `PTD-25.6` in order.
 
 Scope: derive runnable cases from release manifests and the exact support cases
@@ -2373,7 +2375,7 @@ request boundary activation, or support evidence.
 This is a nested delivery container with no implementation commit or PR. A
 plan-only correction directly above the approved PTD-25.3.2 head must have
 current-head approval before construction. Its complete scope and acceptance
-contract below are owned exactly once by PTD-25.3.3.1, the five children of
+contract below are owned exactly once by PTD-25.3.3.1, the eight children of
 PTD-25.3.3.2, and PTD-25.3.3.3. The preserved whole-candidate snapshot is extraction evidence,
 not an approved head or permission to publish all of its hunks as one slice.
 
@@ -2392,7 +2394,7 @@ materialization and locked replay. Wrong target, missing bytes, changed
 provenance, provider conflict, omitted payload, or incomplete consumption
 cannot publish a successful build. No Java-only build requirement enters an
 application image. The parent PTD-25.3 acceptance is satisfied after
-PTD-25.3.3.1, all five PTD-25.3.3.2 children, and PTD-25.3.3.3 have
+PTD-25.3.3.1, all eight PTD-25.3.3.2 children, and PTD-25.3.3.3 have
 current-head approval; no callback or external support evidence
 is yet claimed.
 
@@ -2431,11 +2433,10 @@ reuse, ordinary-build request activation, validation callbacks, or evidence.
 
 This nested container owns no implementation commit or PR. Its complete
 technical and acceptance contract below remains in force, owned exactly once
-across PTD-25.3.3.2.1 through PTD-25.3.3.2.5. The approved plan-only
-correction above PTD-25.3.3.1 and below the first child is a prerequisite,
-not a child implementation PR. The previously constructed PR #197 is
-unapproved extraction evidence; its current checks and reviews do not transfer
-to any child after reconstruction.
+across PTD-25.3.3.2.1 through PTD-25.3.3.2.8. The 2026-10-01 additive
+plan-only correction above unchanged approved PR #198 is a prerequisite, not
+a child implementation. Closed unapproved PR #197 and the abandoned candidate
+are forensic evidence, not extraction sources or approved implementation.
 
 Scope: expose one generic publication operation over the exact already
 finalized image candidate and complete validated build lock supplied by its
@@ -2461,147 +2462,398 @@ compiles and still rejects ordinary application tool requests.
 Non-goals: catalog selection, payload acquisition policy, request-boundary
 activation, exact-image validation callback, or external evidence.
 
-Each child must be a separately compiling, fail-closed head with paired
-positive, negative, and interruption tests for its ownership. The initial
-source-commit file envelope below accounts for all 42 changed paths and 4,393
-changed lines exactly once; it is not permission to carry a file's unrelated
-hunks into the wrong child. Before extraction, record the hunk-level
-disposition and any necessary responsibility-preserving file movement in
-`temp/ptd25332-recovery/ownership-ledger.json` under the identity and
-retention rules above.
-Reconcile source-to-child accounting and actual tracked and untracked changes
-before every local review. Do not defer an unowned source hunk to
-PTD-25.3.3.3 or activate ordinary application requests here.
+##### Shared ownership and recovery contract
 
-##### PTD-25.3.3.2.1: Define Portable Image References, Cleanup Primitives, and Durable Intents
+Retain the optional `BuildLockV1.PortableRuntimeLayer.Result` with one
+deployment-owned companion to each existing final-image generation owner.
+Do not invent another current generation, second lock, persisted validation
+schedule, global image-owner registry, or portable-specific store-object kind.
+The final-image generation remains the sole commit unit. Its validated lock is
+the authority for portable image identity; ordinary committed state need not
+duplicate that immutable identity.
 
-Scope: define exact deployment- and image-bound portable runtime generation
-and provisional references, fixed Docker create/remove primitives, and the
-strict persisted pending-validated, validated-discard, and retiring-generation
-intent records. It also defines and directly tests the generic paired final-
-and portable-reference cleanup transaction used by later lifecycle callers.
-The reference, cleanup, and record validators reject ambiguous,
-cross-deployment, mismatched, or incomplete ownership before any later
-publication caller can use them. This child owns only contract and primitive
-behavior, not publication, image reuse, or request activation.
+Current, validated, and installed generations have independent references even
+when their images are identical. Transfer acquires destination ownership before
+releasing source ownership. A shared content-addressed verification-cache tag
+is not used: the existing cache retainers have no deployment retirement
+authority, and retiring such a shared tag would need additional reachability
+machinery. The existing final-image reference algorithm is not globally
+migrated or hardened as incidental work.
 
-Initial extraction envelope: 13 paths and 1,062 changed lines from
-`internal/dockerdeploy/generation_reference*`,
-`internal/dockerdeploy/retiring_generation_cleanup.go`,
-`internal/dockerdeploy/recorded_generation_reference_cleanup{,_test}.go`, and
-`internal/deploy/{pending_validated_build,state_v1,validated_build}{,_test}.go`.
-The cleanup primitive is defined and tested here but has no production caller
-until the owning later lifecycle child. If a file-level extraction cannot compile without
-crossing that boundary, split its hunks and record the movement.
+###### One ownership projection
 
-Acceptance: canonical records round-trip and reject malformed or conflicting
-intents; reference creation, inspection, and removal bind the exact image,
-generation, environment, and deployment; no new caller treats an incomplete
-generation as current. Focused tests compile on this head and ordinary
-application tool requests remain rejected.
+One pure projection consumes an accepted generation owner and its strictly
+validated build lock. It returns exact final and, when present, portable
+image/reference pairs in deterministic order. The portable role is explicit,
+cannot collide with the primary tag, and must be validated against the expected
+deployment, environment, and generation before Docker mutation. New companion
+references must use full deployment-path hash scope, rather than weaken new
+ownership to a short-prefix comparison; existing primary references remain
+unchanged. Reference spelling is backend identity, not build identity.
 
-Non-goals: final-image publication, validated-candidate execution, installed
-generation transitions, current-image verification, or support evidence.
+The same projection supplies normal publication, transfer, retirement, and
+verification. The fixed companion primitive reuses existing Docker command and
+image-inspection plumbing, not unsafe absence or mismatch branches. Only an
+explicit Docker not-found result counts as absence; other inspection failures
+stop. Creation requires recorded ownership before tagging, checks collision
+before mutation, and preserves a tag on any observed post-tag mismatch. Removal
+checks exact scope and config ID and may untag that exact recorded tag using
+Docker's existing `image rm --force <owned-tag>` semantics; it never force-removes
+an image ID, discovers tags globally, or prunes Docker. An absent reference
+succeeds only with validated retained ownership/cleanup inventory. A mismatched
+reference is never deleted to repair a failed check.
 
-##### PTD-25.3.3.2.2: Publish Final Generations and Recover Pending References
+These guarantees assume Reploy writers obey the deployment operation lock.
+Unrelated Docker writers are outside that lock: inspect-then-mutate is not CAS.
+Reject every observed mismatch without claiming atomic protection against an
+arbitrary external retarget between inspection and mutation. Existing primary
+reference algorithms are not globally migrated into this new primitive.
 
-Scope: consume PTD-25.3.3.2.1's reference contracts to publish an already
-finalized image and validated lock with both final and selected portable
-runtime references. Record provisional ownership before each fallible Docker
-mutation, retain exact lock/store roots during pending recovery, and remove
-only recorded uncommitted references on retry. The operation accepts a
-synthetic caller-supplied image/lock pair; it does not build that pair.
+###### Persistence is owned by the transition that needs it
 
-Initial extraction envelope: 6 paths and 792 changed lines from
-`internal/dockerdeploy/{build_publication,pending_publication_recovery,pending_reference_recovery}{,_test}.go`.
+Before a new reference can be created, a durable pending record must bind its
+exact reference and image. Before committed ownership can be removed or
+replaced, durable cleanup authority must bind the retiring pairs. Such a record
+may legitimately snapshot identity from a lock: after the lock is pruned, that
+snapshot is recovery inventory, not a second authority for accepting a build.
 
-Acceptance: failure injection before and after each persisted transition
-proves either one complete current generation or a retryable pending intent;
-wrong image, reference, lock, or source provenance fails closed. Recovery
-preserves committed and validated-candidate store roots, cleans uncommitted
-aliases, and cannot publish a partial generation. Focused tests and repository
-compile pass; ordinary application requests remain rejected.
+Reuse `PendingBuildV1` for current and installed publication. Candidate intent
+must carry enough exact portable identity for rollback before the candidate
+lock exists. Old reference retirement must not require reopening an old lock
+after it has been deleted. Recovery chooses keep/discard from reread committed
+state, not the recorded phase, and validates the surviving committed lock and
+store roots before mutation. References retire before their supporting locks;
+pending intent is removed last. Cleanup progress is persisted or the exact
+cleanup inventory remains independently replayable after lock pruning.
 
-Non-goals: validated-candidate publication, installed build transitions,
-ordinary-build lock assembly, current-image content verification, or callbacks.
+Current publication/recovery and failed-provider cleanup retain both lock digests
+and store closures of every surviving current and committed validated owner;
+validated-only ownership is not equivalent to an empty deployment. Equal lock
+digests deduplicate storage, not independently owned tags. Metadata mutation
+must first recover outstanding validated publication or conservatively preserve
+its exact intent, locks, store roots, and reference inventory. Malformed or
+conflicting intent stops without pruning. This prerequisite applies to every
+entry point that can prune or overwrite metadata, not only validated operations.
 
-##### PTD-25.3.3.2.3: Verify Selected Content Before Current-Image Reuse
+Validated publication needs a narrowly scoped pending record before tagging;
+returned-error defers do not cover process termination. Preserve the previous
+committed candidate until replacement commits. Its existing `PendingCleanup`,
+`PendingStorageCleanup`, and `Discarded` fields remain the retirement machinery.
+Do not introduce a second portable-only discard journal. Child .3 introduces
+pre-tag intent and the narrow cross-entry recover/preserve prerequisite; child
+.4 completes validated retirement and provider-failure cleanup. Earlier .2
+preserves already committed validated metadata without depending on a future
+pending-validated schema.
 
-Scope: extend the existing current-build verifier to inspect the exact
-portable runtime reference and locked image, recheck the selected offline
-payload bytes and inventory through PTD-25.3.3.1's primitive, verify
-environment and upstream/final image identity, then recheck the alias after
-the content audit. This is read-only with respect to published current-image
-and reference state. It may rematerialize selected verified bytes into bounded
-disposable offline audit staging, which must be cleaned on every exit; it is
-not publication or a new accepted materialization path.
+For staged terminal removal, retire exact current and validated pairs under the
+original directory lock while their state, locks, and cleanup records remain at
+the original path. That durable owner inventory authorizes idempotent absence
+on retry; the command does not erase it after partial retirement. Before the
+first retirement mutation, durably mark terminal removal in the existing staged
+state under that lock. This narrow guard carries no image inventory or second
+generation authority; retained state, locks, and cleanup records remain the
+authority. Common deployment writer admission and locked owner-mutation APIs
+must reject guarded staging before any filesystem, Docker, or publication
+mutation, including explicit no-cache builds and callers already holding a lock.
+This is enforced in code, not a convention requiring a caller to remember a
+check. Read-only diagnostics remain available. Only a scoped terminal-removal
+continuation may mutate the guarded deployment, after validating its exact
+directory/state identity and retained retirement inventory.
 
-Initial extraction envelope: 5 paths and 456 changed lines from
-`internal/dockerdeploy/current_build_verify{,_test}.go`,
-`current_build_reuse_test.go`, `portable_runtime_payload_image.go`, and
-`portable_runtime_reference_verify_test.go`.
+Keep that guard durable through partial retirement, process exit, lock release,
+and directory isolation. The Windows path releases the operation lock before
+rename; another writer acquiring that free lock must still fail closed. The
+guard is not a runtime queue lease: abandoned-marker recovery cannot clear it
+or reopen writer admission. A failed rename retains the guard and original
+authority for an explicit removal retry; ordinary writes cannot clear the guard
+or revive a partially retired generation. Only after all references retire and
+the writer exclusion remains effective may the existing directory rename/removal
+occur. The guard moves with the directory and is removed with it, never cleared
+at the original path before isolation. A random tombstone therefore owns no live
+image reference requiring a new retry service.
+Installed removal retains its existing deterministic tombstone/control-dir retry
+path. Child .6 owns this narrow staged-state guard, common writer enforcement,
+and scoped removal continuation as one terminal-removal behavior. It introduces
+no second operation lock, generic retirement service, or staged tombstone retry
+protocol. Malformed or conflicting guard authority fails before mutation.
 
-Acceptance: exact selected content and lock identity pass; missing, retargeted,
-stale, or substituted references, bytes, inventory, environment, target, or
-provenance fail before reuse. The audit has no network or tool-supplied command
-path, performs cleanup even on failure, and preserves ordinary non-portable
-current-build behavior. Requests remain rejected.
+Forced desired-state replacement also retires the entire former environment
+owner set before committing the new environment identity: recover or preserve
+both publication intents, then finish validated PendingCleanup/discard and
+retire current pairs while old state and locks still bind their exact old
+environment/deployment context. Only then commit replacement desired state with
+no current generation. A failed retirement retains old authority for retry and
+must produce no passing result; a partly retired old generation is unusable and
+normal current validation fails closed. There is no new retiring-generation
+schema or postcommit image cleanup, so environment change cannot erase retry
+authority or make a stale cleanup delete a later new generation. Postcommit
+metadata pruning uses the reread surviving-owner set. No pending work is erased.
 
-Non-goals: creating aliases, validated-candidate lifecycle, installed
-publication, ordinary-build assembly, or support evidence.
+Unreleased local schema changes are strict atomic changes with no compatibility
+adapter solely for a previous partial PTD head. Records with no portable layer
+retain their ordinary behavior. Mutable serialized inputs still receive strict
+validation; in-process immutable projections are derived once and reused.
 
-##### PTD-25.3.3.2.4: Publish and Recover Validated-Candidate References
+###### Verification remains separate
 
-Scope: extend the validated-candidate and provider-build failure lifecycle to
-create and retain the exact selected portable reference, persist pending
-publication and discard intent before mutation, and recover or clean only
-those aliases not owned by a committed candidate. Integrate the existing
-provider executor with PTD-25.3.3.2.3's verifier so a cached candidate cannot
-substitute a different portable layer. Keep the generic production path below
-the ordinary application request boundary.
+`verifyLockedImagesV1` follows base -> ordered provider results -> optional
+portable result -> application-runtime result -> finalized image. Inspect the
+portable result, check its exact locked upstream, and advance the application
+runtime's source to it. Inspect companion ownership and result identity, but
+audit selected payload inventory and environment in `lock.FinalImage`: a correct
+companion alone cannot prove later layers preserved those bytes. Reuse the
+existing offline payload primitive and bounded disposable audit staging; do not
+build another image. Inspect the owner reference before and after the audit.
+Do not re-acquire, consult the catalog, invoke tools/support probes, or repair
+tags to make verification pass. Cleanup failure prevents a passing result.
+Both current and validated/provider reuse call the same content auditor.
+Ordinary current runtime checks remain build-free and store-free after bundle
+clean; full build verification/reuse uses its existing stronger prerequisites.
 
-Initial extraction envelope: 7 paths and 1,224 changed lines from
-`internal/dockerdeploy/validated_build_candidate{,_test}.go`,
-`provider_build_execute{,_test}.go`, `provider_build_failure_cleanup.go`, and
-`provider_build_run{,_test}.go`.
+Every producing intermediate head must enumerate existing consumers of its new
+owner records. While ordinary application requests remain rejected, a synthetic
+publication can still produce a durable owner. If a later lifecycle consumer
+cannot safely process that owner yet, the producing slice installs a narrow
+fail-closed unmet-boundary check before that consumer mutates resources, and
+the owning successor replaces that rejection with its completed behavior. No
+adapter, legacy simulation, or partially successful retirement is permitted.
 
-Acceptance: interrupted candidate publication, discard, pending removal, and
-failed provider cleanup retain exact retry authority; previous committed
-candidates survive failed replacement. Missing or retargeted portable aliases
-fail before reuse, and cleanup cannot delete an alias owned by current state.
-Focused candidate and provider-graph tests pass without activating ordinary
-application requests.
+##### Review envelopes and sequencing
 
-Non-goals: installed-build publication, force replacement, uninstall,
-application final-image assembly, callbacks, or evidence.
+Each flat sibling has one compiling exact head and one commit/PR. Require its
+independent local review, all seven exact-head CI jobs and remote approval before
+constructing the next. Ordinary requests remain rejected until PTD-25.3.3.3.
+The initial envelopes include all production, test and fragment changes.
 
-##### PTD-25.3.3.2.5: Publish Installed References and Retire Replaced Generations
+| ID | Single review responsibility | Initial expected changed lines / files |
+| --- | --- | --- |
+| PTD-25.3.3.2.1 | Project exact generation-owned image/reference pairs and implement the fixed companion Docker primitive | 450–750 / 4–6 |
+| PTD-25.3.3.2.2 | Publish current generations and recover their exact pending ownership | 550–900 / 5–7 |
+| PTD-25.3.3.2.3 | Publish validated candidates with durable pre-tag intent | 550–900 / 5–7 |
+| PTD-25.3.3.2.4 | Retire validated candidates and wire provider-failure cleanup | 400–750 / 4–6 |
+| PTD-25.3.3.2.5 | Transfer and publish installed generation ownership | 350–650 / 2–4 |
+| PTD-25.3.3.2.6 | Retire staged and installed owners with writer exclusion through directory isolation | 550–900 / 6–8 |
+| PTD-25.3.3.2.7 | Retire all former owners before forced desired-state replacement | 300–600 / 3–5 |
+| PTD-25.3.3.2.8 | Verify exact portable content and owner identity before build reuse; close parent acceptance | 500–850 / 4–6 |
 
-Scope: complete selected portable-reference ownership in installed-build
-publication and in staged removal, force replacement, and uninstall. Persist
-old-generation cleanup authority before committing a replacement, remove
-both final and portable aliases idempotently, and resume cleanup after a
-process interruption. Guard desired-state replacement from erasing a pending
-retirement. This child closes the PTD-25.3.3.2 parent contract, but never
-consumes an ordinary application tool request.
+All estimates include tracked and untracked production, test, and fragment
+changes. They are assessment triggers, not approval to spend the upper bound or
+omit tests. Recheck live growth during construction and before deep review.
+More than 1,000 changed lines, more than eight paths, or a new independent
+behavioral boundary requires a recorded pause/proceed-or-replan assessment
+before review or publication. Crossing a child's responsibility requires a
+plan correction before code; do not borrow successor work to make it compile.
+Each child records production versus test lines and actual ownership. No child
+may grow to several thousand lines and enter review under this estimate.
 
-Initial extraction envelope: 11 paths and 859 changed lines from
-`internal/dockerdeploy/installed_build_publication{,_test}.go`,
-`desired_state_force_replace{,_test}.go`,
-`staged_deployment_remove.go`, `provider_uninstall_pending_remove.go`,
-`provider_uninstall_remove_dir{,_test}.go`,
-`internal/deploy/desired_state{,_test}.go`, and the paired Changie fragment.
+##### PTD-25.3.3.2.1: Project Exact Owned References and Companion Docker Operations
 
-Acceptance: successful installed and replacement generations retain exactly
-their selected final and portable images; interrupted or failed retirement,
-uninstall, or publication preserves a retryable record and cannot strand an
-unowned reference or erase a current one. Final-image verification from
-PTD-25.3.3.2.3 still passes on the selected generation. All parent
-publication, recovery, reuse, and cleanup acceptance clauses pass on the exact
-head; ordinary application requests remain rejected.
+Owned production: a responsibility-named pure ownership projection and the
+companion reference create/inspect/remove boundary alongside existing
+`generation_reference*`. Introduce only the reusable exact-reference value
+needed by this primitive; do not create pending, discard, replacement, or
+retirement record families here. No new committed-state portable identity.
 
-Non-goals: payload acquisition, final-image/lock assembly, request activation,
-validation callbacks, or external evidence.
+Inputs/outputs: validated lock plus generation owner -> zero or one portable
+companion and its exact result image, together with the existing primary pair.
+Synthetic primitive callers only; lifecycle wiring belongs to later children.
+
+Tests: no layer, matching layer, malformed owner, wrong deployment/environment,
+wrong image/platform, role collision, inspection failure versus confirmed
+not-found, pre-tag collision, post-tag mismatch preservation, absence with/without
+recorded authority, exact idempotent untag, exited-container tag use, and
+independent owners of byte-identical images.
+
+##### PTD-25.3.3.2.2: Publish Current Generations and Recover Pending Ownership
+
+Owned production: `pending_build*`, `build_publication*`,
+`pending_publication_recovery*`, `pending_reference_recovery*` changes limited
+to this transition. Reuse the existing backend and state commit point.
+
+Inputs/outputs: caller's finalized image and complete lock -> one current
+generation owning both exact image references; or unchanged old state with
+retryable intent. This child owns necessary pending-schema extensions,
+including old cleanup authority surviving old-lock deletion. It owns no
+validated pre-tag protocol or forced-replacement intent.
+
+Tests inject failure before/after intent, each tag, lock publication, state
+commit, each old-reference removal, old-lock pruning, store pruning, and intent
+removal. Retry after lock pruning must work without the retired lock; state
+conflict and changed reference must preserve all unproven resources. Preserve
+current plus already committed validated lock digests and store roots, including
+validated-only ownership and equal digests under independent tags. Include
+absent-layer regression and explicit unmet-boundary guards for not-yet-delivered
+consumers. No ordinary-build layer assembly or request activation.
+
+##### PTD-25.3.3.2.3: Publish Validated Candidates with Durable Intent
+
+Owned production: one narrow pending-validated record and its strict atomic
+file boundary, `validated_build_candidate*` publication and precommit recovery,
+and narrow recover/preserve guards in current publication/recovery and
+provider-failure metadata pruning. These callsites may not delete newly pending
+ownership. Do not introduce discarded-state or retiring-generation records.
+
+Inputs/outputs: supplied finalized image/lock -> durably committed validated
+owner with both references, or a recoverable uncommitted candidate. Exact intent
+precedes tagging and records previous/candidate ownership. Publication commit
+selects the validated record; rollback cannot remove previous ownership.
+Superseded owners feed the existing exact `PendingCleanup` inventory; postcommit
+cleanup may remain retryable rather than erase the inventory.
+
+Tests: termination at every persisted phase, failure after each new tag, commit
+followed by intent-removal failure, conflicting previous candidate, malformed
+intent, missing lock before publication, pending intent during current/provider
+cleanup, validated-only ownership, and byte-identical candidates under independent
+owners. Restart is bounded and makes no network call. Preserve guarded consumers
+until their owning transition lands; no returned-error defer substitutes for intent.
+
+##### PTD-25.3.3.2.4: Retire Validated Candidates and Preserve Provider Failure Roots
+
+Owned production: validated discard/retry paths and
+`provider_build_failure_cleanup*`; narrow provider execution integration only
+to invoke owned recovery/cleanup. Reuse .3's intent and existing retirement
+fields, not another protocol. Pending reference entries store exact pairs so
+partial image and storage cleanup can resume without a pruned lock.
+
+Tests: partial two-reference retirement, missing and retargeted references,
+discard after lock pruning, provider execution failure, interrupted promotion,
+and surviving current ownership of the same image. A validated candidate is
+not silently reused without the existing canonical lock/image checks; the
+portable-content verifier is installed in .8, not invented here.
+
+##### PTD-25.3.3.2.5: Transfer and Publish Installed Ownership
+
+Owned production: `installed_build_publication*` and paired transfer fixtures.
+Use .2's existing pending protocol and .1's projection; no new schema or
+retirement journal. Destination owns separate pairs before source/validated
+ownership is released; source and destination operation locks remain in force.
+
+Tests: exact transfer with/without a layer, partial tagging, state/lock mismatch,
+retargeted destination, interrupted cleanup after lock pruning, source owner
+survival, and retry. No uninstall or force-replacement implementation.
+
+##### PTD-25.3.3.2.6: Retire Staged and Installed Owners Before Directory Removal
+
+Owned production: staged removal, provider uninstall directory removal and
+pending-removal retry, plus the narrow terminal-removal guard in existing staged
+state and its common deployment writer-admission/locked mutation enforcement.
+Recover publication first, durably close ordinary writer admission, then remove
+exact current and validated pairs before erasing control files. Staged removal
+retires under the original lock/path before directory rename; its durable owner
+inventory and guard remain there on partial retirement or failed rename.
+Enforcement covers every cooperative owner writer, including no-cache build,
+stage/update, clean, publication, transfer, and forced replacement. Existing
+caller-held-lock entry points must not bypass it. An explicit scoped removal
+retry validates retained authority and continues retirement without reopening
+ordinary admission. The Windows unlock-before-rename interval remains excluded
+even if another writer obtains and releases the lock before rename resumes.
+Read-only diagnostics remain available. Installed removal preserves its existing
+tombstone/control directory retry. Missing deployment paths provide no authority
+to discover/delete guessed references. No new staged tombstone protocol.
+
+The common writer guard is inseparable from this leaf's terminal-removal safety,
+not an independently deferred admission project. Its existing deploy state/lock
+seams and focused tests are prospectively owned here; earlier approved heads are
+not rewritten. The revised envelope remains an estimate, and actual growth or
+another independent boundary still requires the assessment above before review.
+
+Tests: two-reference partial failure and repeat retry, staged crash before/after
+rename with no surviving references, filesystem removal failure, installed
+tombstone recovery, uninstall without remove-dir retaining staged ownership,
+independent source owner survival, malformed/missing authority, and no global
+Docker cleanup. Deterministically pause Windows removal after lock release and
+before rename, attempt a real no-cache build/publication writer, then resume
+removal: the writer is rejected before mutation and no new owned references
+survive metadata deletion. Cover every common writer admission, caller-held-lock
+entry, guard publication failure before retirement, restart and failed-rename
+removal retry, stale queue-marker recovery, read-only diagnostics, and unchanged
+ordinary admission for unguarded staging. No failed or partially applied guard
+write may authorize retirement without rereading exact committed guard state.
+
+##### PTD-25.3.3.2.7: Retire Former Owners Before Forced Replacement
+
+Owned production: forced desired-state replacement ordering, using retained
+old state/locks and existing validated cleanup inventory. Recover publication
+work, retire current, validated and superseded pairs with old scope before
+committing new desired environment identity. Reuse .1/.4/.6 cleanup behavior;
+do not add a retiring-generation schema, generic rollback, or postcommit tag
+retirement. Normal staging cannot bypass outstanding publication work.
+
+Tests: old current plus distinct validated owner, validated-only owner,
+superseded cleanup entries, pending publication, partial reference retirement
+before state change, exact old-scope retry, failed replacement commit, and crash
+after successful replacement proving no former tags survive. Metadata retry
+preserves a subsequently created new current/validated owner and no stale tag
+cleanup runs against it. Missing/conflicting authority fails before mutation.
+
+##### PTD-25.3.3.2.8: Verify Exact Final Content and Close Publication Acceptance
+
+Owned production: portable traversal/content checks in `current_build_verify*`
+and explicit cached validated/provider reuse integration. Reuse approved
+`portable_runtime_payload_image` primitives; no new installation mechanism.
+Lifecycle behavior is exercised here but remains owned by .2–.7.
+
+Tests: locked exact upstream/result/final image sequence and image counts;
+correct companion with substituted/missing/extra payloads in the actual final
+image; modes/ownership, selected environment including environment-only layers,
+target, provenance, missing/retargeted aliases including retarget during audit,
+offline audit and cleanup failure, in current and validated/provider reuse.
+Ordinary non-portable behavior and store-free runtime usability after bundle
+clean remain unchanged. A representative
+synthetic lifecycle covers publish -> validate/transfer -> replacement/removal
+and proves all PTD-25.3.3.2 parent guarantees. Ordinary requests remain rejected.
+
+##### Historical discoveries carried into fresh acceptance
+
+These cases retain earlier objections without transferring their source code,
+mechanisms or approval:
+
+- PTD-25.3.3.2.1: new companion names bind full deployment-path hash and an
+  injective or full-digest environment identity, not a lossy slug. Same-slug
+  environments, known short-path-hash collisions and long valid environment
+  IDs are tested. Validate the entire exact pair/context before the first
+  mutation, including malformed final image paired with valid portable image,
+  nil context and foreign scope. Complete Docker names are checked before use.
+  Existing primary namespaces are not migrated; guessed or legacy prefixes
+  alone never authorize new cleanup.
+- PTD-25.3.3.2.2: a state commit may rename successfully then return an error.
+  Reread committed state before deciding keep/discard, never eager-defer-delete
+  the current candidate. Test both effects and return values at crash boundaries.
+- PTD-25.3.3.2.3/.4: previous, newly committed and pending validated lock/store
+  roots survive outer provider-failure cleanup and postcommit intent-removal
+  errors. A validated-only deployment is not empty. Same-candidate alias updates
+  cannot erase prior cleanup obligations; progress follows only successful exact
+  removal with stale-record checks. Discard is durably non-reusable before
+  deleting aliases and monotonic for that owner across restart.
+- PTD-25.3.3.2.4/.6/.7: test each remover applying deletion then returning an
+  error, partial cleanup, and retry. Do not promise a usable restored pair via
+  fallible compensation. Retain cleanup authority; no passing partial generation.
+  Retry loads retained state/lock authority without requiring an already-removed
+  alias to pass current-image admission.
+- PTD-25.3.3.2.6: terminal writer exclusion persists through the Windows
+  unlock-before-rename interval. A cooperative no-cache writer obeying the
+  operation lock still cannot publish after retirement. Common mutation admission
+  enforces the staged-state guard, including caller-held locks; process exit,
+  stale queue-marker recovery, or failed rename does not silently clear it.
+- PTD-25.3.3.2.5: installed destination owns both references before source
+  retirement, including after source staging removal.
+- PTD-25.3.3.2.7: pending publication, committed validated-only and superseded
+  cleanup owners are all processed with old environment authority before
+  replacement. New owners cannot be deleted by stale cleanup.
+- PTD-25.3.3.2.8: aliases are rechecked after metadata and complete content audit.
+  Cheap exact companion ownership checks also apply to successful current and
+  validated/provider reuse when optional full content verification is disabled;
+  offline metadata decoding alone does not require Docker inspection. Full
+  payload auditing retains its stronger store prerequisites and no runtime
+  rebuild. A correct companion cannot excuse substituted final-image content.
+- PTD-25.3.3.3: ordinary complete fresh/locked acceptance traverses real handoffs
+  from request through graph, payload layer, final lock and publication. Earlier
+  orchestration fixtures stubbing every downstream phase do not prove this.
+- User-visible lifecycle changes include an appropriate Changie fragment in
+  their owning leaf; pure primitives/refactors/test changes follow AGENTS.md.
+- Earlier partial-PTD record migration and broad legacy alias migration are
+  excluded under the unreleased intermediate-state policy. Atomic schema changes
+  fail closed; no compatibility adapter or silent rebuild for abandoned state.
 
 #### PTD-25.3.3.3: Activate Complete Application-Tool Materialization
 
@@ -2744,7 +2996,7 @@ The campaign is complete only when:
   `PTD-23.1.1` through `PTD-23.1.8`, `PTD-23.2.1` through `PTD-23.2.5`,
   `PTD-23.3.1` through `PTD-23.3.7`, `PTD-24.1` through `PTD-24.2`,
   `PTD-25.1`, `PTD-25.2`, `PTD-25.3.1`, `PTD-25.3.2`,
-  `PTD-25.3.3.1`, `PTD-25.3.3.2.1` through `PTD-25.3.3.2.5`,
+  `PTD-25.3.3.1`, `PTD-25.3.3.2.1` through `PTD-25.3.3.2.8`,
   `PTD-25.3.3.3`,
   `PTD-25.4` through `PTD-25.6`, `PTD-26`, `PTD-27`, and `PTD-29`; the
   `PTD-21`, `PTD-22`, `PTD-23`, `PTD-24`, and `PTD-25` milestone containers
@@ -2763,8 +3015,10 @@ The campaign is complete only when:
   approval in the exact ancestry after PTD-25.3.2 and before PTD-25.3.3.1;
 - the stamped PTD-25.3.3.2 plan-only corrective predecessor retains current-head
   approval in the exact ancestry after PTD-25.3.3.1 and before
-  PTD-25.3.3.2.1; the former whole-candidate PR #197 is not approved as
-  PTD-25.3.3.2;
+  PTD-25.3.3.2.1; approved PR #198 and the stamped 2026-10-01 additive
+  replacement correction both remain in exact ancestry. The former whole-candidate
+  PR #197 stays closed and unapproved, not a PTD-25.3.3.2 delivery; verified
+  abandoned archives and historical discovery dispositions remain retained;
 - the shared-record-contract corrective prerequisite has current-head approval
   and remains in the exact ancestry after PTD-21.3 and before PTD-21.4;
 - the plan-only corrective predecessor has current-head approval and remains in
