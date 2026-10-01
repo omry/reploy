@@ -132,3 +132,55 @@ func TestDecodePendingBuildRejectsUnknownTrailingAndNoncanonicalJSON(t *testing.
 		})
 	}
 }
+
+func TestPendingBuildRetainedOwnedInventoryV1(t *testing.T) {
+	makeRecord := func() PendingBuildV1 {
+		p := validPendingBuild(t)
+		p.OldReferences = []OwnedImageReferenceV1{{Reference: p.Old.Reference, Image: providers.RealizedImageV1{Digest: p.Old.ImageDigest, ConfigDigest: pendingBuildTestDigest("a"), RootFSSubject: p.Old.RootFSSubject}}, {Reference: "portable-old", Image: p.Candidate.Image}}
+		p.Candidate.Owner = &EnvironmentGenerationState{Reference: p.Candidate.GenerationReference, ImageDigest: p.Candidate.Image.Digest, RootFSSubject: p.Candidate.Image.RootFSSubject, BuildLockDigest: p.Candidate.BuildLockDigest, Platform: p.Old.Platform, RuntimePolicyDigest: p.Old.RuntimePolicyDigest}
+		p.Candidate.Companion = &OwnedImageReferenceV1{Reference: "portable-new", Image: p.Candidate.Image}
+		return p
+	}
+	p := makeRecord()
+	content, err := EncodePendingBuild(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodePendingBuild(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.OldReferences[0].Image.ConfigDigest != pendingBuildTestDigest("a") || decoded.Candidate.Companion.Reference != "portable-new" {
+		t.Fatal("exact cleanup identity did not survive encoding")
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*PendingBuildV1)
+	}{
+		{"missing old owner", func(p *PendingBuildV1) { p.Old = nil }},
+		{"extra role", func(p *PendingBuildV1) { p.OldReferences = append(p.OldReferences, p.OldReferences[0]) }},
+		{"wrong primary", func(p *PendingBuildV1) { p.OldReferences[0].Image.Digest = pendingBuildTestDigest("b") }},
+		{"bad config", func(p *PendingBuildV1) { p.OldReferences[0].Image.ConfigDigest = "bad" }},
+		{"duplicate old roles", func(p *PendingBuildV1) { p.OldReferences[1].Reference = p.OldReferences[0].Reference }},
+		{"cross-owner alias", func(p *PendingBuildV1) { p.OldReferences[1].Reference = p.Candidate.Companion.Reference }},
+		{"missing candidate owner", func(p *PendingBuildV1) { p.Candidate.Owner = nil }},
+		{"missing candidate companion", func(p *PendingBuildV1) { p.Candidate.Companion = nil }},
+		{"wrong candidate image", func(p *PendingBuildV1) { p.Candidate.Owner.RootFSSubject = pendingBuildTestDigest("b") }},
+		{"wrong candidate lock", func(p *PendingBuildV1) { p.Candidate.Owner.BuildLockDigest = pendingBuildTestDigest("b") }},
+		{"bad candidate platform", func(p *PendingBuildV1) { p.Candidate.Owner.Platform = blueprint.Platform{} }},
+		{"candidate role collision", func(p *PendingBuildV1) { p.Candidate.Companion.Reference = p.Candidate.GenerationReference }},
+		{"bad companion", func(p *PendingBuildV1) { p.Candidate.Companion.Image.ConfigDigest = "bad" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p := makeRecord()
+			test.mutate(&p)
+			if _, err := EncodePendingBuild(p); err == nil {
+				t.Fatal("malformed inventory accepted")
+			}
+		})
+	}
+	unknown := bytes.Replace(content, []byte(`"old_references":`), []byte(`"unexpected_references":`), 1)
+	if _, err := DecodePendingBuild(unknown); err == nil {
+		t.Fatal("unknown serialized owner field accepted")
+	}
+}

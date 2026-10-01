@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve exact current-generation image ownership through interrupted publication and cleanup, including portable companion references and independently retained validated builds.
