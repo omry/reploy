@@ -7,16 +7,12 @@ import (
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
-	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providers/registry"
 )
 
 // OwnedImageReferenceV1 is an exact pair retained by a generation owner or its
 // pending cleanup inventory. Its presence is not proof of build acceptance.
-type OwnedImageReferenceV1 struct {
-	Reference string                    `json:"reference"`
-	Image     providers.RealizedImageV1 `json:"image"`
-}
+type OwnedImageReferenceV1 = deploy.OwnedImageReferenceV1
 
 // ProjectEnvironmentOwnedReferencesV1 returns the primary pair first, followed
 // by the optional portable companion. The accepted lock is the only source of

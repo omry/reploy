@@ -146,6 +146,9 @@ func removeStagedDeploymentV1(
 	if err != nil {
 		return result, err
 	}
+	if err := requirePublicationConsumerBoundaryV1(operation, "completed staged retirement"); err != nil {
+		return result, err
+	}
 	result = StagedDeploymentRemoveResultV1{
 		DeploymentDir: dir,
 		Environment:   environment,
@@ -161,6 +164,9 @@ func removeStagedDeploymentV1(
 	}
 	state, environment, err = readStagedDeploymentForRemovalV1(operation)
 	if err != nil {
+		return result, err
+	}
+	if err := requirePublicationConsumerBoundaryV1(operation, "completed staged retirement"); err != nil {
 		return result, err
 	}
 	generationReference := "staged/" + environment
@@ -185,6 +191,9 @@ func removeStagedDeploymentV1(
 
 	state, environment, err = readStagedDeploymentForRemovalV1(operation)
 	if err != nil {
+		return result, err
+	}
+	if err := requirePublicationConsumerBoundaryV1(operation, "completed staged retirement"); err != nil {
 		return result, err
 	}
 	if _, err := backend.recoverPending(

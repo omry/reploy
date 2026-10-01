@@ -96,6 +96,9 @@ func removeProviderUninstallDeploymentWithV1(
 		return err
 	}
 
+	if err := requirePublicationConsumerBoundaryV1(operation, "completed installed retirement"); err != nil {
+		return err
+	}
 	store, err := backend.newStore(plan.Installation.TargetDir)
 	if err != nil {
 		return err
