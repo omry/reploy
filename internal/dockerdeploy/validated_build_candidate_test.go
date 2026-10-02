@@ -325,7 +325,7 @@ func TestPublishValidatedBuildRecordsCandidateWithoutChangingState(t *testing.T)
 		t.Context(), operation, store, document.Environment.ID, dir, lock, inputs,
 		publishValidatedBuildBackendV1{
 			newReferences: func(string, string) (EnvironmentImageReferences, error) {
-				return EnvironmentImageReferences{Temporary: "temporary", Generation: "validated-reference"}, nil
+				return fixedPublicationReferences(t, dir, 31), nil
 			},
 			createReference: func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error {
 				created++
@@ -339,7 +339,7 @@ func TestPublishValidatedBuildRecordsCandidateWithoutChangingState(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created != 1 || record.ImageReference != "validated-reference" {
+	if created != 1 || record.ImageReference != fixedPublicationReferences(t, dir, 31).Generation {
 		t.Fatalf("created=%d record=%#v", created, record)
 	}
 	after, found, err := operation.ReadStateV1()
@@ -383,42 +383,52 @@ func TestPublishValidatedBuildRejectsMismatchedLockBeforeCreatingReference(t *te
 	}
 }
 
-func TestPublishValidatedBuildWrapsNewReferenceCleanupFailure(t *testing.T) {
+func TestPublishValidatedBuildRetainsIntentAfterTagFailure(t *testing.T) {
 	dir, operation, store, lock, state := currentBuildFixture(t, true)
 	defer operation.Unlock()
 	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
 	if err != nil {
 		t.Fatal(err)
 	}
-	inputs, err := ValidatedBuildInputs(
-		document, state.Overlay, deploy.EmptyPackageOverridesV1(document.Environment.ID), dir, state.Platform,
-	)
+	inputs, err := ValidatedBuildInputs(document, state.Overlay, deploy.EmptyPackageOverridesV1(document.Environment.ID), dir, state.Platform)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cleanupFailure := errors.New("cleanup failed")
+	failure := errors.New("tag failed after creation")
 	removed := false
-	_, err = publishValidatedBuild(
-		t.Context(), operation, store, document.Environment.ID, dir, lock, inputs,
-		publishValidatedBuildBackendV1{
-			newReferences: func(string, string) (EnvironmentImageReferences, error) {
-				return EnvironmentImageReferences{Temporary: "temporary", Generation: "validated-reference"}, nil
-			},
-			createReference: func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error {
-				return os.Mkdir(filepath.Join(dir, ".reploy", "validated-build.json"), 0o700)
-			},
-			removeReference: func(_ context.Context, _ providers.RealizedImageV1, reference, _, _ string) error {
-				removed = true
-				if reference != "validated-reference" {
-					t.Fatalf("removed reference = %q", reference)
-				}
-				return cleanupFailure
-			},
+	backend := publishValidatedBuildBackendV1{
+		newReferences: func(string, string) (EnvironmentImageReferences, error) {
+			return fixedPublicationReferences(t, dir, 31), nil
 		},
-	)
-	if !removed || !errors.Is(err, cleanupFailure) ||
-		!strings.Contains(err.Error(), "cleanup newly created validated image reference") {
+		createReference: func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error {
+			return failure
+		},
+		removeReference: func(context.Context, providers.RealizedImageV1, string, string, string) error {
+			removed = true
+			return nil
+		},
+		verifyReference: func(context.Context, providers.RealizedImageV1, string, string, string) error {
+			t.Fatal("rollback must not verify an absent candidate")
+			return nil
+		},
+	}
+	_, err = publishValidatedBuild(t.Context(), operation, store, "demo", dir, lock, inputs, backend)
+	if !errors.Is(err, failure) || removed {
 		t.Fatalf("removed=%v error=%v", removed, err)
+	}
+	intent, found, err := operation.ReadPendingValidatedBuildV1()
+	if err != nil || !found || intent.Candidate.ImageReference != fixedPublicationReferences(t, dir, 31).Generation {
+		t.Fatalf("intent=%#v found=%v error=%v", intent, found, err)
+	}
+	if _, found, err := operation.ReadValidatedBuildV1(); err != nil || found {
+		t.Fatalf("uncommitted candidate selected: %v %v", found, err)
+	}
+	recovered, err := recoverPendingValidatedPublicationV1(t.Context(), operation, store, "demo", dir, backend)
+	if err != nil || !recovered || !removed {
+		t.Fatalf("recovery=%v removed=%v error=%v", recovered, removed, err)
+	}
+	if _, found, err := operation.ReadPendingValidatedBuildV1(); err != nil || found {
+		t.Fatalf("intent remained: %v %v", found, err)
 	}
 }
 
@@ -441,7 +451,7 @@ func TestPublishValidatedBuildRejectsReferenceCollisionBeforeCreatingReference(t
 		Schema: deploy.ValidatedBuildSchemaV1, BlueprintDigest: inputs.BlueprintDigest,
 		OverlayDigest: inputs.OverlayDigest, PackageOverridesDigest: inputs.PackageOverridesDigest,
 		Platform: inputs.Platform, BuildLockDigest: state.Current.BuildLockDigest,
-		Image: oldImage, ImageReference: "validated-reference",
+		Image: oldImage, ImageReference: fixedPublicationReferences(t, dir, 31).Generation,
 	}
 	if err := operation.CommitValidatedBuildV1(old); err != nil {
 		t.Fatal(err)
@@ -451,7 +461,7 @@ func TestPublishValidatedBuildRejectsReferenceCollisionBeforeCreatingReference(t
 		t.Context(), operation, store, document.Environment.ID, dir, lock, inputs,
 		publishValidatedBuildBackendV1{
 			newReferences: func(string, string) (EnvironmentImageReferences, error) {
-				return EnvironmentImageReferences{Temporary: "temporary", Generation: old.ImageReference}, nil
+				return fixedPublicationReferences(t, dir, 31), nil
 			},
 			createReference: func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error {
 				created = true
@@ -484,7 +494,7 @@ func TestPublishValidatedBuildRetainsFailedCleanupForRetry(t *testing.T) {
 		Schema: deploy.ValidatedBuildSchemaV1, BlueprintDigest: inputs.BlueprintDigest,
 		OverlayDigest: inputs.OverlayDigest, PackageOverridesDigest: inputs.PackageOverridesDigest,
 		Platform: inputs.Platform, BuildLockDigest: state.Current.BuildLockDigest,
-		Image: lock.FinalImage, ImageReference: state.Current.Reference,
+		Image: lock.FinalImage, ImageReference: fixedPublicationReferences(t, dir, 32).Generation,
 	}
 	if err := operation.CommitValidatedBuildV1(old); err != nil {
 		t.Fatal(err)
@@ -494,7 +504,7 @@ func TestPublishValidatedBuildRetainsFailedCleanupForRetry(t *testing.T) {
 		t.Context(), operation, store, document.Environment.ID, dir, lock, inputs,
 		publishValidatedBuildBackendV1{
 			newReferences: func(string, string) (EnvironmentImageReferences, error) {
-				return EnvironmentImageReferences{Temporary: "temporary", Generation: "validated-reference"}, nil
+				return fixedPublicationReferences(t, dir, 31), nil
 			},
 			createReference: func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error {
 				return nil
@@ -560,7 +570,7 @@ func TestPublishValidatedBuildPrunesSupersededStorageAndRetainsCurrentAndCandida
 		Schema: deploy.ValidatedBuildSchemaV1, BlueprintDigest: inputs.BlueprintDigest,
 		OverlayDigest: inputs.OverlayDigest, PackageOverridesDigest: inputs.PackageOverridesDigest,
 		Platform: inputs.Platform, BuildLockDigest: oldDigest, Image: old.FinalImage,
-		ImageReference: "reploy/env/demo:validated-old",
+		ImageReference: fixedPublicationReferences(t, dir, 32).Generation,
 	}
 	if err := operation.CommitValidatedBuildV1(oldRecord); err != nil {
 		t.Fatal(err)
@@ -570,10 +580,7 @@ func TestPublishValidatedBuildPrunesSupersededStorageAndRetainsCurrentAndCandida
 		t.Context(), operation, store, document.Environment.ID, dir, candidate, inputs,
 		publishValidatedBuildBackendV1{
 			newReferences: func(string, string) (EnvironmentImageReferences, error) {
-				return EnvironmentImageReferences{
-					Temporary:  "reploy/env/demo:temporary-new",
-					Generation: "reploy/env/demo:validated-new",
-				}, nil
+				return fixedPublicationReferences(t, dir, 31), nil
 			},
 			createReference: func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error {
 				return nil
@@ -639,10 +646,7 @@ func TestPublishValidatedBuildPersistsStorageCleanupForRetry(t *testing.T) {
 		t.Context(), operation, store, document.Environment.ID, dir, candidate, inputs,
 		publishValidatedBuildBackendV1{
 			newReferences: func(string, string) (EnvironmentImageReferences, error) {
-				return EnvironmentImageReferences{
-					Temporary:  "reploy/env/demo:temporary-pending",
-					Generation: "reploy/env/demo:validated-pending",
-				}, nil
+				return fixedPublicationReferences(t, dir, 31), nil
 			},
 			createReference: func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error {
 				return nil
@@ -772,7 +776,7 @@ func TestRetryValidatedBuildCleanupRejectsNilContext(t *testing.T) {
 	}
 }
 
-func TestDiscardValidatedBuildDoesNotDependOnBuildLockForCleanup(t *testing.T) {
+func TestDiscardValidatedBuildPreservesLiveOwnershipWithoutBuildLock(t *testing.T) {
 	dir := t.TempDir()
 	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
 	if err != nil {
@@ -802,6 +806,17 @@ func TestDiscardValidatedBuildDoesNotDependOnBuildLockForCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(store.Root(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".reploy", "locks"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	beforeRecord, found, err := operation.ReadValidatedBuildV1()
+	if err != nil || !found || !reflect.DeepEqual(beforeRecord, record) {
+		t.Fatalf("validated build before discard = %#v, found=%v err=%v", beforeRecord, found, err)
+	}
+	before := pendingOwnedFilesystemSnapshotV1(t, dir, store.Root())
 	removed := []string{}
 	pending, err := discardValidatedBuild(
 		t.Context(), operation, store, "demo", dir,
@@ -813,13 +828,23 @@ func TestDiscardValidatedBuildDoesNotDependOnBuildLockForCleanup(t *testing.T) {
 			return nil
 		},
 	)
-	if err != nil || pending {
-		t.Fatalf("discard pending=%v err=%v", pending, err)
+	if err == nil || !strings.Contains(err.Error(), "validated build lock") || !strings.Contains(err.Error(), "is missing") {
+		t.Fatalf("discard without its live owner lock pending=%v err=%v", pending, err)
 	}
-	if !reflect.DeepEqual(removed, []string{"reploy/env/demo:older", "reploy/env/demo:validated"}) {
-		t.Fatalf("removed = %#v", removed)
+	if pending {
+		t.Fatal("missing-lock rejection reported a pending discard")
 	}
-	if _, found, err := operation.ReadValidatedBuildV1(); err != nil || found {
-		t.Fatalf("validated build remained: found=%v err=%v", found, err)
+	if len(removed) != 0 {
+		t.Fatalf("removed references before rejecting the missing lock: %#v", removed)
+	}
+	afterRecord, found, err := operation.ReadValidatedBuildV1()
+	if err != nil || !found || !reflect.DeepEqual(afterRecord, beforeRecord) {
+		t.Fatalf("validated build after discard = %#v, found=%v err=%v", afterRecord, found, err)
+	}
+	if !reflect.DeepEqual(afterRecord.PendingCleanup, beforeRecord.PendingCleanup) {
+		t.Fatalf("pending cleanup changed from %#v to %#v", beforeRecord.PendingCleanup, afterRecord.PendingCleanup)
+	}
+	if !reflect.DeepEqual(before, pendingOwnedFilesystemSnapshotV1(t, dir, store.Root())) {
+		t.Fatal("missing-lock rejection mutated metadata, lock files, or provider-store contents")
 	}
 }

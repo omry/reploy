@@ -79,6 +79,9 @@ func retryPendingProviderUninstallRemovalWithV1(
 			err = errors.Join(err, operation.Unlock())
 		}
 	}()
+	if err := requireValidatedConsumerBoundaryV1(operation, "completed installed retirement"); err != nil {
+		return ProviderUninstallResultV1{}, true, err
+	}
 	state, stateFound, err := operation.ReadStateV1()
 	if err != nil {
 		return ProviderUninstallResultV1{}, true, fmt.Errorf("read pending deployment removal state: %w", err)
