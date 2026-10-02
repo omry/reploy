@@ -79,6 +79,9 @@ func runProviderUninstallV1(
 		err = errors.Join(err, releaseErr)
 	}()
 
+	if err := requirePublicationConsumerBoundaryV1(operation, "completed installed retirement"); err != nil {
+		return err
+	}
 	planningInput := providerUninstallPlanningInputV1{
 		Operation: operation, DeploymentDir: deploymentDir, Runtime: input.Runtime,
 		Service: input.Service, RemoveDir: input.RemoveDir,

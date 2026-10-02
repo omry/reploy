@@ -543,6 +543,9 @@ func publishValidatedBuild(
 	if err != nil {
 		return deploy.ValidatedBuildV1{}, err
 	}
+	if lock.PortableRuntimeLayer != nil {
+		return deploy.ValidatedBuildV1{}, fmt.Errorf("portable validated publication is not yet supported by this version")
+	}
 	if _, err := deploy.BuildLockStoreClosure(
 		lock, store, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1,
 	); err != nil {

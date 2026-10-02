@@ -45,6 +45,14 @@ type PendingBuildV1 struct {
 	Old       *EnvironmentGenerationState `json:"old"`
 	Candidate PendingCandidateV1          `json:"candidate"`
 	Cleanup   []CleanupItemV1             `json:"cleanup"`
+	// OldReferences survives pruning the retired owner's build lock.
+	OldReferences []OwnedImageReferenceV1 `json:"old_references,omitempty"`
+}
+
+// OwnedImageReferenceV1 retains exact image identity and one owner reference.
+type OwnedImageReferenceV1 struct {
+	Reference string                    `json:"reference"`
+	Image     providers.RealizedImageV1 `json:"image"`
 }
 
 type PendingCandidateV1 struct {
@@ -53,6 +61,9 @@ type PendingCandidateV1 struct {
 	Image               providers.RealizedImageV1      `json:"image"`
 	BuildLockDigest     canonical.Digest               `json:"build_lock_digest"`
 	StoreObjects        []providerstore.StoreObjectRef `json:"store_objects"`
+	// Owner and Companion are present together only for a portable candidate.
+	Owner     *EnvironmentGenerationState `json:"owner,omitempty"`
+	Companion *OwnedImageReferenceV1      `json:"companion,omitempty"`
 }
 
 type CleanupItemV1 struct {
@@ -98,6 +109,26 @@ func ValidatePendingBuild(record PendingBuildV1) error {
 	}
 	if err := validatePendingCandidate(record.Candidate); err != nil {
 		return err
+	}
+	if len(record.OldReferences) != 0 {
+		if record.Old == nil || len(record.OldReferences) > 2 {
+			return fmt.Errorf("pending old references require one old owner and its primary/optional companion")
+		}
+		primary := record.OldReferences[0]
+		if primary.Reference != record.Old.Reference || primary.Image.Digest != record.Old.ImageDigest || primary.Image.RootFSSubject != record.Old.RootFSSubject {
+			return fmt.Errorf("pending old primary reference does not match its owner")
+		}
+		for index, pair := range record.OldReferences {
+			if !safeRecoveryIdentity(pair.Reference) {
+				return fmt.Errorf("pending old reference must be safe text")
+			}
+			if err := pair.Image.Validate(); err != nil {
+				return fmt.Errorf("pending old image: %w", err)
+			}
+			if pair.Reference == record.Candidate.GenerationReference || pair.Reference == record.Candidate.TemporaryReference || (record.Candidate.Companion != nil && pair.Reference == record.Candidate.Companion.Reference) || (index > 0 && pair.Reference == primary.Reference) {
+				return fmt.Errorf("pending reference roles must be distinct")
+			}
+		}
 	}
 	if record.Old != nil && (record.Old.Reference == record.Candidate.TemporaryReference || record.Old.Reference == record.Candidate.GenerationReference) {
 		return fmt.Errorf("pending build candidate references must differ from the old generation")
@@ -166,6 +197,24 @@ func validatePendingCandidate(candidate PendingCandidateV1) error {
 	}
 	if err := candidate.BuildLockDigest.Validate(); err != nil {
 		return fmt.Errorf("pending build candidate lock digest: %w", err)
+	}
+	if (candidate.Owner == nil) != (candidate.Companion == nil) {
+		return fmt.Errorf("pending portable candidate requires both owner and companion")
+	}
+	if candidate.Owner != nil {
+		owner := candidate.Owner
+		if err := ValidateEnvironmentGenerationState(*owner); err != nil {
+			return fmt.Errorf("pending candidate owner: %w", err)
+		}
+		if owner.Reference != candidate.GenerationReference || owner.ImageDigest != candidate.Image.Digest || owner.RootFSSubject != candidate.Image.RootFSSubject || owner.BuildLockDigest != candidate.BuildLockDigest {
+			return fmt.Errorf("pending candidate owner does not match candidate identity")
+		}
+		if err := candidate.Companion.Image.Validate(); err != nil {
+			return fmt.Errorf("pending candidate companion image: %w", err)
+		}
+		if !safeRecoveryIdentity(candidate.Companion.Reference) || candidate.Companion.Reference == candidate.GenerationReference || candidate.Companion.Reference == candidate.TemporaryReference {
+			return fmt.Errorf("pending candidate companion must have a distinct safe reference")
+		}
 	}
 	if candidate.StoreObjects == nil {
 		return fmt.Errorf("pending build candidate store objects must use an array")
