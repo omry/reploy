@@ -1,0 +1,2 @@
+kind: Fixed
+body: Retire validated build image and portable companion references with resumable cleanup, prevent reuse before retirement begins, and preserve current and validated cache roots after provider build failures.
