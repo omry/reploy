@@ -93,6 +93,7 @@ func stagedProviderBuildRuntimeV1(goos string, uid int, gid int, groups []int) (
 }
 
 type providerBuildRunBackend struct {
+	recoverValidated func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (bool, error)
 	acquire          func(context.Context, string) (*deploy.OperationLock, error)
 	newStore         func(string) (providerstore.Store, error)
 	prepare          func(context.Context, LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error)
@@ -220,6 +221,9 @@ func runLockedProviderBuildV1(
 	if input.Verify && (backend.planCurrent == nil || backend.verifyCurrent == nil) {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("verified provider build requires current-build verification backends")
 	}
+	if backend.recoverValidated == nil {
+		backend.recoverValidated = RecoverPendingValidatedPublicationV1
+	}
 	if backend.cleanupFailure == nil {
 		backend.cleanupFailure = cleanupFailedProviderBuildV1
 	}
@@ -249,6 +253,9 @@ func runLockedProviderBuildV1(
 	}
 	if state.Deployment != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("provider build requires a staged deployment; an installed deployment cannot be used as a build source")
+	}
+	if _, err := backend.recoverValidated(ctx, input.Operation, input.Store, document.Environment.ID, deploymentDir); err != nil {
+		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("recover pending validated provider build: %w", err)
 	}
 	buildprogress.Report(input.BuildProgress, buildprogress.Event{
 		Phase: buildprogress.PhaseInspect, Environment: document.Environment.ID,
@@ -286,25 +293,12 @@ func runLockedProviderBuildV1(
 			validatedCandidate.Current.Lock, input.Store,
 			registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1,
 		); cacheErr != nil {
-			writeProviderBuildProgress(input.Progress, "discarding incomplete validated build cache")
-			if err := backend.discardValidated(
-				context.WithoutCancel(ctx), input.Operation, document.Environment.ID, deploymentDir,
-			); err != nil {
-				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf(
-					"discard incomplete validated provider build after %v: %w", cacheErr, err,
-				)
-			}
+			writeProviderBuildProgress(input.Progress, "validated build cache is incomplete; rebuilding")
 			validatedCandidate = ValidatedBuildCandidateV1{}
 			validatedCandidateFound = false
 		}
 	}
-	if !validatedCandidateFound && !input.ValidateChoices {
-		if err := backend.discardValidated(
-			context.WithoutCancel(ctx), input.Operation, document.Environment.ID, deploymentDir,
-		); err != nil {
-			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("discard stale validated provider build: %w", err)
-		}
-	}
+	retireValidatedAfterPublication := !input.ValidateChoices && !validatedCandidateFound
 	localOverrides, err := PythonLocalOverridesV1(packageOverrides)
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("load local Python package overrides: %w", err)
@@ -440,11 +434,7 @@ func runLockedProviderBuildV1(
 		}
 	}
 	if !input.ValidateChoices && validatedCandidateFound && !preparation.ReusedCandidate {
-		if err := backend.discardValidated(
-			context.WithoutCancel(ctx), input.Operation, document.Environment.ID, deploymentDir,
-		); err != nil {
-			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("discard superseded validated provider build: %w", err)
-		}
+		retireValidatedAfterPublication = true
 	}
 	writeProviderBuildProgress(input.Progress, "preparing component packages and image layers")
 	if preparation.Reused {
@@ -475,6 +465,17 @@ func runLockedProviderBuildV1(
 			)
 		}
 		return LockedProviderBuildExecutionResultV1{}, errors.Join(err, cleanupErr)
+	}
+	if retireValidatedAfterPublication {
+		if err := backend.discardValidated(
+			context.WithoutCancel(ctx), input.Operation, document.Environment.ID, deploymentDir,
+		); err != nil {
+			writeProviderBuildProgress(
+				input.Progress,
+				"warning: build succeeded, but cleanup of superseded validated references is pending; Reploy will retry automatically: %v",
+				err,
+			)
+		}
 	}
 	result.VerificationFailure = verificationFailure
 	result.Warnings = append([]string(nil), dockerPlan.Sandbox.RuntimeUser.Warnings...)

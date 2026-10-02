@@ -2,7 +2,9 @@ package dockerdeploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"reflect"
 
 	"github.com/omry/reploy/internal/canonical"
@@ -238,7 +240,7 @@ func executePendingPublicationRecovery(
 	if !reflect.DeepEqual(state.Current, plan.ObservedCurrent) {
 		return fmt.Errorf("current generation changed after recovery preflight")
 	}
-	roots, digests, err := pendingPublicationRootsV1(operation, store, plan.SelectedLock, plan.SelectedDigest, environment, deploymentDir, validateProfileOwner, validateBundleOwner)
+	roots, digests, storePruneSafe, err := pendingPublicationRootsV1(operation, store, plan.SelectedLock, plan.SelectedDigest, environment, deploymentDir, validateProfileOwner, validateBundleOwner)
 	if err != nil {
 		return err
 	}
@@ -248,8 +250,10 @@ func executePendingPublicationRecovery(
 	if err := operation.RemoveBuildLocksExcept(digests, validateProfileOwner); err != nil {
 		return err
 	}
-	if err := operation.RemoveUnreachableBuildObjectsForBuilds(store, roots, validateProfileOwner, validateBundleOwner); err != nil {
-		return err
+	if storePruneSafe {
+		if err := operation.RemoveUnreachableBuildObjectsForBuilds(store, roots, validateProfileOwner, validateBundleOwner); err != nil {
+			return err
+		}
 	}
 	if err := removeAbandonedProviderContainers(ctx, store); err != nil {
 		return fmt.Errorf("clean abandoned provider helper containers: %w", err)
@@ -284,55 +288,63 @@ func validatePendingCandidateOwnershipV1(pending deploy.PendingBuildV1, owner de
 
 // Preserve current and independently committed validated ownership, even when
 // there is no current generation or both owners share the same lock digest.
-func pendingPublicationRootsV1(operation *deploy.OperationLock, store providerstore.Store, selected *deploy.BuildLockV1, selectedDigest canonical.Digest, environment, dir string, validateProfile providers.RequirementProfileOwnerValidator, validateBundle providers.ResolvedBundleOwnerValidator) ([]deploy.BuildLockV1, []canonical.Digest, error) {
+func pendingPublicationRootsV1(operation *deploy.OperationLock, store providerstore.Store, selected *deploy.BuildLockV1, selectedDigest canonical.Digest, environment, dir string, validateProfile providers.RequirementProfileOwnerValidator, validateBundle providers.ResolvedBundleOwnerValidator) ([]deploy.BuildLockV1, []canonical.Digest, bool, error) {
 	roots := []deploy.BuildLockV1{}
 	digests := []canonical.Digest{}
+	storePruneSafe := true
 	if selected != nil {
 		if _, err := deploy.BuildLockStoreClosure(*selected, store, validateProfile, validateBundle); err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 		roots = append(roots, *selected)
 		digests = append(digests, selectedDigest)
 	}
 	record, found, err := operation.ReadValidatedBuildV1()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	if !found || record.Discarded {
-		return roots, digests, nil
+		return roots, digests, storePruneSafe, nil
 	}
 	if err := ValidateEnvironmentGenerationReference(record.ImageReference, environment, dir); err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	validated, found, err := operation.ReadBuildLock(record.BuildLockDigest, validateProfile)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	if !found || validated.FinalImage != record.Image || validated.Platform != record.Platform || validated.PackageOverrides.EnvironmentID != environment {
-		return nil, nil, fmt.Errorf("committed validated owner is missing its exact build lock")
+		return nil, nil, false, fmt.Errorf("committed validated owner is missing its exact build lock")
 	}
 	if record.Companion != nil {
 		owner, err := validatedPublicationOwnerV1(record, validated)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 		pairs, err := projectEnvironmentOwnedReferencesV1(owner, validated, environment, dir, validateProfile)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 		if len(pairs) != 2 || *record.Owner != owner || *record.Companion != pairs[1] {
-			return nil, nil, fmt.Errorf("committed validated companion differs from its exact build lock")
+			return nil, nil, false, fmt.Errorf("committed validated companion differs from its exact build lock")
 		}
 	}
 	if _, err := deploy.BuildLockStoreClosure(validated, store, validateProfile, validateBundle); err != nil {
-		return nil, nil, err
+		// A missing immutable cache object does not revoke its independently
+		// committed owner. Keep its canonical lock and exact references, and
+		// conservatively skip store pruning until retirement removes that owner.
+		// Corrupt or otherwise invalid closure data remains a hard error.
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, nil, false, err
+		}
+		storePruneSafe = false
 	}
 	for _, digest := range digests {
 		if digest == record.BuildLockDigest {
-			return roots, digests, nil
+			return roots, digests, storePruneSafe, nil
 		}
 	}
-	return append(roots, validated), append(digests, record.BuildLockDigest), nil
+	return append(roots, validated), append(digests, record.BuildLockDigest), storePruneSafe, nil
 }
 
 func validateGenerationBuildLock(generation deploy.EnvironmentGenerationState, lock deploy.BuildLockV1, validateProfileOwner providers.RequirementProfileOwnerValidator) error {

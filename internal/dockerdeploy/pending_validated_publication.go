@@ -30,9 +30,6 @@ func requireValidatedPruningBoundaryV1(operation *deploy.OperationLock) error {
 	if len(record.PendingCleanup) != 0 {
 		return fmt.Errorf("validated cleanup inventory requires retirement before pruning; ownership was preserved")
 	}
-	if record.Companion != nil && record.Discarded {
-		return fmt.Errorf("portable validated discard requires completed retirement; ownership was preserved")
-	}
 	return nil
 }
 

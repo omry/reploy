@@ -205,7 +205,7 @@ func publishBuild(
 	if (len(pairs) == 2 && backend.createCompanion == nil) || (len(oldPairs) == 2 && backend.removeCompanion == nil) {
 		return deploy.StateV1{}, fmt.Errorf("portable publication requires complete companion operations")
 	}
-	if _, _, err := pendingPublicationRootsV1(operation, store, &input.Lock, lockDigest, input.Environment, input.DeploymentDir, validateRetainedProfile, validateRetainedBundle); err != nil {
+	if _, _, _, err := pendingPublicationRootsV1(operation, store, &input.Lock, lockDigest, input.Environment, input.DeploymentDir, validateRetainedProfile, validateRetainedBundle); err != nil {
 		return deploy.StateV1{}, err
 	}
 	pending := deploy.PendingBuildV1{
@@ -291,15 +291,17 @@ func publishBuild(
 	if err := backend.removeReference(ctx, input.Lock.FinalImage, references, EnvironmentReferenceTemporary, input.Environment, input.DeploymentDir); err != nil {
 		return deploy.StateV1{}, err
 	}
-	roots, digests, err := pendingPublicationRootsV1(operation, store, &input.Lock, lockDigest, input.Environment, input.DeploymentDir, validateRetainedProfile, validateRetainedBundle)
+	roots, digests, storePruneSafe, err := pendingPublicationRootsV1(operation, store, &input.Lock, lockDigest, input.Environment, input.DeploymentDir, validateRetainedProfile, validateRetainedBundle)
 	if err != nil {
 		return deploy.StateV1{}, err
 	}
 	if err := pruneLocks(digests); err != nil {
 		return deploy.StateV1{}, err
 	}
-	if err := pruneStore(roots); err != nil {
-		return deploy.StateV1{}, err
+	if storePruneSafe {
+		if err := pruneStore(roots); err != nil {
+			return deploy.StateV1{}, err
+		}
 	}
 	if err := removeIntent(); err != nil {
 		return deploy.StateV1{}, err
