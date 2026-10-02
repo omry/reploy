@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve validated trial-build ownership across interrupted image publication with durable intent and bounded restart recovery.
