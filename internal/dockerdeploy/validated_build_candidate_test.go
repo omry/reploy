@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -698,7 +699,7 @@ func TestDiscardValidatedBuildPersistsAndRetriesStorageCleanup(t *testing.T) {
 		Schema: deploy.ValidatedBuildSchemaV1, BlueprintDigest: inputs.BlueprintDigest,
 		OverlayDigest: inputs.OverlayDigest, PackageOverridesDigest: inputs.PackageOverridesDigest,
 		Platform: inputs.Platform, BuildLockDigest: candidateDigest, Image: candidate.FinalImage,
-		ImageReference: "reploy/env/demo:validated-discard",
+		ImageReference: fixedPublicationReferences(t, dir, 41).Generation,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -736,6 +737,102 @@ func TestDiscardValidatedBuildPersistsAndRetriesStorageCleanup(t *testing.T) {
 	}
 	if _, found, err := operation.ReadBuildLock(state.Current.BuildLockDigest, registry.ValidateRequirementProfileV1); err != nil || !found {
 		t.Fatalf("current lock found=%v err=%v", found, err)
+	}
+}
+
+func TestDiscardValidatedBuildClosesEditorAdmissionBeforeAliasRemoval(t *testing.T) {
+	for _, after := range []bool{false, true} {
+		t.Run(fmt.Sprintf("after-effect=%v", after), func(t *testing.T) {
+			dir, operation, store, current, state := currentBuildFixture(t, true)
+			defer func() { _ = operation.Unlock() }()
+			document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.Staging = &deploy.StagingStateV1{Schema: deploy.StagingStateSchemaV1}
+			state.BlueprintSource = "file:///tmp/example.blueprint.yaml"
+			if err := operation.CommitStateV1(state.Current, state); err != nil {
+				t.Fatal(err)
+			}
+			overrides := deploy.EmptyPackageOverridesV1(document.Environment.ID)
+			inputs, err := ValidatedBuildInputs(document, state.Overlay, overrides, dir, state.Platform)
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate := validatedBuildStorageVariant(t, store, current, "7", "8")
+			digest, err := operation.PublishBuildLock(candidate, registry.ValidateRequirementProfileV1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record := deploy.ValidatedBuildV1{
+				Schema: deploy.ValidatedBuildSchemaV1, BlueprintDigest: inputs.BlueprintDigest,
+				OverlayDigest: inputs.OverlayDigest, PackageOverridesDigest: inputs.PackageOverridesDigest,
+				Platform: inputs.Platform, BuildLockDigest: digest, Image: candidate.FinalImage,
+				ImageReference: fixedPublicationReferences(t, dir, 41).Generation,
+			}
+			if err := operation.CommitValidatedBuildV1(record); err != nil {
+				t.Fatal(err)
+			}
+			if _, found, err := LoadValidatedBuildCandidate(t.Context(), operation, store, document, state, overrides, dir, false, false); err != nil || !found {
+				t.Fatalf("initial offline candidate found=%v err=%v", found, err)
+			}
+			removed := false
+			guardObserved := false
+			backend := validatedRetirementBackendV1{
+				removeReference: func(_ context.Context, image providers.RealizedImageV1, reference, _, _ string) error {
+					guard, found, err := operation.ReadValidatedBuildV1()
+					if err != nil || !found {
+						t.Fatalf("discard guard found=%v err=%v", found, err)
+					}
+					guardObserved = guard.Discarded && guard.PendingStorageCleanup && len(guard.PendingCleanup) == 1 && guard.PendingCleanup[0].ImageReference == record.ImageReference
+					if image != record.Image || reference != record.ImageReference {
+						t.Fatal("retirement targeted another owner")
+					}
+					if after {
+						removed = true
+					}
+					return errPendingPublicationFaultV1
+				},
+			}
+			if _, _, err := discardValidatedBuildWithBackendV1(t.Context(), operation, document.Environment.ID, dir, backend); !errors.Is(err, errPendingPublicationFaultV1) {
+				t.Fatalf("discard error=%v", err)
+			}
+			if err := operation.Unlock(); err != nil {
+				t.Fatal(err)
+			}
+			status, err := InspectStagedOverrideValidation(t.Context(), dir)
+			if err != nil || status.Validated {
+				t.Fatalf("editor accepted interrupted discard: status=%#v err=%v", status, err)
+			}
+			operation, err = deploy.AcquireExistingOperationLock(t.Context(), dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			retained, found, err := operation.ReadValidatedBuildV1()
+			if err != nil || !found || !guardObserved || !retained.Discarded || len(retained.PendingCleanup) != 1 || removed != after {
+				t.Fatalf("discard did not retain guard and exact retry inventory: %#v found=%v guard=%v removed=%v err=%v", retained, found, guardObserved, removed, err)
+			}
+			if _, found, err := operation.ReadBuildLock(digest, registry.ValidateRequirementProfileV1); err != nil || !found {
+				t.Fatalf("pending reference lost its lock: found=%v err=%v", found, err)
+			}
+			backend.removeReference = func(_ context.Context, image providers.RealizedImageV1, reference, _, _ string) error {
+				if image != record.Image || reference != record.ImageReference {
+					t.Fatal("retry targeted another owner")
+				}
+				removed = true
+				return nil
+			}
+			retired, found, err := discardValidatedBuildWithBackendV1(t.Context(), operation, document.Environment.ID, dir, backend)
+			if err != nil || !found || !retired.Discarded || len(retired.PendingCleanup) != 0 || !removed {
+				t.Fatalf("restart retirement=%#v found=%v removed=%v err=%v", retired, found, removed, err)
+			}
+			if err := cleanupValidatedBuildStorage(operation, store, nil); err != nil {
+				t.Fatal(err)
+			}
+			if _, found, err := operation.ReadBuildLock(state.Current.BuildLockDigest, registry.ValidateRequirementProfileV1); err != nil || !found {
+				t.Fatalf("independent current owner lost its lock: found=%v err=%v", found, err)
+			}
+		})
 	}
 }
 
@@ -794,9 +891,9 @@ func TestDiscardValidatedBuildPreservesLiveOwnershipWithoutBuildLock(t *testing.
 		Schema: deploy.ValidatedBuildSchemaV1, BlueprintDigest: rendererDigest("4"),
 		OverlayDigest: rendererDigest("5"), PackageOverridesDigest: rendererDigest("6"),
 		Platform: platform, BuildLockDigest: rendererDigest("7"), Image: image,
-		ImageReference: "reploy/env/demo:validated",
+		ImageReference: fixedPublicationReferences(t, dir, 42).Generation,
 		PendingCleanup: []deploy.ValidatedBuildReferenceV1{{
-			Image: image, ImageReference: "reploy/env/demo:older",
+			Image: image, ImageReference: fixedPublicationReferences(t, dir, 43).Generation,
 		}},
 	}
 	if err := operation.CommitValidatedBuildV1(record); err != nil {

@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,6 +14,7 @@ import (
 	"github.com/omry/reploy/internal/buildprogress"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providers/registry"
 	"github.com/omry/reploy/internal/providerstore"
 )
@@ -147,59 +149,410 @@ func TestRunLockedProviderBuildV1UsesAndRetainsCallerLock(t *testing.T) {
 	}
 }
 
-func TestRunLockedProviderBuildV1DiscardsSupersededCandidateBeforeExecution(t *testing.T) {
-	dir, operation, store, lock, state := currentBuildFixture(t, true)
+func TestRunLockedProviderBuildV1DiscardsSupersededCandidateAfterSuccessfulExecution(t *testing.T) {
+	for _, cleanupFailure := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cleanup-failure=%v", cleanupFailure), func(t *testing.T) {
+			dir, operation, store, lock, state := currentBuildFixture(t, true)
+			defer operation.Unlock()
+			document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+			if err != nil {
+				t.Fatal(err)
+			}
+			overrides := deploy.EmptyPackageOverridesV1(document.Environment.ID)
+			inputs, err := ValidatedBuildInputs(document, state.Overlay, overrides, dir, state.Platform)
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate := validatedPublicationRecordV1(t, dir, lock, inputs, 21)
+			if err := operation.CommitValidatedBuildV1(candidate); err != nil {
+				t.Fatal(err)
+			}
+			images := &validatedPublicationImagesV1{pendingPublicationImagesV1: pendingPublicationImagesV1{
+				images: map[string]providers.RealizedImageV1{}, operation: operation, t: t,
+			}}
+			images.retain(t, candidate, dir)
+			currentPairs, err := projectEnvironmentOwnedReferencesV1(*state.Current, lock, "demo", dir, registry.ValidateRequirementProfileV1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, pair := range currentPairs {
+				images.images[pair.Reference] = pair.Image
+			}
+			beforeAliases := make(map[string]providers.RealizedImageV1, len(images.images))
+			for reference, image := range images.images {
+				beforeAliases[reference] = image
+			}
+			order := []string{}
+			discarded := false
+			var progress strings.Builder
+			result, err := runLockedProviderBuildV1(t.Context(), LockedProviderBuildRunInputV1{
+				Operation: operation, Store: store, DeploymentDir: dir,
+				Runtime:  StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
+				Progress: &progress,
+			}, providerBuildRunBackend{
+				prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
+					order = append(order, "prepare")
+					if input.ValidatedCandidate == nil {
+						t.Fatal("validated candidate was not offered to preparation")
+					}
+					return LockedProviderBuildPreparationV1{
+						Operation: input.Operation, Store: input.Store, Environment: input.Environment,
+						DeploymentDir: input.DeploymentDir, DockerPlan: input.DockerPlan,
+						ValidatedCandidate: input.ValidatedCandidate,
+					}, nil
+				},
+				discardValidated: func(ctx context.Context, op *deploy.OperationLock, environment, deploymentDir string) error {
+					order = append(order, "discard")
+					discarded = true
+					if len(order) < 3 || order[len(order)-2] != "execute" {
+						t.Fatalf("candidate retirement preceded successful execution: %v", order)
+					}
+					fault := ""
+					if cleanupFailure {
+						fault = candidate.ImageReference
+					}
+					_, found, err := discardValidatedBuildWithBackendV1(
+						ctx, op, environment, deploymentDir,
+						validatedRetirementImagesBackendV1(t, images, fault, false),
+					)
+					if err != nil || !found {
+						return errors.Join(fmt.Errorf("candidate retirement found=%v", found), err)
+					}
+					if err := cleanupValidatedBuildStorage(op, store, nil); err != nil {
+						return nil
+					}
+					return op.RemoveValidatedBuildV1()
+				},
+				execute: func(context.Context, LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
+					order = append(order, "execute")
+					if discarded {
+						t.Fatal("superseded candidate was discarded before successful provider execution")
+					}
+					return LockedProviderBuildExecutionResultV1{}, nil
+				},
+			})
+			if err != nil || !reflect.DeepEqual(order, []string{"prepare", "execute", "discard"}) {
+				t.Fatalf("result/error/order = %#v/%v/%v", result, err, order)
+			}
+			if !discarded {
+				t.Fatal("successful publication did not retire the superseded candidate")
+			}
+			if cleanupFailure {
+				recorded, found, err := operation.ReadValidatedBuildV1()
+				want := candidate
+				want.Discarded, want.PendingStorageCleanup = true, true
+				want.PendingCleanup = []deploy.ValidatedBuildReferenceV1{{Image: candidate.Image, ImageReference: candidate.ImageReference}}
+				if err != nil || !found || !reflect.DeepEqual(recorded, want) {
+					t.Fatalf("cleanup failure lost retryable owner: found=%v error=%v record=%#v", found, err, recorded)
+				}
+				if !reflect.DeepEqual(images.images, beforeAliases) {
+					t.Fatalf("failed cleanup changed exact aliases: before=%#v after=%#v", beforeAliases, images.images)
+				}
+				if !strings.Contains(progress.String(), "cleanup of superseded validated references is pending") {
+					t.Fatalf("cleanup warning missing: %s", progress.String())
+				}
+			} else {
+				if _, found, err := operation.ReadValidatedBuildV1(); err != nil || found {
+					t.Fatalf("successful retirement left a validated record: found=%v error=%v", found, err)
+				}
+				if _, found := images.images[candidate.ImageReference]; found {
+					t.Fatal("successful retirement retained the superseded alias")
+				}
+				for _, pair := range currentPairs {
+					if images.images[pair.Reference] != pair.Image {
+						t.Fatalf("successful retirement removed current alias %s", pair.Reference)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestRunLockedProviderBuildV1PublishesReplacementWithMissingTrialCacheV1(t *testing.T) {
+	stubNoAbandonedBuildReferences(t)
+	dir, operation, store, replacement, state := currentBuildFixture(t, true)
 	defer operation.Unlock()
 	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
 	if err != nil {
 		t.Fatal(err)
 	}
-	overrides := deploy.EmptyPackageOverridesV1(document.Environment.ID)
-	inputs, err := ValidatedBuildInputs(document, state.Overlay, overrides, dir, state.Platform)
+	inputs, err := ValidatedBuildInputs(
+		document, state.Overlay, deploy.EmptyPackageOverridesV1(document.Environment.ID), dir, state.Platform,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := operation.CommitValidatedBuildV1(deploy.ValidatedBuildV1{
-		Schema:          deploy.ValidatedBuildSchemaV1,
-		BlueprintDigest: inputs.BlueprintDigest, OverlayDigest: inputs.OverlayDigest,
-		PackageOverridesDigest: inputs.PackageOverridesDigest, Platform: inputs.Platform,
-		BuildLockDigest: state.Current.BuildLockDigest, Image: lock.FinalImage, ImageReference: state.Current.Reference,
-	}); err != nil {
+	trial := validatedBuildStorageVariant(t, store, replacement, "7", "8")
+	trial.FinalImage.RootFSSubject = rendererDigest("c")
+	trial.RuntimeLayer.Result.RootFSSubject = trial.FinalImage.RootFSSubject
+	policy, err := deploy.RuntimePolicyDigestV1(trial.RuntimePolicy)
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	discarded := false
-	_, err = runLockedProviderBuildV1(t.Context(), LockedProviderBuildRunInputV1{
-		Operation: operation, Store: store, DeploymentDir: dir,
-		Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
-	}, providerBuildRunBackend{
-		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
-			if input.ValidatedCandidate == nil {
-				t.Fatal("validated candidate was not offered to preparation")
-			}
-			return LockedProviderBuildPreparationV1{
-				Operation: input.Operation, Store: input.Store, Environment: input.Environment,
-				DeploymentDir: input.DeploymentDir, DockerPlan: input.DockerPlan,
-				ValidatedCandidate: input.ValidatedCandidate,
-			}, nil
-		},
-		discardValidated: func(context.Context, *deploy.OperationLock, string, string) error {
-			discarded = true
-			return nil
-		},
-		execute: func(context.Context, LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
-			if !discarded {
-				t.Fatal("provider execution started before the superseded candidate was discarded")
-			}
-			return LockedProviderBuildExecutionResultV1{}, nil
-		},
+	trial.ValidationRecord, err = deploy.PublishPrefixValidation(t.Context(), store, deploy.PrefixValidationV1{
+		Schema: deploy.PrefixValidationSchemaV1, SubjectRootFS: trial.FinalImage.RootFSSubject,
+		Profiles: []providers.ValidationEvidence{}, RuntimePolicy: policy,
+		ExposedOutputs: []providers.ExecutableEvidence{},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	trialDigest, err := operation.PublishBuildLock(trial, registry.ValidateRequirementProfileV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trialRecord := validatedPublicationRecordV1(t, dir, trial, inputs, 21)
+	if err := operation.CommitValidatedBuildV1(trialRecord); err != nil {
+		t.Fatal(err)
+	}
+	images := &validatedPublicationImagesV1{pendingPublicationImagesV1: pendingPublicationImagesV1{
+		images: map[string]providers.RealizedImageV1{}, operation: operation, t: t, sequence: 30,
+	}}
+	images.retain(t, trialRecord, dir)
+	currentPairs, err := projectEnvironmentOwnedReferencesV1(*state.Current, replacement, "demo", dir, registry.ValidateRequirementProfileV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pair := range currentPairs {
+		images.images[pair.Reference] = pair.Image
+	}
+	validationPath, err := store.ValidationRecordPath(trial.ValidationRecord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(validationPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := deploy.BuildLockStoreClosure(replacement, store, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1); err != nil {
+		t.Fatalf("replacement closure is incomplete: %v", err)
+	}
+	beforePrepare := pendingOwnedFilesystemSnapshotV1(t, dir, store.Root())
+	aliasesBeforePrepare := make(map[string]providers.RealizedImageV1, len(images.images))
+	for reference, image := range images.images {
+		aliasesBeforePrepare[reference] = image
+	}
+	prepareFailure := errors.New("replacement preparation failed")
+	_, prepareErr := runLockedProviderBuildV1(t.Context(), LockedProviderBuildRunInputV1{
+		Operation: operation, Store: store, DeploymentDir: dir,
+		Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
+	}, providerBuildRunBackend{
+		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
+			if input.ValidatedCandidate != nil {
+				t.Fatal("incomplete trial cache was offered for reuse")
+			}
+			return LockedProviderBuildPreparationV1{}, prepareFailure
+		},
+		execute: func(context.Context, LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
+			t.Fatal("failed preparation reached publication")
+			return LockedProviderBuildExecutionResultV1{}, nil
+		},
+	})
+	if !errors.Is(prepareErr, prepareFailure) {
+		t.Fatalf("preparation error = %v, want %v", prepareErr, prepareFailure)
+	}
+	if got := pendingOwnedFilesystemSnapshotV1(t, dir, store.Root()); !reflect.DeepEqual(got, beforePrepare) {
+		t.Fatalf("preparation failure changed current/trial storage: before=%#v after=%#v", beforePrepare, got)
+	}
+	if !reflect.DeepEqual(images.images, aliasesBeforePrepare) {
+		t.Fatalf("preparation failure changed exact references: before=%#v after=%#v", aliasesBeforePrepare, images.images)
+	}
+
+	_, runErr := runLockedProviderBuildV1(t.Context(), LockedProviderBuildRunInputV1{
+		Operation: operation, Store: store, DeploymentDir: dir,
+		Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
+	}, providerBuildRunBackend{
+		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
+			if input.ValidatedCandidate != nil {
+				t.Fatal("incomplete trial cache was offered for reuse")
+			}
+			return LockedProviderBuildPreparationV1{
+				Operation: operation, Store: store, Environment: input.Environment,
+				DeploymentDir: dir, DockerPlan: input.DockerPlan,
+			}, nil
+		},
+		execute: func(ctx context.Context, input LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
+			published, err := publishBuild(ctx, operation, store, BuildPublicationInput{
+				Environment: "demo", DeploymentDir: dir, Document: document, Lock: replacement,
+			}, images.pendingPublicationImagesV1.backend(store, dir))
+			return LockedProviderBuildExecutionResultV1{State: published, Lock: replacement}, err
+		},
+		discardValidated: func(ctx context.Context, op *deploy.OperationLock, environment, deploymentDir string) error {
+			_, found, err := discardValidatedBuildWithBackendV1(
+				ctx, op, environment, deploymentDir, validatedRetirementImagesBackendV1(t, images, trialRecord.ImageReference, false),
+			)
+			if err != nil || !found {
+				return errors.Join(fmt.Errorf("trial retirement found=%v", found), err)
+			}
+			if err := cleanupValidatedBuildStorage(op, store, nil); err != nil {
+				return err
+			}
+			return op.RemoveValidatedBuildV1()
+		},
+	})
+	if runErr != nil {
+		t.Fatalf("replacement publication failed with complete replacement closure: %v", runErr)
+	}
+	currentDigest := operationCurrentDigest(t, operation)
+	if currentDigest == trialDigest {
+		t.Fatal("replacement publication retained the trial lock as current")
+	}
+	if _, found, err := operation.ReadBuildLock(currentDigest, registry.ValidateRequirementProfileV1); err != nil || !found {
+		t.Fatalf("published replacement lock missing: found=%v error=%v", found, err)
+	}
+	retained, found, err := operation.ReadValidatedBuildV1()
+	want := trialRecord
+	want.Discarded, want.PendingStorageCleanup = true, true
+	want.PendingCleanup = []deploy.ValidatedBuildReferenceV1{{Image: trialRecord.Image, ImageReference: trialRecord.ImageReference}}
+	if err != nil || !found || !reflect.DeepEqual(retained, want) {
+		t.Fatalf("partial trial retirement lost retryable ownership: found=%v error=%v record=%#v", found, err, retained)
+	}
+	if images.images[trialRecord.ImageReference] != trialRecord.Image {
+		t.Fatal("partial trial retirement removed the exact trial alias")
+	}
+	if _, found, err := operation.ReadBuildLock(trialDigest, registry.ValidateRequirementProfileV1); err != nil || !found {
+		t.Fatalf("partial trial retirement lost the trial lock: found=%v error=%v", found, err)
+	}
+	if err := discardValidatedBuildWithRetryV1(t.Context(), operation, store, images, trialRecord); err != nil {
+		t.Fatalf("trial retirement retry: %v", err)
+	}
+	if _, found, err := operation.ReadValidatedBuildV1(); err != nil || found {
+		t.Fatalf("successful retirement retry retained the trial record: found=%v error=%v", found, err)
+	}
+	if _, found := images.images[trialRecord.ImageReference]; found {
+		t.Fatal("successful retirement retry retained the trial alias")
+	}
+	if _, found, err := operation.ReadBuildLock(trialDigest, registry.ValidateRequirementProfileV1); err != nil || found {
+		t.Fatalf("successful retirement retry retained the trial lock: found=%v error=%v", found, err)
+	}
 }
 
-func TestRunLockedProviderBuildV1RebuildsAnIncompleteValidationCandidate(t *testing.T) {
+func discardValidatedBuildWithRetryV1(ctx context.Context, operation *deploy.OperationLock, store providerstore.Store, images *validatedPublicationImagesV1, expected deploy.ValidatedBuildV1) error {
+	pending, err := discardValidatedBuild(ctx, operation, store, "demo", filepath.Dir(filepath.Dir(operation.Path())), func(_ context.Context, image providers.RealizedImageV1, reference, _, _ string) error {
+		if image != expected.Image || reference != expected.ImageReference {
+			return fmt.Errorf("retry tried to retire a different validated reference")
+		}
+		if actual, found := images.images[reference]; !found || actual != image {
+			return fmt.Errorf("retry validated reference is absent or retargeted")
+		}
+		delete(images.images, reference)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if pending {
+		return fmt.Errorf("retry left validated storage cleanup pending")
+	}
+	return nil
+}
+
+func TestRunLockedProviderBuildV1PreservesTrialAcrossPrecommitRecoveryV1(t *testing.T) {
+	stubNoAbandonedBuildReferences(t)
+	dir, operation, store, replacement, state := currentBuildFixture(t, true)
+	defer operation.Unlock()
+	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs, err := ValidatedBuildInputs(
+		document, state.Overlay, deploy.EmptyPackageOverridesV1(document.Environment.ID), dir, state.Platform,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trial := validatedBuildStorageVariant(t, store, replacement, "7", "8")
+	trial.FinalImage.RootFSSubject = rendererDigest("c")
+	trial.RuntimeLayer.Result.RootFSSubject = trial.FinalImage.RootFSSubject
+	policy, err := deploy.RuntimePolicyDigestV1(trial.RuntimePolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trial.ValidationRecord, err = deploy.PublishPrefixValidation(t.Context(), store, deploy.PrefixValidationV1{
+		Schema: deploy.PrefixValidationSchemaV1, SubjectRootFS: trial.FinalImage.RootFSSubject,
+		Profiles: []providers.ValidationEvidence{}, RuntimePolicy: policy,
+		ExposedOutputs: []providers.ExecutableEvidence{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trialDigest, err := operation.PublishBuildLock(trial, registry.ValidateRequirementProfileV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trialRecord := validatedPublicationRecordV1(t, dir, trial, inputs, 21)
+	if err := operation.CommitValidatedBuildV1(trialRecord); err != nil {
+		t.Fatal(err)
+	}
+	images := &validatedPublicationImagesV1{pendingPublicationImagesV1: pendingPublicationImagesV1{
+		images: map[string]providers.RealizedImageV1{}, operation: operation, t: t, sequence: 30,
+	}}
+	images.retain(t, trialRecord, dir)
+	currentPairs, err := projectEnvironmentOwnedReferencesV1(*state.Current, replacement, "demo", dir, registry.ValidateRequirementProfileV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pair := range currentPairs {
+		images.images[pair.Reference] = pair.Image
+	}
+	validationPath, err := store.ValidationRecordPath(trial.ValidationRecord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(validationPath); err != nil {
+		t.Fatal(err)
+	}
+	before := pendingOwnedFilesystemSnapshotV1(t, dir, store.Root())
+	aliasesBefore := make(map[string]providers.RealizedImageV1, len(images.images))
+	for reference, image := range images.images {
+		aliasesBefore[reference] = image
+	}
+	want := errPendingPublicationFaultV1
+	_, runErr := runLockedProviderBuildV1(t.Context(), LockedProviderBuildRunInputV1{
+		Operation: operation, Store: store, DeploymentDir: dir,
+		Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
+	}, providerBuildRunBackend{
+		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
+			if input.ValidatedCandidate != nil {
+				t.Fatal("incomplete trial cache was offered for reuse")
+			}
+			return LockedProviderBuildPreparationV1{
+				Operation: operation, Store: store, Environment: input.Environment,
+				DeploymentDir: dir, DockerPlan: input.DockerPlan,
+			}, nil
+		},
+		execute: func(ctx context.Context, input LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
+			images.fault = "commit"
+			_, err := publishBuild(ctx, operation, store, BuildPublicationInput{
+				Environment: "demo", DeploymentDir: dir, Document: document, Lock: replacement,
+			}, images.pendingPublicationImagesV1.backend(store, dir))
+			return LockedProviderBuildExecutionResultV1{}, err
+		},
+		cleanupFailure: func(_ context.Context, _ LockedProviderBuildPreparationV1) error {
+			return images.recover(store, dir)
+		},
+	})
+	if !errors.Is(runErr, want) {
+		t.Fatalf("runner error = %v, want injected precommit failure", runErr)
+	}
+	if got := pendingOwnedFilesystemSnapshotV1(t, dir, store.Root()); !reflect.DeepEqual(got, before) {
+		t.Fatalf("precommit recovery changed the trial/current filesystem: before=%#v after=%#v", before, got)
+	}
+	if !reflect.DeepEqual(images.images, aliasesBefore) {
+		t.Fatalf("precommit recovery changed exact trial/current aliases: before=%#v after=%#v", aliasesBefore, images.images)
+	}
+	retained, found, err := operation.ReadValidatedBuildV1()
+	if err != nil || !found || !reflect.DeepEqual(retained, trialRecord) {
+		t.Fatalf("precommit recovery lost the independent trial owner: found=%v error=%v record=%#v", found, err, retained)
+	}
+	if _, found, err := operation.ReadBuildLock(trialDigest, registry.ValidateRequirementProfileV1); err != nil || !found {
+		t.Fatalf("precommit recovery lost the trial canonical lock: found=%v error=%v", found, err)
+	}
+	if _, found, err := operation.ReadPendingBuild(); err != nil || found {
+		t.Fatalf("precommit recovery left a pending publication: found=%v error=%v", found, err)
+	}
+}
+
+func TestRunLockedProviderBuildV1PreservesIncompleteValidationCandidateWhenPreparationFails(t *testing.T) {
 	dir, operation, store, lock, state := currentBuildFixture(t, true)
 	defer operation.Unlock()
 	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
@@ -211,12 +564,13 @@ func TestRunLockedProviderBuildV1RebuildsAnIncompleteValidationCandidate(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := operation.CommitValidatedBuildV1(deploy.ValidatedBuildV1{
+	record := deploy.ValidatedBuildV1{
 		Schema:          deploy.ValidatedBuildSchemaV1,
 		BlueprintDigest: inputs.BlueprintDigest, OverlayDigest: inputs.OverlayDigest,
 		PackageOverridesDigest: inputs.PackageOverridesDigest, Platform: inputs.Platform,
 		BuildLockDigest: state.Current.BuildLockDigest, Image: lock.FinalImage, ImageReference: state.Current.Reference,
-	}); err != nil {
+	}
+	if err := operation.CommitValidatedBuildV1(record); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := operation.RemoveProviderStore(store); err != nil {
@@ -224,8 +578,9 @@ func TestRunLockedProviderBuildV1RebuildsAnIncompleteValidationCandidate(t *test
 	}
 
 	discarded := false
+	want := errors.New("incomplete candidate rebuild preparation failed")
 	_, err = runLockedProviderBuildV1(t.Context(), LockedProviderBuildRunInputV1{
-		Operation: operation, Store: store, DeploymentDir: dir, ValidateChoices: true,
+		Operation: operation, Store: store, DeploymentDir: dir,
 		Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1001, GID: 1002},
 	}, providerBuildRunBackend{
 		discardValidated: func(context.Context, *deploy.OperationLock, string, string) error {
@@ -233,20 +588,22 @@ func TestRunLockedProviderBuildV1RebuildsAnIncompleteValidationCandidate(t *test
 			return nil
 		},
 		prepare: func(_ context.Context, input LockedProviderBuildPreparationInputV1) (LockedProviderBuildPreparationV1, error) {
-			if !discarded || input.ValidatedCandidate != nil {
-				t.Fatalf("incomplete candidate reached preparation: discarded=%v candidate=%#v", discarded, input.ValidatedCandidate)
+			if discarded || input.ValidatedCandidate != nil {
+				t.Fatalf("incomplete candidate reached preparation: retired=%v candidate=%#v", discarded, input.ValidatedCandidate)
 			}
-			return LockedProviderBuildPreparationV1{
-				Operation: input.Operation, Store: input.Store, Environment: input.Environment,
-				DeploymentDir: input.DeploymentDir, DockerPlan: input.DockerPlan,
-			}, nil
+			return LockedProviderBuildPreparationV1{}, want
 		},
 		execute: func(context.Context, LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
-			return LockedProviderBuildExecutionResultV1{Validated: true}, nil
+			t.Fatal("incomplete candidate failure unexpectedly reached execution")
+			return LockedProviderBuildExecutionResultV1{}, nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, want) {
+		t.Fatalf("runner error = %v, want %v", err, want)
+	}
+	retained, found, err := operation.ReadValidatedBuildV1()
+	if err != nil || !found || !reflect.DeepEqual(retained, record) || discarded {
+		t.Fatalf("incomplete candidate owner changed before publication: found=%v discarded=%v error=%v record=%#v", found, discarded, err, retained)
 	}
 }
 

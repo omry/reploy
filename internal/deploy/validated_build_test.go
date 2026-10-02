@@ -225,8 +225,40 @@ func TestValidateValidatedBuildV1RejectsInvalidDiscardedState(t *testing.T) {
 	withImageReference.PendingCleanup = []ValidatedBuildReferenceV1{{
 		Image: valid.Image, ImageReference: "reploy/env/demo:old",
 	}}
-	if err := ValidateValidatedBuildV1(withImageReference); err == nil {
-		t.Fatal("discarded state with a pending image reference was accepted")
+	if err := ValidateValidatedBuildV1(withImageReference); err != nil {
+		t.Fatalf("discarded state with exact retirement inventory was rejected: %v", err)
+	}
+	withCurrentReference := valid
+	withCurrentReference.PendingCleanup = []ValidatedBuildReferenceV1{{
+		Image: valid.Image, ImageReference: valid.ImageReference,
+	}}
+	if err := ValidateValidatedBuildV1(withCurrentReference); err != nil {
+		t.Fatalf("discarded current alias retirement was rejected: %v", err)
+	}
+	conflictingImage := withCurrentReference
+	conflictingImage.PendingCleanup = append([]ValidatedBuildReferenceV1(nil), withCurrentReference.PendingCleanup...)
+	conflictingImage.PendingCleanup[0].Image.ConfigDigest = canonical.Digest("sha256:" + strings.Repeat("b", 64))
+	if err := ValidateValidatedBuildV1(conflictingImage); err == nil {
+		t.Fatal("discarded inventory changed the current alias image")
+	}
+	portable := valid
+	portable.Owner = &EnvironmentGenerationState{
+		Reference: valid.ImageReference, ImageDigest: valid.Image.Digest,
+		RootFSSubject: valid.Image.RootFSSubject, BuildLockDigest: valid.BuildLockDigest,
+		Platform: valid.Platform, RuntimePolicyDigest: digest,
+	}
+	portable.Companion = &OwnedImageReferenceV1{Image: valid.Image, Reference: "reploy/portable/demo:validated"}
+	portable.PendingCleanup = []ValidatedBuildReferenceV1{{
+		Image: portable.Companion.Image, ImageReference: portable.Companion.Reference, CompanionOwner: portable.Owner,
+	}}
+	if err := ValidateValidatedBuildV1(portable); err != nil {
+		t.Fatalf("exact discarded companion inventory was rejected: %v", err)
+	}
+	conflictingOwner := *portable.Owner
+	conflictingOwner.RuntimePolicyDigest = canonical.Digest("sha256:" + strings.Repeat("b", 64))
+	portable.PendingCleanup[0].CompanionOwner = &conflictingOwner
+	if err := ValidateValidatedBuildV1(portable); err == nil {
+		t.Fatal("discarded inventory changed the current companion scope")
 	}
 }
 

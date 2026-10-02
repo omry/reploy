@@ -2,17 +2,38 @@ package dockerdeploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 
+	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 )
 
-// cleanupFailedProviderBuildV1 preserves only the generation selected by the
-// deployment state after publication recovery. Objects produced by a failed,
-// unpublished candidate are unreachable and are removed.
+// Failed execution cannot invalidate either independently committed owner.
+// Resolve publication first, then prune against their complete union of roots.
 func cleanupFailedProviderBuildV1(ctx context.Context, preparation LockedProviderBuildPreparationV1) error {
-	if err := requirePublicationConsumerBoundaryV1(preparation.Operation, "completed provider-failure cleanup"); err != nil {
+	if err := validatePublicationDeployment(preparation.Operation, preparation.Store, preparation.DeploymentDir); err != nil {
 		return err
+	}
+	if _, err := RecoverPendingValidatedPublicationV1(ctx, preparation.Operation, preparation.Store, preparation.Environment, preparation.DeploymentDir); err != nil {
+		return fmt.Errorf("recover failed provider validated publication: %w", err)
+	}
+	validated, validatedFound, err := preparation.Operation.ReadValidatedBuildV1()
+	if err != nil {
+		return err
+	}
+	if validatedFound {
+		if _, err := validateValidatedRetirementV1(preparation.Operation, validated, preparation.Environment, preparation.DeploymentDir); err != nil {
+			return err
+		}
+	}
+	if validatedFound && len(validated.PendingCleanup) != 0 {
+		var cleanupErrors []error
+		validated, cleanupErrors = cleanupPendingValidatedBuildReferences(ctx, preparation.Operation, validated, preparation.Environment, preparation.DeploymentDir, RemoveEnvironmentGenerationReference)
+		if len(cleanupErrors) != 0 {
+			return fmt.Errorf("retire superseded validated references before failed provider cleanup: %w", errors.Join(cleanupErrors...))
+		}
 	}
 	state, found, err := preparation.Operation.ReadStateV1()
 	if err != nil {
@@ -23,51 +44,81 @@ func cleanupFailedProviderBuildV1(ctx context.Context, preparation LockedProvide
 		current = state.Current
 	}
 	validateProfile, validateBundle := providerBuildRecoveryValidatorsV1(preparation.NoCache)
-	if _, err := RecoverPendingPublication(
-		ctx, preparation.Operation, preparation.Store, current,
-		preparation.Environment, preparation.DeploymentDir,
-		validateProfile, validateBundle,
-	); err != nil {
+	if _, err := RecoverPendingPublication(ctx, preparation.Operation, preparation.Store, current, preparation.Environment, preparation.DeploymentDir, validateProfile, validateBundle); err != nil {
 		return fmt.Errorf("recover failed provider build publication: %w", err)
 	}
 	state, found, err = preparation.Operation.ReadStateV1()
 	if err != nil {
 		return fmt.Errorf("reread failed provider build state: %w", err)
 	}
-	if !found || state.Current == nil {
-		if err := preparation.Operation.RemoveAllBuildLocks(validateProfile); err != nil {
+	roots := []deploy.BuildLockV1{}
+	digests := []canonical.Digest{}
+	storePruneSafe := true
+	if found && state.Current != nil {
+		lock, lockFound, err := preparation.Operation.ReadBuildLock(state.Current.BuildLockDigest, validateProfile)
+		if err != nil {
 			return err
 		}
-		if err := preparation.Operation.RemoveAllBuildObjects(preparation.Store); err != nil {
+		if !lockFound {
+			return fmt.Errorf("current build lock %s is missing during failed build cleanup", state.Current.BuildLockDigest)
+		}
+		if _, err := projectEnvironmentOwnedReferencesV1(*state.Current, lock, preparation.Environment, preparation.DeploymentDir, validateProfile); err != nil {
 			return err
 		}
-		return preparation.Store.RemoveTemporaryEntries()
+		roots = append(roots, lock)
+		digests = append(digests, state.Current.BuildLockDigest)
 	}
-	lock, lockFound, err := preparation.Operation.ReadBuildLock(state.Current.BuildLockDigest, validateProfile)
+	validated, validatedFound, err = preparation.Operation.ReadValidatedBuildV1()
 	if err != nil {
 		return err
 	}
-	if !lockFound {
-		return fmt.Errorf("current build lock %s is missing during failed build cleanup", state.Current.BuildLockDigest)
+	if validatedFound && !validated.Discarded {
+		if _, err := validateValidatedRetirementV1(preparation.Operation, validated, preparation.Environment, preparation.DeploymentDir); err != nil {
+			return err
+		}
+		lock, lockFound, err := preparation.Operation.ReadBuildLock(validated.BuildLockDigest, validateProfile)
+		if err != nil {
+			return err
+		}
+		if !lockFound {
+			return fmt.Errorf("validated build lock %s is missing during failed build cleanup", validated.BuildLockDigest)
+		}
+		if !preparation.NoCache {
+			if _, err := deploy.BuildLockStoreClosure(lock, preparation.Store, validateProfile, validateBundle); err != nil {
+				if !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+				// As in publication recovery, absent trial cache does not
+				// revoke ownership or prove immutable objects unreachable.
+				storePruneSafe = false
+			}
+		}
+		if len(digests) == 0 || digests[0] != validated.BuildLockDigest {
+			roots = append(roots, lock)
+			digests = append(digests, validated.BuildLockDigest)
+		}
 	}
-	if err := validateGenerationBuildLock(*state.Current, lock, validateProfile); err != nil {
+	// No-cache is the provider-schema cutover path. Its retained canonical
+	// locks can refer to old payload schemas, so keep all immutable objects.
+	if !preparation.NoCache && storePruneSafe {
+		if err := preparation.Operation.RemoveUnreachableBuildObjectsForBuilds(preparation.Store, roots, validateProfile, validateBundle); err != nil {
+			return err
+		}
+	}
+	if err := preparation.Operation.RemoveBuildLocksExcept(digests, validateProfile); err != nil {
 		return err
 	}
-	if err := preparation.Operation.RemoveOtherBuildLocks(state.Current.BuildLockDigest, validateProfile); err != nil {
-		return err
-	}
-	// A no-cache rebuild is the provider-schema cutover path. If that rebuild
-	// fails, the selected lock may still reference bundle payloads that the
-	// current binary cannot decode. Preserve immutable objects conservatively;
-	// successful replacement will prune them through the new lock.
-	if preparation.NoCache {
-		return preparation.Store.RemoveTemporaryEntries()
-	}
-	if err := preparation.Operation.RemoveUnreachableBuildObjects(
-		preparation.Store, lock,
-		validateProfile, validateBundle,
-	); err != nil {
-		return err
+	if !preparation.NoCache && storePruneSafe && validatedFound && validated.PendingStorageCleanup {
+		if validated.Discarded {
+			if err := preparation.Operation.RemoveValidatedBuildV1(); err != nil {
+				return err
+			}
+		} else {
+			validated.PendingStorageCleanup = false
+			if err := preparation.Operation.CommitValidatedBuildV1(validated); err != nil {
+				return err
+			}
+		}
 	}
 	return preparation.Store.RemoveTemporaryEntries()
 }
