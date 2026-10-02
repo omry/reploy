@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -70,6 +71,13 @@ type providerBuildPreparationBackend struct {
 		providers.RequirementProfileOwnerValidator,
 		providers.ResolvedBundleOwnerValidator,
 	) (bool, error)
+	retryValidatedCleanup func(
+		context.Context,
+		*deploy.OperationLock,
+		providerstore.Store,
+		string,
+		string,
+	) error
 	load             func(*deploy.OperationLock, deploy.PackageOverrideIntentV1, string, []providers.ResolvedSourceInput) (LoadedBuildRequestV1, error)
 	loadVerifier     func(blueprint.Platform) (deploy.ApplicationStartupVerifierV1, error)
 	selectCachedBase func(context.Context, providers.ResolvedRequestV1) (SelectedProviderBase, bool, error)
@@ -90,18 +98,73 @@ func PrepareLockedProviderBuildV1(
 	ctx context.Context,
 	input LockedProviderBuildPreparationInputV1,
 ) (LockedProviderBuildPreparationV1, error) {
+	if _, err := RecoverPendingValidatedPublicationV1(ctx, input.Operation, input.Store, input.Environment, input.DeploymentDir); err != nil {
+		return LockedProviderBuildPreparationV1{}, fmt.Errorf("recover pending validated build before preparation: %w", err)
+	}
 	return prepareLockedProviderBuildV1(ctx, input, providerBuildPreparationBackend{
-		recover:          RecoverPendingPublication,
-		load:             LoadBuildRequestWithPackageOverridesV1,
-		loadVerifier:     LoadApplicationStartupVerifierV1,
-		selectCachedBase: SelectCachedProviderBase,
-		selectBase:       SelectProviderBase,
-		validateCurrent:  ValidateCurrentBuild,
-		lockedSources:    buildLockSelectedSourcesV1,
-		matches:          CurrentBuildMatches,
-		cacheAvailable:   providerBuildCacheAvailable,
-		realizeBase:      RealizeSelectedProviderBase,
+		recover:               RecoverPendingPublication,
+		retryValidatedCleanup: retryOrdinaryPendingValidatedCleanupV1,
+		load:                  LoadBuildRequestWithPackageOverridesV1,
+		loadVerifier:          LoadApplicationStartupVerifierV1,
+		selectCachedBase:      SelectCachedProviderBase,
+		selectBase:            SelectProviderBase,
+		validateCurrent:       ValidateCurrentBuild,
+		lockedSources:         buildLockSelectedSourcesV1,
+		matches:               CurrentBuildMatches,
+		cacheAvailable:        providerBuildCacheAvailable,
+		realizeBase:           RealizeSelectedProviderBase,
 	})
+}
+
+// retryOrdinaryPendingValidatedCleanupV1 retries only retained superseded
+// references for an ordinary committed candidate. The consumer boundary keeps
+// portable candidates behind their content acceptance gate, while retirement
+// validates exact ownership and overlap before it removes any reference.
+func retryOrdinaryPendingValidatedCleanupV1(
+	ctx context.Context,
+	operation *deploy.OperationLock,
+	store providerstore.Store,
+	environment string,
+	deploymentDir string,
+) error {
+	return retryOrdinaryPendingValidatedCleanupWithBackendV1(
+		ctx, operation, store, environment, deploymentDir,
+		validatedRetirementBackendV1{removeReference: RemoveEnvironmentGenerationReference},
+	)
+}
+
+func retryOrdinaryPendingValidatedCleanupWithBackendV1(
+	ctx context.Context,
+	operation *deploy.OperationLock,
+	store providerstore.Store,
+	environment string,
+	deploymentDir string,
+	backend validatedRetirementBackendV1,
+) error {
+	if ctx == nil {
+		return fmt.Errorf("retry validated cleanup before provider preparation requires a context")
+	}
+	if operation == nil {
+		return fmt.Errorf("retry validated cleanup before provider preparation requires an operation lock")
+	}
+	if err := operation.RequireHeld(); err != nil {
+		return err
+	}
+	record, found, err := operation.ReadValidatedBuildV1()
+	if err != nil || !found || record.Discarded || len(record.PendingCleanup) == 0 {
+		return err
+	}
+	if err := requireValidatedConsumerBoundaryV1(operation, "ordinary provider build cleanup retry"); err != nil {
+		return err
+	}
+	if err := operation.ValidateProviderStore(store); err != nil {
+		return err
+	}
+	_, cleanupErrors := cleanupPendingValidatedReferencesV1(ctx, operation, record, environment, deploymentDir, backend)
+	if len(cleanupErrors) != 0 {
+		return errors.Join(cleanupErrors...)
+	}
+	return nil
 }
 
 func prepareLockedProviderBuildV1(
@@ -124,6 +187,9 @@ func prepareLockedProviderBuildV1(
 	if backend.recover == nil || backend.load == nil || backend.loadVerifier == nil || backend.selectCachedBase == nil || backend.selectBase == nil || backend.validateCurrent == nil || backend.lockedSources == nil || backend.matches == nil || backend.cacheAvailable == nil || backend.realizeBase == nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build requires a complete backend")
 	}
+	if backend.retryValidatedCleanup == nil {
+		backend.retryValidatedCleanup = retryOrdinaryPendingValidatedCleanupV1
+	}
 	if input.LocalOverrides == nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build local overrides must use an array")
 	}
@@ -138,6 +204,14 @@ func prepareLockedProviderBuildV1(
 	var generation *deploy.EnvironmentGenerationState
 	if found {
 		generation = state.Current
+	}
+	cleanupCtx, endCleanup := buildprofile.Start(ctx, "Retry superseded validated references")
+	err = backend.retryValidatedCleanup(
+		cleanupCtx, input.Operation, input.Store, input.Environment, input.DeploymentDir,
+	)
+	endCleanup(err)
+	if err != nil {
+		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build validated cleanup retry: %w", err)
 	}
 	recoveryProfileValidator, recoveryBundleValidator := providerBuildRecoveryValidatorsV1(input.NoCache)
 	recoveryCtx, endRecovery := buildprofile.Start(ctx, "Recover interrupted provider work")
