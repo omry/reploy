@@ -84,6 +84,15 @@ func publishInstalledBuildV1(
 	if err := validateInstalledBuildSource(input); err != nil {
 		return deploy.StateV1{}, err
 	}
+	if input.Build.PortableRuntimeLayer != nil || input.Source.Lock.PortableRuntimeLayer != nil {
+		return deploy.StateV1{}, fmt.Errorf("portable installed publication is not yet supported by this version")
+	}
+	if err := requirePublicationConsumerBoundaryV1(sourceOperation, "completed installed ownership transfer"); err != nil {
+		return deploy.StateV1{}, err
+	}
+	if err := requirePublicationConsumerBoundaryV1(destinationOperation, "completed installed ownership transfer"); err != nil {
+		return deploy.StateV1{}, err
+	}
 	destinationDir, err := filepath.Abs(input.DestinationDeploymentDir)
 	if err != nil {
 		return deploy.StateV1{}, fmt.Errorf("resolve installed build destination: %w", err)

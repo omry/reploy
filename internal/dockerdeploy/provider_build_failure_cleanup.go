@@ -11,6 +11,9 @@ import (
 // deployment state after publication recovery. Objects produced by a failed,
 // unpublished candidate are unreachable and are removed.
 func cleanupFailedProviderBuildV1(ctx context.Context, preparation LockedProviderBuildPreparationV1) error {
+	if err := requirePublicationConsumerBoundaryV1(preparation.Operation, "completed provider-failure cleanup"); err != nil {
+		return err
+	}
 	state, found, err := preparation.Operation.ReadStateV1()
 	if err != nil {
 		return fmt.Errorf("read failed provider build state: %w", err)
