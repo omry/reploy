@@ -53,6 +53,9 @@ func executeProviderUninstallWithV1(
 	if cleanupHost == nil {
 		return fmt.Errorf("execute provider uninstall requires host cleanup")
 	}
+	if err := requirePublicationConsumerBoundaryV1(operation, "completed installed retirement"); err != nil {
+		return err
+	}
 	if err := cleanupHost(ctx, plan, options); err != nil {
 		return err
 	}

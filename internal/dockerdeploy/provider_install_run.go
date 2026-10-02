@@ -179,6 +179,9 @@ func runProviderInstallV1(
 	if built.State.Current == nil {
 		return deploy.StateV1{}, fmt.Errorf("provider install source build did not publish a current generation")
 	}
+	if built.Lock.PortableRuntimeLayer != nil {
+		return deploy.StateV1{}, fmt.Errorf("portable installed publication is not yet supported by this version")
+	}
 	sourceBuild := CurrentBuild{State: built.State, Generation: *built.State.Current, Lock: built.Lock}
 	document, err := blueprint.DecodeResolvedDocumentV1(sourceBuild.State.Blueprint)
 	if err != nil {

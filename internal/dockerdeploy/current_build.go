@@ -30,7 +30,11 @@ func ValidateCurrentBuild(
 	environment string,
 	deploymentDir string,
 ) (CurrentBuild, bool, error) {
-	return validateCurrentBuild(ctx, operation, store, environment, deploymentDir, VerifyEnvironmentGenerationReference)
+	current, found, err := validateCurrentBuild(ctx, operation, store, environment, deploymentDir, VerifyEnvironmentGenerationReference)
+	if err == nil && found && current.Lock.PortableRuntimeLayer != nil {
+		return CurrentBuild{}, false, fmt.Errorf("portable current-image reuse is not yet supported by this version")
+	}
+	return current, found, err
 }
 
 // LoadRecordedCurrentBuildV1 validates the recorded state and lock without

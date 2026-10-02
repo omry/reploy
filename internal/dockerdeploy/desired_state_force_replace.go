@@ -122,6 +122,9 @@ func forceReplaceStagedDesiredStateV1(
 		operation = nil
 		return backend.stageSame(ctx, desired)
 	}
+	if err := requirePublicationConsumerBoundaryV1(operation, "completed forced replacement"); err != nil {
+		return result, err
+	}
 
 	store, err := backend.newStore(dir)
 	if err != nil {
@@ -162,6 +165,9 @@ func forceReplaceStagedDesiredStateV1(
 	}
 	if oldEnvironment == desired.Document.Environment.ID {
 		return result, fmt.Errorf("staging blueprint changed while force replacement was waiting; retry the command")
+	}
+	if err := requirePublicationConsumerBoundaryV1(operation, "completed forced replacement"); err != nil {
+		return result, err
 	}
 	if _, err := backend.recoverPending(ctx, operation, store, state.Current, oldEnvironment, dir); err != nil {
 		return result, fmt.Errorf("recover staged build after force replacement admission: %w", err)
