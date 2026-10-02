@@ -505,6 +505,7 @@ func TestPendingOwnedPublicationConsumerGuardsV1(t *testing.T) {
 				err = executeProviderUninstallWithV1(t.Context(), operation, providerUninstallPlanV1{}, RunOptions{}, func(context.Context, providerUninstallPlanV1, RunOptions) error { mutations++; return nil })
 			case "provider failure":
 				defer operation.Unlock()
+				stubNoAbandonedBuildReferences(t)
 				err = cleanupFailedProviderBuildV1(t.Context(), LockedProviderBuildPreparationV1{Operation: operation, Store: store, Environment: "demo", DeploymentDir: dir})
 			case "validated publication":
 				defer operation.Unlock()
@@ -541,7 +542,11 @@ func TestPendingOwnedPublicationConsumerGuardsV1(t *testing.T) {
 					return nil
 				}, removeReference: images.primaryRemove})
 			}
-			if err == nil || !strings.Contains(err.Error(), "portable") || mutations != 0 {
+			if boundary == "provider failure" {
+				if err != nil {
+					t.Fatalf("delivered provider-failure cleanup rejected current portable ownership: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "portable") || mutations != 0 {
 				t.Fatalf("unsafe consumer not rejected before effects: %v %d", err, mutations)
 			}
 			if _, err := deploy.BuildLockStoreClosure(lock, store, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1); err != nil {

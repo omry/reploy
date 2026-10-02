@@ -90,6 +90,9 @@ func PrepareLockedProviderBuildV1(
 	ctx context.Context,
 	input LockedProviderBuildPreparationInputV1,
 ) (LockedProviderBuildPreparationV1, error) {
+	if _, err := RecoverPendingValidatedPublicationV1(ctx, input.Operation, input.Store, input.Environment, input.DeploymentDir); err != nil {
+		return LockedProviderBuildPreparationV1{}, fmt.Errorf("recover pending validated build before preparation: %w", err)
+	}
 	return prepareLockedProviderBuildV1(ctx, input, providerBuildPreparationBackend{
 		recover:          RecoverPendingPublication,
 		load:             LoadBuildRequestWithPackageOverridesV1,

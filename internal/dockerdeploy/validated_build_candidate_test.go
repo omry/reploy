@@ -698,7 +698,7 @@ func TestDiscardValidatedBuildPersistsAndRetriesStorageCleanup(t *testing.T) {
 		Schema: deploy.ValidatedBuildSchemaV1, BlueprintDigest: inputs.BlueprintDigest,
 		OverlayDigest: inputs.OverlayDigest, PackageOverridesDigest: inputs.PackageOverridesDigest,
 		Platform: inputs.Platform, BuildLockDigest: candidateDigest, Image: candidate.FinalImage,
-		ImageReference: "reploy/env/demo:validated-discard",
+		ImageReference: fixedPublicationReferences(t, dir, 41).Generation,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -794,9 +794,9 @@ func TestDiscardValidatedBuildPreservesLiveOwnershipWithoutBuildLock(t *testing.
 		Schema: deploy.ValidatedBuildSchemaV1, BlueprintDigest: rendererDigest("4"),
 		OverlayDigest: rendererDigest("5"), PackageOverridesDigest: rendererDigest("6"),
 		Platform: platform, BuildLockDigest: rendererDigest("7"), Image: image,
-		ImageReference: "reploy/env/demo:validated",
+		ImageReference: fixedPublicationReferences(t, dir, 42).Generation,
 		PendingCleanup: []deploy.ValidatedBuildReferenceV1{{
-			Image: image, ImageReference: "reploy/env/demo:older",
+			Image: image, ImageReference: fixedPublicationReferences(t, dir, 43).Generation,
 		}},
 	}
 	if err := operation.CommitValidatedBuildV1(record); err != nil {
