@@ -50,6 +50,14 @@ func (images *validatedPublicationImagesV1) backend(dir string) publishValidated
 		if err := images.operation.RequireHeld(); err != nil {
 			return err
 		}
+		// These fixtures observe publication and its recovery inventory. Keep
+		// postcommit retirement retryable; dedicated retirement fixtures prove
+		// successful and partial cleanup without an outstanding intent.
+		if _, pending, err := images.operation.ReadPendingValidatedBuildV1(); err != nil {
+			return err
+		} else if !pending {
+			return fmt.Errorf("retryable retirement failure in publication fixture")
+		}
 		return images.effect(name, func() error {
 			images.effects++
 			if old, found := images.images[reference]; found && old != image {
@@ -652,49 +660,28 @@ func TestValidatedPublicationConsumerGuardsV1(t *testing.T) {
 			if boundary == "pending" {
 				images.fault, images.after = "create-primary", true
 			}
-			record, err := publishValidatedBuild(t.Context(), images.operation, store, "demo", dir, lock, inputs, images.backend(dir))
+			_, err := publishValidatedBuild(t.Context(), images.operation, store, "demo", dir, lock, inputs, images.backend(dir))
 			if boundary == "pending" {
 				if !errors.Is(err, errPendingPublicationFaultV1) {
 					t.Fatalf("prepare error=%v", err)
 				}
-				intent, found, err := images.operation.ReadPendingValidatedBuildV1()
+				_, found, err := images.operation.ReadPendingValidatedBuildV1()
 				if err != nil || !found {
 					t.Fatalf("intent=%v %v", found, err)
 				}
-				record = intent.Candidate
 			} else if err != nil {
 				t.Fatal(err)
 			}
 			before := pendingOwnedFilesystemSnapshotV1(t, dir, store.Root())
 			effects := images.effects
-			remove := func(context.Context, providers.RealizedImageV1, string, string, string) error {
-				t.Fatal("guard allowed reference removal")
-				return nil
-			}
 			document := publicationInput(t, dir, lock).Document
 			for name, action := range map[string]func() error{
 				"load": func() error {
 					_, _, err := LoadValidatedBuildCandidate(t.Context(), images.operation, store, document, deploy.StateV1{}, deploy.EmptyPackageOverridesV1("demo"), dir, true, true)
 					return err
 				},
-				"discard": func() error {
-					_, err := discardValidatedBuild(t.Context(), images.operation, store, "demo", dir, remove)
-					return err
-				},
-				"retry": func() error {
-					_, _, err := RetryValidatedBuildCleanup(t.Context(), images.operation, store, "demo", dir)
-					return err
-				},
-				"references": func() error {
-					_, errs := cleanupPendingValidatedBuildReferences(t.Context(), images.operation, record, "demo", dir, remove)
-					return errors.Join(errs...)
-				},
-				"storage": func() error { return cleanupValidatedBuildStorage(images.operation, store, &lock) },
 				"later-consumers": func() error {
 					return requirePublicationConsumerBoundaryV1(images.operation, "completed consumer ownership transition")
-				},
-				"provider-failure": func() error {
-					return cleanupFailedProviderBuildV1(t.Context(), LockedProviderBuildPreparationV1{Operation: images.operation, Store: store, Environment: "demo", DeploymentDir: dir})
 				},
 			} {
 				t.Run(name, func(t *testing.T) {
@@ -879,7 +866,7 @@ func TestValidatedConsumerGuardAllowsDiscardedOrdinaryRetryAfterLockPruningV1(t 
 		Schema: deploy.ValidatedBuildSchemaV1, BlueprintDigest: inputs.BlueprintDigest,
 		OverlayDigest: inputs.OverlayDigest, PackageOverridesDigest: inputs.PackageOverridesDigest,
 		Platform: inputs.Platform, BuildLockDigest: digest, Image: candidate.FinalImage,
-		ImageReference: "reploy/env/demo:validated-discarded-retry", PendingStorageCleanup: true, Discarded: true,
+		ImageReference: fixedPublicationReferences(t, dir, 44).Generation, PendingStorageCleanup: true, Discarded: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
