@@ -182,6 +182,9 @@ func runProviderInstallV1(
 	if built.Lock.PortableRuntimeLayer != nil {
 		return deploy.StateV1{}, fmt.Errorf("portable installed publication is not yet supported by this version")
 	}
+	if err := requireValidatedConsumerBoundaryV1(sourceOperation, "completed installed ownership transfer"); err != nil {
+		return deploy.StateV1{}, err
+	}
 	sourceBuild := CurrentBuild{State: built.State, Generation: *built.State.Current, Lock: built.Lock}
 	document, err := blueprint.DecodeResolvedDocumentV1(sourceBuild.State.Blueprint)
 	if err != nil {

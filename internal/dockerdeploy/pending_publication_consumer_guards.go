@@ -9,6 +9,9 @@ import (
 // Producing intermediate heads must reject consumers whose portable ownership
 // transition is not delivered yet, before those consumers mutate resources.
 func requirePublicationConsumerBoundaryV1(operation *deploy.OperationLock, boundary string) error {
+	if err := requireValidatedConsumerBoundaryV1(operation, boundary); err != nil {
+		return err
+	}
 	pending, found, err := operation.ReadPendingBuild()
 	if err != nil {
 		return err

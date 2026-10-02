@@ -75,6 +75,9 @@ func publishBuild(
 	if err := validatePublicationDeployment(operation, store, input.DeploymentDir); err != nil {
 		return deploy.StateV1{}, err
 	}
+	if err := requireValidatedPruningBoundaryV1(operation); err != nil {
+		return deploy.StateV1{}, err
+	}
 	validateRetainedProfile, validateRetainedBundle := providerBuildRecoveryValidatorsV1(input.NoCache)
 	writeIntent := backend.writeIntent
 	if writeIntent == nil {
@@ -219,6 +222,9 @@ func publishBuild(
 		pending.Candidate.Companion = &pairs[1]
 	}
 	if err := validatePendingOwnedReferencesV1(pending, input.Environment, input.DeploymentDir); err != nil {
+		return deploy.StateV1{}, err
+	}
+	if err := requireCurrentPublicationValidatedSeparationV1(operation, pending, input.Environment, input.DeploymentDir); err != nil {
 		return deploy.StateV1{}, err
 	}
 	if err := writeIntent(pending); err != nil {

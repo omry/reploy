@@ -42,6 +42,9 @@ func RecoverPendingPublication(
 	if err := operation.ValidateProviderStore(store); err != nil {
 		return false, err
 	}
+	if err := requireValidatedPruningBoundaryV1(operation); err != nil {
+		return false, err
+	}
 	pending, found, err := operation.ReadPendingBuild()
 	if err != nil {
 		return false, err
@@ -222,6 +225,12 @@ func executePendingPublicationRecovery(
 	if !found || !reflect.DeepEqual(currentPending, plan.Pending) {
 		return fmt.Errorf("pending publication changed after recovery preflight")
 	}
+	if err := requireValidatedPruningBoundaryV1(operation); err != nil {
+		return err
+	}
+	if err := requireCurrentPublicationValidatedSeparationV1(operation, currentPending, environment, deploymentDir); err != nil {
+		return err
+	}
 	state, _, err := operation.ReadStateV1()
 	if err != nil {
 		return err
@@ -301,6 +310,19 @@ func pendingPublicationRootsV1(operation *deploy.OperationLock, store providerst
 	}
 	if !found || validated.FinalImage != record.Image || validated.Platform != record.Platform || validated.PackageOverrides.EnvironmentID != environment {
 		return nil, nil, fmt.Errorf("committed validated owner is missing its exact build lock")
+	}
+	if record.Companion != nil {
+		owner, err := validatedPublicationOwnerV1(record, validated)
+		if err != nil {
+			return nil, nil, err
+		}
+		pairs, err := projectEnvironmentOwnedReferencesV1(owner, validated, environment, dir, validateProfile)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(pairs) != 2 || *record.Owner != owner || *record.Companion != pairs[1] {
+			return nil, nil, fmt.Errorf("committed validated companion differs from its exact build lock")
+		}
 	}
 	if _, err := deploy.BuildLockStoreClosure(validated, store, validateProfile, validateBundle); err != nil {
 		return nil, nil, err

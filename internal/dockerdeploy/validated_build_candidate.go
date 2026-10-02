@@ -132,6 +132,9 @@ func LoadValidatedBuildCandidate(
 	verifyCache bool,
 	verifyImage bool,
 ) (ValidatedBuildCandidateV1, bool, error) {
+	if err := requireValidatedConsumerBoundaryV1(operation, "completed validated content acceptance"); err != nil {
+		return ValidatedBuildCandidateV1{}, false, err
+	}
 	record, found, err := operation.ReadValidatedBuildV1()
 	if err != nil || !found {
 		return ValidatedBuildCandidateV1{}, false, err
@@ -399,9 +402,17 @@ func discardValidatedBuild(
 	if operation == nil || removeReference == nil {
 		return false, fmt.Errorf("discard validated build requires a complete backend")
 	}
+	if err := requireValidatedConsumerBoundaryV1(operation, "completed validated retirement"); err != nil {
+		return false, err
+	}
 	record, found, err := operation.ReadValidatedBuildV1()
 	if err != nil || !found {
 		return false, err
+	}
+	if !record.Discarded {
+		if err := requireValidatedReferencesNotCurrentV1(operation, []deploy.ValidatedBuildReferenceV1{{Image: record.Image, ImageReference: record.ImageReference}}, environment, deploymentDir); err != nil {
+			return false, err
+		}
 	}
 	if !record.Discarded {
 		record, cleanupErrors := cleanupPendingValidatedBuildReferences(
@@ -438,6 +449,23 @@ type publishValidatedBuildBackendV1 struct {
 	newReferences   func(string, string) (EnvironmentImageReferences, error)
 	createReference func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error
 	removeReference func(context.Context, providers.RealizedImageV1, string, string, string) error
+	verifyReference func(context.Context, providers.RealizedImageV1, string, string, string) error
+	createCompanion func(context.Context, *deploy.OperationLock, OwnedImageReferenceV1, deploy.EnvironmentGenerationState, string, string) error
+	removeCompanion func(context.Context, *deploy.OperationLock, OwnedImageReferenceV1, deploy.EnvironmentGenerationState, string, string) error
+	verifyCompanion func(context.Context, *deploy.OperationLock, OwnedImageReferenceV1, deploy.EnvironmentGenerationState, string, string) error
+	publishLock     func(deploy.BuildLockV1) (canonical.Digest, error)
+	writeIntent     func(deploy.PendingValidatedBuildV1) error
+	commitRecord    func(deploy.ValidatedBuildV1) error
+	removeIntent    func() error
+}
+
+func newValidatedPublicationBackendV1() publishValidatedBuildBackendV1 {
+	return publishValidatedBuildBackendV1{
+		newReferences: NewEnvironmentImageReferences, createReference: CreateEnvironmentImageReference,
+		removeReference: RemoveEnvironmentGenerationReference, verifyReference: VerifyEnvironmentGenerationReference,
+		createCompanion: CreatePortableEnvironmentReferenceV1, removeCompanion: RemovePortableEnvironmentReferenceV1,
+		verifyCompanion: VerifyPortableEnvironmentReferenceV1,
+	}
 }
 
 // RetryValidatedBuildCleanup retries superseded Docker references, build
@@ -455,6 +483,9 @@ func RetryValidatedBuildCleanup(
 	}
 	if operation == nil {
 		return deploy.ValidatedBuildV1{}, false, fmt.Errorf("retry validated build cleanup requires an operation lock")
+	}
+	if err := requireValidatedConsumerBoundaryV1(operation, "completed validated retirement"); err != nil {
+		return deploy.ValidatedBuildV1{}, false, err
 	}
 	record, found, err := operation.ReadValidatedBuildV1()
 	if err != nil || !found {
@@ -509,11 +540,7 @@ func PublishValidatedBuild(
 	lock deploy.BuildLockV1,
 	inputs ValidatedBuildInputsV1,
 ) (deploy.ValidatedBuildV1, error) {
-	return publishValidatedBuild(ctx, operation, store, environment, deploymentDir, lock, inputs, publishValidatedBuildBackendV1{
-		newReferences:   NewEnvironmentImageReferences,
-		createReference: CreateEnvironmentImageReference,
-		removeReference: RemoveEnvironmentGenerationReference,
-	})
+	return publishValidatedBuild(ctx, operation, store, environment, deploymentDir, lock, inputs, newValidatedPublicationBackendV1())
 }
 
 // publishValidatedBuild returns success once the new candidate is committed.
@@ -529,9 +556,12 @@ func publishValidatedBuild(
 	lock deploy.BuildLockV1,
 	inputs ValidatedBuildInputsV1,
 	backend publishValidatedBuildBackendV1,
-) (result deploy.ValidatedBuildV1, resultErr error) {
+) (deploy.ValidatedBuildV1, error) {
 	if ctx == nil {
 		return deploy.ValidatedBuildV1{}, fmt.Errorf("publish validated build requires a context")
+	}
+	if err := ctx.Err(); err != nil {
+		return deploy.ValidatedBuildV1{}, err
 	}
 	if operation == nil || backend.newReferences == nil || backend.createReference == nil || backend.removeReference == nil {
 		return deploy.ValidatedBuildV1{}, fmt.Errorf("publish validated build requires a complete backend")
@@ -539,16 +569,22 @@ func publishValidatedBuild(
 	if err := validatePublicationDeployment(operation, store, deploymentDir); err != nil {
 		return deploy.ValidatedBuildV1{}, err
 	}
+	if _, err := recoverPendingValidatedPublicationV1(ctx, operation, store, environment, deploymentDir, backend); err != nil {
+		return deploy.ValidatedBuildV1{}, err
+	}
+	if _, pending, err := operation.ReadPendingBuild(); err != nil {
+		return deploy.ValidatedBuildV1{}, err
+	} else if pending {
+		return deploy.ValidatedBuildV1{}, fmt.Errorf("current publication requires recovery before validated publication")
+	}
 	lockDigest, err := deploy.BuildLockDigestV1(lock, registry.ValidateRequirementProfileV1)
 	if err != nil {
 		return deploy.ValidatedBuildV1{}, err
 	}
-	if lock.PortableRuntimeLayer != nil {
-		return deploy.ValidatedBuildV1{}, fmt.Errorf("portable validated publication is not yet supported by this version")
+	if lock.PortableRuntimeLayer != nil && (backend.createCompanion == nil || backend.removeCompanion == nil || backend.verifyCompanion == nil || backend.verifyReference == nil) {
+		return deploy.ValidatedBuildV1{}, fmt.Errorf("portable validated publication requires complete companion operations")
 	}
-	if _, err := deploy.BuildLockStoreClosure(
-		lock, store, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1,
-	); err != nil {
+	if _, err := deploy.BuildLockStoreClosure(lock, store, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1); err != nil {
 		return deploy.ValidatedBuildV1{}, err
 	}
 	if err := validateBuildLockMatchesValidatedInputs(lock, inputs); err != nil {
@@ -558,65 +594,127 @@ func publishValidatedBuild(
 	if err != nil {
 		return deploy.ValidatedBuildV1{}, err
 	}
+	var previous *deploy.ValidatedBuildV1
+	if oldFound {
+		previous = &old
+	}
 	references, err := backend.newReferences(environment, deploymentDir)
 	if err != nil {
 		return deploy.ValidatedBuildV1{}, err
 	}
-	pendingCleanup := []deploy.ValidatedBuildReferenceV1(nil)
-	if oldFound && !old.Discarded {
-		pendingCleanup, err = mergeValidatedBuildReferences(
-			deploy.ValidatedBuildReferenceV1{
-				Image: lock.FinalImage, ImageReference: references.Generation,
-			},
-			old.PendingCleanup,
-			[]deploy.ValidatedBuildReferenceV1{{
-				Image: old.Image, ImageReference: old.ImageReference,
-			}},
-		)
-		if err != nil {
+	if err := ValidateEnvironmentImageReferences(references, environment, deploymentDir); err != nil {
+		return deploy.ValidatedBuildV1{}, err
+	}
+	record := deploy.ValidatedBuildV1{
+		Schema: deploy.ValidatedBuildSchemaV1, BlueprintDigest: inputs.BlueprintDigest, OverlayDigest: inputs.OverlayDigest,
+		PackageOverridesDigest: inputs.PackageOverridesDigest, Platform: inputs.Platform,
+		BuildLockDigest: lockDigest, Image: lock.FinalImage, ImageReference: references.Generation, PendingStorageCleanup: true,
+	}
+	owner, err := validatedPublicationOwnerV1(record, lock)
+	if err != nil {
+		return deploy.ValidatedBuildV1{}, err
+	}
+	pairs, err := ProjectEnvironmentOwnedReferencesV1(owner, lock, environment, deploymentDir)
+	if err != nil {
+		return deploy.ValidatedBuildV1{}, err
+	}
+	if len(pairs) == 2 {
+		record.Owner = &owner
+		record.Companion = &pairs[1]
+	}
+	record.PendingCleanup, err = pendingValidatedCleanupV1(previous, record, environment, deploymentDir)
+	if err != nil {
+		return deploy.ValidatedBuildV1{}, err
+	}
+	intent := deploy.PendingValidatedBuildV1{Schema: deploy.PendingValidatedBuildSchemaV1, Previous: previous, Candidate: record}
+	if err := deploy.ValidatePendingValidatedBuildV1(intent); err != nil {
+		return deploy.ValidatedBuildV1{}, err
+	}
+	if err := requireDistinctValidatedCandidateV1(operation, record, environment, deploymentDir); err != nil {
+		return deploy.ValidatedBuildV1{}, err
+	}
+	if previous != nil && !previous.Discarded {
+		if _, err := validateValidatedRecordLockV1(operation, store, *previous, environment, deploymentDir); err != nil {
 			return deploy.ValidatedBuildV1{}, err
 		}
 	}
-	if err := backend.createReference(
-		ctx, lock.FinalImage, references, EnvironmentReferenceGeneration, environment, deploymentDir,
-	); err != nil {
-		return deploy.ValidatedBuildV1{}, err
-	}
-	created := true
-	defer func() {
-		if resultErr != nil && created {
-			cleanupErr := backend.removeReference(
-				context.WithoutCancel(ctx), lock.FinalImage, references.Generation, environment, deploymentDir,
-			)
-			if cleanupErr != nil {
-				resultErr = errors.Join(
-					resultErr,
-					fmt.Errorf("cleanup newly created validated image reference: %w", cleanupErr),
-				)
-			}
+	publishLock := backend.publishLock
+	if publishLock == nil {
+		publishLock = func(lock deploy.BuildLockV1) (canonical.Digest, error) {
+			return operation.PublishBuildLock(lock, registry.ValidateRequirementProfileV1)
 		}
-	}()
-	publishedDigest, err := operation.PublishBuildLock(lock, registry.ValidateRequirementProfileV1)
+	}
+	publishedDigest, err := publishLock(lock)
 	if err != nil {
 		return deploy.ValidatedBuildV1{}, err
 	}
 	if publishedDigest != lockDigest {
 		return deploy.ValidatedBuildV1{}, fmt.Errorf("published validated build lock identity changed")
 	}
-	record := deploy.ValidatedBuildV1{
-		Schema:          deploy.ValidatedBuildSchemaV1,
-		BlueprintDigest: inputs.BlueprintDigest, OverlayDigest: inputs.OverlayDigest,
-		PackageOverridesDigest: inputs.PackageOverridesDigest, Platform: inputs.Platform,
-		BuildLockDigest: lockDigest, Image: lock.FinalImage, ImageReference: references.Generation,
-		PendingCleanup: pendingCleanup, PendingStorageCleanup: true,
-	}
-	if err := operation.CommitValidatedBuildV1(record); err != nil {
+	// Intent refers to a complete durable lock before either candidate tag exists.
+	if _, err := validateValidatedRecordLockV1(operation, store, record, environment, deploymentDir); err != nil {
 		return deploy.ValidatedBuildV1{}, err
 	}
-	created = false
-	record, _ = cleanupPendingValidatedBuildReferences(
-		context.WithoutCancel(ctx), operation, record, environment, deploymentDir, backend.removeReference,
-	)
+	current, found, err := operation.ReadValidatedBuildV1()
+	if err != nil {
+		return deploy.ValidatedBuildV1{}, err
+	}
+	if !sameValidatedRecordV1(current, found, previous) {
+		return deploy.ValidatedBuildV1{}, fmt.Errorf("validated owner changed before publication intent")
+	}
+	writeIntent := backend.writeIntent
+	if writeIntent == nil {
+		writeIntent = operation.WritePendingValidatedBuildV1
+	}
+	if err := writeIntent(intent); err != nil {
+		return deploy.ValidatedBuildV1{}, err
+	}
+	if err := requireExactValidatedIntentV1(operation, intent); err != nil {
+		return deploy.ValidatedBuildV1{}, err
+	}
+	if err := requireDistinctValidatedCandidateV1(operation, record, environment, deploymentDir); err != nil {
+		return deploy.ValidatedBuildV1{}, err
+	}
+	if record.Companion != nil {
+		if err := backend.createCompanion(ctx, operation, *record.Companion, *record.Owner, environment, deploymentDir); err != nil {
+			return deploy.ValidatedBuildV1{}, err
+		}
+	}
+	if err := backend.createReference(ctx, lock.FinalImage, references, EnvironmentReferenceGeneration, environment, deploymentDir); err != nil {
+		return deploy.ValidatedBuildV1{}, err
+	}
+	current, found, err = operation.ReadValidatedBuildV1()
+	if err != nil {
+		return deploy.ValidatedBuildV1{}, err
+	}
+	if !sameValidatedRecordV1(current, found, previous) {
+		return deploy.ValidatedBuildV1{}, fmt.Errorf("validated owner changed before publication commit; intent was preserved")
+	}
+	if err := requireExactValidatedIntentV1(operation, intent); err != nil {
+		return deploy.ValidatedBuildV1{}, err
+	}
+	if err := requireDistinctValidatedCandidateV1(operation, record, environment, deploymentDir); err != nil {
+		return deploy.ValidatedBuildV1{}, err
+	}
+	commit := backend.commitRecord
+	if commit == nil {
+		commit = operation.CommitValidatedBuildV1
+	}
+	if err := commit(record); err != nil {
+		// A visible rename cannot establish durability after the directory-sync
+		// barrier fails. Preserve the intent and both ownership inventories so
+		// recovery can resolve the selected owner after restart.
+		return deploy.ValidatedBuildV1{}, err
+	}
+	removeIntent := backend.removeIntent
+	if removeIntent == nil {
+		removeIntent = operation.RemovePendingValidatedBuildV1
+	}
+	if err := removeIntent(); err != nil {
+		return record, nil
+	}
+	// Portable retirement belongs to the next slice; preserve its exact inventory.
+	record, _ = cleanupPendingValidatedBuildReferences(context.WithoutCancel(ctx), operation, record, environment, deploymentDir, backend.removeReference)
 	if err := cleanupValidatedBuildStorage(operation, store, &lock); err == nil {
 		updated := record
 		updated.PendingStorageCleanup = false
@@ -632,6 +730,16 @@ func cleanupValidatedBuildStorage(
 	store providerstore.Store,
 	candidate *deploy.BuildLockV1,
 ) error {
+	if err := requireValidatedConsumerBoundaryV1(operation, "completed validated storage retirement"); err != nil {
+		return err
+	}
+	record, present, err := operation.ReadValidatedBuildV1()
+	if err != nil {
+		return err
+	}
+	if present && len(record.PendingCleanup) != 0 {
+		return fmt.Errorf("validated references still require retirement; storage was preserved")
+	}
 	state, found, err := operation.ReadStateV1()
 	if err != nil {
 		return err
@@ -689,7 +797,7 @@ func mergeValidatedBuildReferences(
 	for _, group := range groups {
 		for _, reference := range group {
 			if reference.ImageReference == current.ImageReference {
-				if !reflect.DeepEqual(reference.Image, current.Image) {
+				if !reflect.DeepEqual(reference, current) {
 					return nil, fmt.Errorf(
 						"new validated build reference %q conflicts with a retained image identity",
 						current.ImageReference,
@@ -698,7 +806,7 @@ func mergeValidatedBuildReferences(
 				continue
 			}
 			if existing, found := byReference[reference.ImageReference]; found &&
-				!reflect.DeepEqual(existing.Image, reference.Image) {
+				!reflect.DeepEqual(existing, reference) {
 				return nil, fmt.Errorf(
 					"validated build cleanup reference %q has conflicting image identities",
 					reference.ImageReference,
@@ -725,6 +833,15 @@ func cleanupPendingValidatedBuildReferences(
 	deploymentDir string,
 	removeReference func(context.Context, providers.RealizedImageV1, string, string, string) error,
 ) (deploy.ValidatedBuildV1, []error) {
+	if err := requireValidatedConsumerBoundaryV1(operation, "completed validated retirement"); err != nil {
+		return record, []error{err}
+	}
+	if err := requireValidatedRecordBoundaryV1(record, "completed validated retirement"); err != nil {
+		return record, []error{err}
+	}
+	if err := requireValidatedReferencesNotCurrentV1(operation, record.PendingCleanup, environment, deploymentDir); err != nil {
+		return record, []error{err}
+	}
 	if len(record.PendingCleanup) == 0 {
 		return record, nil
 	}
