@@ -37,6 +37,9 @@ type ValidatedBuildV1 struct {
 	// Discarded prevents reuse after image references have been removed while
 	// retaining a durable storage-cleanup retry record.
 	Discarded bool `json:"discarded,omitempty"`
+	// Owner and Companion retain portable ownership without making it current.
+	Owner     *EnvironmentGenerationState `json:"owner,omitempty"`
+	Companion *OwnedImageReferenceV1      `json:"companion,omitempty"`
 }
 
 // ValidatedBuildReferenceV1 retains enough trusted identity to remove a
@@ -44,6 +47,8 @@ type ValidatedBuildV1 struct {
 type ValidatedBuildReferenceV1 struct {
 	Image          providers.RealizedImageV1 `json:"image"`
 	ImageReference string                    `json:"image_reference"`
+	// A companion cleanup pair retains its generation scope after lock pruning.
+	CompanionOwner *EnvironmentGenerationState `json:"companion_owner,omitempty"`
 }
 
 func PackageOverridesDigestV1(overrides PackageOverridesV1) (canonical.Digest, error) {
@@ -83,6 +88,21 @@ func ValidateValidatedBuildV1(record ValidatedBuildV1) error {
 	); err != nil {
 		return err
 	}
+	if (record.Owner == nil) != (record.Companion == nil) {
+		return fmt.Errorf("validated portable ownership requires both owner and companion")
+	}
+	if record.Owner != nil {
+		owner := record.Owner
+		if err := ValidateEnvironmentGenerationState(*owner); err != nil {
+			return err
+		}
+		if owner.Reference != record.ImageReference || owner.ImageDigest != record.Image.Digest || owner.RootFSSubject != record.Image.RootFSSubject || owner.BuildLockDigest != record.BuildLockDigest || owner.Platform != record.Platform {
+			return fmt.Errorf("validated portable owner does not match its record")
+		}
+		if err := validateValidatedBuildReferenceV1(ValidatedBuildReferenceV1{Image: record.Companion.Image, ImageReference: record.Companion.Reference, CompanionOwner: owner}, "validated companion"); err != nil {
+			return err
+		}
+	}
 	previous := ""
 	for index, pending := range record.PendingCleanup {
 		if err := validateValidatedBuildReferenceV1(pending, fmt.Sprintf("validated build pending cleanup %d", index)); err != nil {
@@ -90,6 +110,9 @@ func ValidateValidatedBuildV1(record ValidatedBuildV1) error {
 		}
 		if pending.ImageReference == record.ImageReference {
 			return fmt.Errorf("validated build pending cleanup %d duplicates the current image reference", index)
+		}
+		if record.Companion != nil && pending.ImageReference == record.Companion.Reference {
+			return fmt.Errorf("validated pending cleanup duplicates the current companion")
 		}
 		if index > 0 && previous >= pending.ImageReference {
 			return fmt.Errorf("validated build pending cleanup references must be unique and sorted")
@@ -116,6 +139,14 @@ func validateValidatedBuildReferenceV1(reference ValidatedBuildReferenceV1, desc
 	}
 	if err := validateSafeImageReference(description, reference.ImageReference, false); err != nil {
 		return err
+	}
+	if reference.CompanionOwner != nil {
+		if err := ValidateEnvironmentGenerationState(*reference.CompanionOwner); err != nil {
+			return err
+		}
+		if reference.ImageReference == reference.CompanionOwner.Reference {
+			return fmt.Errorf("validated companion cleanup cannot name its primary reference")
+		}
 	}
 	return nil
 }
