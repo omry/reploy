@@ -132,7 +132,7 @@ func LoadValidatedBuildCandidate(
 	verifyCache bool,
 	verifyImage bool,
 ) (ValidatedBuildCandidateV1, bool, error) {
-	if err := requireValidatedConsumerBoundaryV1(operation, "completed validated content acceptance"); err != nil {
+	if err := requireNoPendingValidatedBuildV1(operation); err != nil {
 		return ValidatedBuildCandidateV1{}, false, err
 	}
 	record, found, err := operation.ReadValidatedBuildV1()
@@ -141,6 +141,9 @@ func LoadValidatedBuildCandidate(
 	}
 	if record.Discarded {
 		return ValidatedBuildCandidateV1{}, false, nil
+	}
+	if err := requireValidatedConsumerBoundaryV1(operation, "completed validated content acceptance"); err != nil {
+		return ValidatedBuildCandidateV1{}, false, err
 	}
 	inputs, err := ValidatedBuildInputs(document, state.Overlay, overrides, deploymentDir, state.Platform)
 	if err != nil {
@@ -373,6 +376,9 @@ func DiscardValidatedBuild(
 	if err != nil {
 		return err
 	}
+	if _, err := RecoverPendingValidatedPublicationV1(ctx, operation, store, environment, deploymentDir); err != nil {
+		return err
+	}
 	pending, err := discardValidatedBuild(
 		ctx, operation, store, environment, deploymentDir, RemoveEnvironmentGenerationReference,
 	)
@@ -402,39 +408,12 @@ func discardValidatedBuild(
 	if operation == nil || removeReference == nil {
 		return false, fmt.Errorf("discard validated build requires a complete backend")
 	}
-	if err := requireValidatedConsumerBoundaryV1(operation, "completed validated retirement"); err != nil {
+	if err := validatePublicationDeployment(operation, store, deploymentDir); err != nil {
 		return false, err
 	}
-	record, found, err := operation.ReadValidatedBuildV1()
+	_, found, err := discardValidatedBuildWithBackendV1(ctx, operation, environment, deploymentDir, validatedRetirementBackend(removeReference))
 	if err != nil || !found {
 		return false, err
-	}
-	if !record.Discarded {
-		if err := requireValidatedReferencesNotCurrentV1(operation, []deploy.ValidatedBuildReferenceV1{{Image: record.Image, ImageReference: record.ImageReference}}, environment, deploymentDir); err != nil {
-			return false, err
-		}
-	}
-	if !record.Discarded {
-		record, cleanupErrors := cleanupPendingValidatedBuildReferences(
-			context.WithoutCancel(ctx), operation, record, environment, deploymentDir,
-			removeReference,
-		)
-		if err := removeReference(
-			context.WithoutCancel(ctx), record.Image, record.ImageReference, environment, deploymentDir,
-		); err != nil {
-			cleanupErrors = append(cleanupErrors, fmt.Errorf(
-				"remove current validated image reference %q: %w", record.ImageReference, err,
-			))
-		}
-		if len(cleanupErrors) != 0 {
-			return false, errors.Join(cleanupErrors...)
-		}
-		record.PendingCleanup = nil
-		record.PendingStorageCleanup = true
-		record.Discarded = true
-		if err := operation.CommitValidatedBuildV1(record); err != nil {
-			return false, err
-		}
 	}
 	if err := cleanupValidatedBuildStorage(operation, store, nil); err != nil {
 		return true, nil
@@ -484,18 +463,31 @@ func RetryValidatedBuildCleanup(
 	if operation == nil {
 		return deploy.ValidatedBuildV1{}, false, fmt.Errorf("retry validated build cleanup requires an operation lock")
 	}
-	if err := requireValidatedConsumerBoundaryV1(operation, "completed validated retirement"); err != nil {
+	if err := validatePublicationDeployment(operation, store, deploymentDir); err != nil {
 		return deploy.ValidatedBuildV1{}, false, err
 	}
+	if _, err := RecoverPendingValidatedPublicationV1(ctx, operation, store, environment, deploymentDir); err != nil {
+		return deploy.ValidatedBuildV1{}, false, err
+	}
+
 	record, found, err := operation.ReadValidatedBuildV1()
 	if err != nil || !found {
 		return deploy.ValidatedBuildV1{}, found, err
 	}
-	if !record.Discarded {
-		record, _ = cleanupPendingValidatedBuildReferences(
+	if _, err := validateValidatedRetirementV1(operation, record, environment, deploymentDir); err != nil {
+		return deploy.ValidatedBuildV1{}, true, err
+	}
+	if len(record.PendingCleanup) != 0 {
+		var cleanupErrors []error
+		record, cleanupErrors = cleanupPendingValidatedBuildReferences(
 			context.WithoutCancel(ctx), operation, record, environment, deploymentDir,
 			RemoveEnvironmentGenerationReference,
 		)
+		if len(cleanupErrors) != 0 {
+			// Exact remaining inventory blocks pruning. A discarded candidate
+			// stays non-reusable throughout its reference retirement retry.
+			return record, true, nil
+		}
 	}
 	if record.PendingStorageCleanup {
 		var candidate *deploy.BuildLockV1
@@ -713,8 +705,7 @@ func publishValidatedBuild(
 	if err := removeIntent(); err != nil {
 		return record, nil
 	}
-	// Portable retirement belongs to the next slice; preserve its exact inventory.
-	record, _ = cleanupPendingValidatedBuildReferences(context.WithoutCancel(ctx), operation, record, environment, deploymentDir, backend.removeReference)
+	record, _ = cleanupPendingValidatedReferencesV1(context.WithoutCancel(ctx), operation, record, environment, deploymentDir, validatedRetirementBackendV1{removeReference: backend.removeReference, removeCompanion: backend.removeCompanion})
 	if err := cleanupValidatedBuildStorage(operation, store, &lock); err == nil {
 		updated := record
 		updated.PendingStorageCleanup = false
@@ -730,8 +721,16 @@ func cleanupValidatedBuildStorage(
 	store providerstore.Store,
 	candidate *deploy.BuildLockV1,
 ) error {
-	if err := requireValidatedConsumerBoundaryV1(operation, "completed validated storage retirement"); err != nil {
+	if err := operation.ValidateProviderStore(store); err != nil {
 		return err
+	}
+	if err := requireNoPendingValidatedBuildV1(operation); err != nil {
+		return err
+	}
+	if _, pending, err := operation.ReadPendingBuild(); err != nil {
+		return err
+	} else if pending {
+		return fmt.Errorf("current publication requires recovery before validated storage retirement; ownership was preserved")
 	}
 	record, present, err := operation.ReadValidatedBuildV1()
 	if err != nil {
@@ -739,6 +738,23 @@ func cleanupValidatedBuildStorage(
 	}
 	if present && len(record.PendingCleanup) != 0 {
 		return fmt.Errorf("validated references still require retirement; storage was preserved")
+	}
+	if present && !record.Discarded {
+		retained, found, err := operation.ReadBuildLock(record.BuildLockDigest, registry.ValidateRequirementProfileV1)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return fmt.Errorf("validated build lock %s is missing during storage retirement", record.BuildLockDigest)
+		}
+		dir := filepath.Dir(filepath.Dir(operation.Path()))
+		if _, err := validateValidatedRetirementV1(operation, record, retained.PackageOverrides.EnvironmentID, dir); err != nil {
+			return err
+		}
+		if candidate != nil && !reflect.DeepEqual(*candidate, retained) {
+			return fmt.Errorf("validated storage root differs from the recorded candidate")
+		}
+		candidate = &retained
 	}
 	state, found, err := operation.ReadStateV1()
 	if err != nil {
@@ -833,38 +849,5 @@ func cleanupPendingValidatedBuildReferences(
 	deploymentDir string,
 	removeReference func(context.Context, providers.RealizedImageV1, string, string, string) error,
 ) (deploy.ValidatedBuildV1, []error) {
-	if err := requireValidatedConsumerBoundaryV1(operation, "completed validated retirement"); err != nil {
-		return record, []error{err}
-	}
-	if err := requireValidatedRecordBoundaryV1(record, "completed validated retirement"); err != nil {
-		return record, []error{err}
-	}
-	if err := requireValidatedReferencesNotCurrentV1(operation, record.PendingCleanup, environment, deploymentDir); err != nil {
-		return record, []error{err}
-	}
-	if len(record.PendingCleanup) == 0 {
-		return record, nil
-	}
-	var remaining []deploy.ValidatedBuildReferenceV1
-	cleanupErrors := []error{}
-	for _, pending := range record.PendingCleanup {
-		if err := removeReference(
-			ctx, pending.Image, pending.ImageReference, environment, deploymentDir,
-		); err != nil {
-			remaining = append(remaining, pending)
-			cleanupErrors = append(cleanupErrors, fmt.Errorf(
-				"remove superseded validated image reference %q: %w", pending.ImageReference, err,
-			))
-		}
-	}
-	updated := record
-	updated.PendingCleanup = remaining
-	if reflect.DeepEqual(updated.PendingCleanup, record.PendingCleanup) {
-		return record, cleanupErrors
-	}
-	if err := operation.CommitValidatedBuildV1(updated); err != nil {
-		cleanupErrors = append(cleanupErrors, fmt.Errorf("record validated image cleanup progress: %w", err))
-		return record, cleanupErrors
-	}
-	return updated, cleanupErrors
+	return cleanupPendingValidatedReferencesV1(ctx, operation, record, environment, deploymentDir, validatedRetirementBackend(removeReference))
 }

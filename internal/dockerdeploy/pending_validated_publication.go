@@ -30,9 +30,6 @@ func requireValidatedPruningBoundaryV1(operation *deploy.OperationLock) error {
 	if len(record.PendingCleanup) != 0 {
 		return fmt.Errorf("validated cleanup inventory requires retirement before pruning; ownership was preserved")
 	}
-	if record.Companion != nil && record.Discarded {
-		return fmt.Errorf("portable validated discard requires completed retirement; ownership was preserved")
-	}
 	return nil
 }
 
@@ -187,12 +184,20 @@ func validateValidatedRecordLockV1(operation *deploy.OperationLock, store provid
 }
 
 func pendingValidatedCleanupV1(previous *deploy.ValidatedBuildV1, candidate deploy.ValidatedBuildV1, environment, dir string) ([]deploy.ValidatedBuildReferenceV1, error) {
-	if previous == nil || previous.Discarded {
+	if previous == nil {
 		return nil, nil
 	}
 	pairs, err := validatedRecordReferencesV1(*previous, environment, dir)
 	if err != nil {
 		return nil, err
+	}
+	if previous.Discarded {
+		// Discard closes reuse before retirement completes. Carry its exact
+		// remaining inventory without resurrecting successfully removed aliases.
+		if len(previous.PendingCleanup) == 0 {
+			return nil, nil
+		}
+		pairs = nil
 	}
 	return mergeValidatedBuildReferences(deploy.ValidatedBuildReferenceV1{Image: candidate.Image, ImageReference: candidate.ImageReference}, previous.PendingCleanup, pairs)
 }

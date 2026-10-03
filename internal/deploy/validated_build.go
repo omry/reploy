@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
@@ -34,8 +35,8 @@ type ValidatedBuildV1 struct {
 	// PendingStorageCleanup keeps successful validation authoritative while
 	// superseded locks or provider-store objects await another cleanup attempt.
 	PendingStorageCleanup bool `json:"pending_storage_cleanup,omitempty"`
-	// Discarded prevents reuse after image references have been removed while
-	// retaining a durable storage-cleanup retry record.
+	// Discarded prevents reuse before reference retirement starts. PendingCleanup
+	// retains exact remaining aliases until storage cleanup can safely run.
 	Discarded bool `json:"discarded,omitempty"`
 	// Owner and Companion retain portable ownership without making it current.
 	Owner     *EnvironmentGenerationState `json:"owner,omitempty"`
@@ -43,7 +44,7 @@ type ValidatedBuildV1 struct {
 }
 
 // ValidatedBuildReferenceV1 retains enough trusted identity to remove a
-// superseded Docker reference without depending on its build lock remaining.
+// retired Docker reference without depending on its build lock remaining.
 type ValidatedBuildReferenceV1 struct {
 	Image          providers.RealizedImageV1 `json:"image"`
 	ImageReference string                    `json:"image_reference"`
@@ -109,10 +110,14 @@ func ValidateValidatedBuildV1(record ValidatedBuildV1) error {
 			return err
 		}
 		if pending.ImageReference == record.ImageReference {
-			return fmt.Errorf("validated build pending cleanup %d duplicates the current image reference", index)
+			if !record.Discarded || pending.Image != record.Image || pending.CompanionOwner != nil {
+				return fmt.Errorf("validated build pending cleanup %d conflicts with the current image reference", index)
+			}
 		}
 		if record.Companion != nil && pending.ImageReference == record.Companion.Reference {
-			return fmt.Errorf("validated pending cleanup duplicates the current companion")
+			if !record.Discarded || pending.Image != record.Companion.Image || !reflect.DeepEqual(pending.CompanionOwner, record.Owner) {
+				return fmt.Errorf("validated pending cleanup conflicts with the current companion")
+			}
 		}
 		if index > 0 && previous >= pending.ImageReference {
 			return fmt.Errorf("validated build pending cleanup references must be unique and sorted")
@@ -120,9 +125,6 @@ func ValidateValidatedBuildV1(record ValidatedBuildV1) error {
 		previous = pending.ImageReference
 	}
 	if record.Discarded {
-		if len(record.PendingCleanup) != 0 {
-			return fmt.Errorf("discarded validated build cannot retain pending image references")
-		}
 		if !record.PendingStorageCleanup {
 			return fmt.Errorf("discarded validated build must retain pending storage cleanup")
 		}
