@@ -522,29 +522,26 @@ func TestPendingOwnedPublicationConsumerGuardsV1(t *testing.T) {
 			case "installed transfer":
 				defer operation.Unlock()
 				destination := t.TempDir()
-				var destinationStore providerstore.Store
-				destinationStore, err = providerstore.NewStore(destination)
-				if err != nil {
-					t.Fatal(err)
+				destinationStore, storeErr := providerstore.NewStore(destination)
+				if storeErr != nil {
+					t.Fatal(storeErr)
 				}
-				var dest *deploy.OperationLock
-				dest, err = deploy.AcquireOperationLock(t.Context(), destination)
-				if err != nil {
-					t.Fatal(err)
+				dest, lockErr := deploy.AcquireOperationLock(t.Context(), destination)
+				if lockErr != nil {
+					t.Fatal(lockErr)
 				}
 				defer dest.Unlock()
-				input := InstalledBuildPublicationInputV1{Environment: "demo", SourceDeploymentDir: dir, DestinationDeploymentDir: destination, Source: CurrentBuild{State: state, Generation: *state.Current, Lock: lock}, Build: lock, Installation: installedBuildPublicationInstallation(destination)}
-				_, err = publishInstalledBuildV1(t.Context(), operation, dest, store, destinationStore, input, installedBuildPublicationBackend{transferClosure: func(context.Context, *deploy.OperationLock, *deploy.OperationLock, providerstore.Store, providerstore.Store, deploy.BuildLockV1) ([]providerstore.StoreObjectRef, error) {
-					mutations++
-					return nil, nil
-				}, createReference: func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error {
-					mutations++
-					return nil
-				}, removeReference: images.primaryRemove})
+				destinationImages := &pendingPublicationImagesV1{images: map[string]providers.RealizedImageV1{}, operation: dest, t: t}
+				input := InstalledBuildPublicationInputV1{Environment: "demo", SourceDeploymentDir: dir, DestinationDeploymentDir: destination, Source: CurrentBuild{State: state, Generation: *state.Current, Lock: lock}, Build: lock, Installation: installedBuildPublicationInstallation(destination), References: fixedPublicationReferences(t, destination, 120)}
+				_, err = publishInstalledBuildV1(t.Context(), operation, dest, store, destinationStore, input, installedOwnedPublicationBackendV1(t, operation, destinationImages, destinationStore, destination))
+				if len(destinationImages.images) != 2 {
+					t.Fatal("installed destination did not acquire separate ownership")
+				}
+
 			}
-			if boundary == "provider failure" {
+			if boundary == "provider failure" || boundary == "installed transfer" {
 				if err != nil {
-					t.Fatalf("delivered provider-failure cleanup rejected current portable ownership: %v", err)
+					t.Fatalf("delivered consumer rejected current portable ownership: %v", err)
 				}
 			} else if err == nil || !strings.Contains(err.Error(), "portable") || mutations != 0 {
 				t.Fatalf("unsafe consumer not rejected before effects: %v %d", err, mutations)

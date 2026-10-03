@@ -34,6 +34,9 @@ type installedBuildPublicationBackend struct {
 	) ([]providerstore.StoreObjectRef, error)
 	createReference func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error
 	removeReference func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error
+	createCompanion func(context.Context, *deploy.OperationLock, OwnedImageReferenceV1, deploy.EnvironmentGenerationState, string, string) error
+	removeCompanion func(context.Context, *deploy.OperationLock, OwnedImageReferenceV1, deploy.EnvironmentGenerationState, string, string) error
+	removeIntent    func() error
 }
 
 // PublishInstalledBuildV1 transfers and publishes one already-current staged
@@ -51,6 +54,8 @@ func PublishInstalledBuildV1(
 		transferClosure: transferInstalledBuildClosure,
 		createReference: CreateEnvironmentImageReference,
 		removeReference: RemoveEnvironmentImageReference,
+		createCompanion: CreatePortableEnvironmentReferenceV1,
+		removeCompanion: RemovePortableEnvironmentReferenceV1,
 	})
 }
 
@@ -84,13 +89,10 @@ func publishInstalledBuildV1(
 	if err := validateInstalledBuildSource(input); err != nil {
 		return deploy.StateV1{}, err
 	}
-	if input.Build.PortableRuntimeLayer != nil || input.Source.Lock.PortableRuntimeLayer != nil {
-		return deploy.StateV1{}, fmt.Errorf("portable installed publication is not yet supported by this version")
-	}
-	if err := requirePublicationConsumerBoundaryV1(sourceOperation, "completed installed ownership transfer"); err != nil {
+	if err := requireValidatedPruningBoundaryV1(sourceOperation); err != nil {
 		return deploy.StateV1{}, err
 	}
-	if err := requirePublicationConsumerBoundaryV1(destinationOperation, "completed installed ownership transfer"); err != nil {
+	if err := requireValidatedPruningBoundaryV1(destinationOperation); err != nil {
 		return deploy.StateV1{}, err
 	}
 	destinationDir, err := filepath.Abs(input.DestinationDeploymentDir)
@@ -153,6 +155,15 @@ func publishInstalledBuildV1(
 	if err != nil {
 		return deploy.StateV1{}, err
 	}
+	if found {
+		document, err := blueprint.DecodeResolvedDocumentV1(destinationState.Blueprint)
+		if err != nil {
+			return deploy.StateV1{}, err
+		}
+		if document.Environment.ID != input.Environment {
+			return deploy.StateV1{}, fmt.Errorf("installed publication cannot replace another environment's destination state")
+		}
+	}
 	if _, pending, err := destinationOperation.ReadPendingBuild(); err != nil {
 		return deploy.StateV1{}, err
 	} else if pending {
@@ -160,6 +171,7 @@ func publishInstalledBuildV1(
 	}
 	var old *deploy.EnvironmentGenerationState
 	var oldImage *providers.RealizedImageV1
+	var oldPairs []OwnedImageReferenceV1
 	if found {
 		old = destinationState.Current
 	}
@@ -181,14 +193,12 @@ func publishInstalledBuildV1(
 		}
 		image := oldLock.FinalImage
 		oldImage = &image
+		oldPairs, err = ProjectEnvironmentOwnedReferencesV1(*old, oldLock, input.Environment, input.DestinationDeploymentDir)
+		if err != nil {
+			return deploy.StateV1{}, err
+		}
 	}
 
-	closure, err := backend.transferClosure(
-		ctx, sourceOperation, destinationOperation, sourceStore, destinationStore, input.Build,
-	)
-	if err != nil {
-		return deploy.StateV1{}, fmt.Errorf("publish installed build closure: %w", err)
-	}
 	candidate := input.Source.Generation
 	candidate.Reference = references.Generation
 	candidate.ImageDigest = input.Build.FinalImage.Digest
@@ -196,19 +206,54 @@ func publishInstalledBuildV1(
 	candidate.BuildLockDigest = lockDigest
 	candidate.Platform = input.Build.Platform
 	candidate.RuntimePolicyDigest = policyDigest
+	if _, err := ProjectEnvironmentOwnedReferencesV1(input.Source.Generation, lockedSourceBuild, input.Environment, input.SourceDeploymentDir); err != nil {
+		return deploy.StateV1{}, fmt.Errorf("installed build source ownership: %w", err)
+	}
+	pairs, err := ProjectEnvironmentOwnedReferencesV1(candidate, input.Build, input.Environment, input.DestinationDeploymentDir)
+	if err != nil {
+		return deploy.StateV1{}, err
+	}
+	if (len(pairs) == 2 && backend.createCompanion == nil) || (len(oldPairs) == 2 && backend.removeCompanion == nil) {
+		return deploy.StateV1{}, fmt.Errorf("portable installed publication requires complete companion operations")
+	}
+	if _, _, _, err := pendingPublicationRootsV1(destinationOperation, destinationStore, nil, "", input.Environment, input.DestinationDeploymentDir, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1); err != nil {
+		return deploy.StateV1{}, err
+	}
 	pending := deploy.PendingBuildV1{
 		Schema: deploy.PendingBuildSchemaV1, Phase: deploy.PendingBuildPhaseValidated, Old: old,
 		Candidate: deploy.PendingCandidateV1{
 			TemporaryReference: references.Temporary, GenerationReference: references.Generation,
-			Image: input.Build.FinalImage, BuildLockDigest: lockDigest, StoreObjects: closure,
+			Image: input.Build.FinalImage, BuildLockDigest: lockDigest, StoreObjects: []providerstore.StoreObjectRef{},
 		},
-		Cleanup: publicationCleanupItems(references, old),
+		Cleanup: publicationCleanupItems(references, old), OldReferences: oldPairs,
 	}
+	if len(pairs) == 2 {
+		pending.Candidate.Owner = &candidate
+		pending.Candidate.Companion = &pairs[1]
+	}
+	if err := validatePendingOwnedReferencesV1(pending, input.Environment, input.DestinationDeploymentDir); err != nil {
+		return deploy.StateV1{}, err
+	}
+	if err := requireCurrentPublicationValidatedSeparationV1(destinationOperation, pending, input.Environment, input.DestinationDeploymentDir); err != nil {
+		return deploy.StateV1{}, err
+	}
+	closure, err := backend.transferClosure(
+		ctx, sourceOperation, destinationOperation, sourceStore, destinationStore, input.Build,
+	)
+	if err != nil {
+		return deploy.StateV1{}, fmt.Errorf("publish installed build closure: %w", err)
+	}
+	pending.Candidate.StoreObjects = closure
 	if err := destinationOperation.WritePendingBuild(pending); err != nil {
 		return deploy.StateV1{}, err
 	}
 	if err := backend.createReference(ctx, input.Build.FinalImage, references, EnvironmentReferenceTemporary, input.Environment, input.DestinationDeploymentDir); err != nil {
 		return deploy.StateV1{}, err
+	}
+	if len(pairs) == 2 {
+		if err := backend.createCompanion(ctx, destinationOperation, pairs[1], candidate, input.Environment, input.DestinationDeploymentDir); err != nil {
+			return deploy.StateV1{}, err
+		}
 	}
 	if err := backend.createReference(ctx, input.Build.FinalImage, references, EnvironmentReferenceGeneration, input.Environment, input.DestinationDeploymentDir); err != nil {
 		return deploy.StateV1{}, err
@@ -242,17 +287,32 @@ func publishInstalledBuildV1(
 		if err := backend.removeReference(ctx, *oldImage, oldReferences, EnvironmentReferenceGeneration, input.Environment, input.DestinationDeploymentDir); err != nil {
 			return deploy.StateV1{}, err
 		}
+		if len(oldPairs) == 2 {
+			if err := backend.removeCompanion(ctx, destinationOperation, oldPairs[1], *old, input.Environment, input.DestinationDeploymentDir); err != nil {
+				return deploy.StateV1{}, err
+			}
+		}
 	}
 	if err := backend.removeReference(ctx, input.Build.FinalImage, references, EnvironmentReferenceTemporary, input.Environment, input.DestinationDeploymentDir); err != nil {
 		return deploy.StateV1{}, err
 	}
-	if err := destinationOperation.RemoveOtherBuildLocks(lockDigest, registry.ValidateRequirementProfileV1); err != nil {
+	roots, digests, storePruneSafe, err := pendingPublicationRootsV1(destinationOperation, destinationStore, &input.Build, lockDigest, input.Environment, input.DestinationDeploymentDir, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1)
+	if err != nil {
 		return deploy.StateV1{}, err
 	}
-	if err := destinationOperation.RemoveUnreachableBuildObjects(destinationStore, input.Build, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1); err != nil {
+	if err := destinationOperation.RemoveBuildLocksExcept(digests, registry.ValidateRequirementProfileV1); err != nil {
 		return deploy.StateV1{}, err
 	}
-	if err := destinationOperation.RemovePendingBuild(); err != nil {
+	if storePruneSafe {
+		if err := destinationOperation.RemoveUnreachableBuildObjectsForBuilds(destinationStore, roots, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1); err != nil {
+			return deploy.StateV1{}, err
+		}
+	}
+	removeIntent := backend.removeIntent
+	if removeIntent == nil {
+		removeIntent = destinationOperation.RemovePendingBuild
+	}
+	if err := removeIntent(); err != nil {
 		return deploy.StateV1{}, err
 	}
 	return result, nil
