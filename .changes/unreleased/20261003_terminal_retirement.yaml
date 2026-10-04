@@ -1,0 +1,2 @@
+kind: Fixed
+body: Retire staged and installed image ownership before directory removal, and durably reject new staged writers while terminal removal is pending.

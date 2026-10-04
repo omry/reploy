@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -12,6 +13,73 @@ import (
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
 )
+
+func TestStagedRemovalExcludesWriterBeforeDirectoryIsolationV1(t *testing.T) {
+	dir, operation, store, _, state := currentBuildFixture(t, true)
+	state.Staging = &deploy.StagingStateV1{Schema: deploy.StagingStateSchemaV1}
+	state.BlueprintSource = "retained source"
+	if err := operation.CommitStateV1(state.Current, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := operation.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	backend := testStagedRemovalBackendV1(store)
+	retired := false
+	backend.removeReference = func(context.Context, providers.RealizedImageV1, string, string, string) error {
+		retired = true
+		return nil
+	}
+	var held *deploy.OperationLock
+	originalAdmit := backend.admit
+	backend.admit = func(ctx context.Context, dir string, lock *deploy.OperationLock, in ControlAdmissionInputV1) (AdmittedControlV1, error) {
+		got, err := originalAdmit(ctx, dir, lock, in)
+		held = got.Operation
+		return got, err
+	}
+	backend.rename = func(from, to string) error {
+		if !retired {
+			t.Error("current reference survived until directory isolation")
+		}
+		content, err := os.ReadFile(filepath.Join(from, ".reploy", "state.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(content), `"terminal_removal":true`) {
+			t.Error("durable terminal writer guard missing before rename")
+		}
+		// Reproduce the Windows interval on every host: the actual kernel lock
+		// is free, and a writer really attempts to acquire it before isolation.
+		if err := held.Unlock(); err != nil {
+			t.Fatal(err)
+		}
+		writer, err := deploy.AcquireOperationLock(t.Context(), from)
+		if err == nil {
+			_ = writer.Unlock()
+			t.Error("ordinary writer admitted during unlocked removal interval")
+		}
+		if _, err := RunProviderBuildV1(t.Context(), ProviderBuildRunInputV1{DeploymentDir: from, NoCache: true}); err == nil || !strings.Contains(err.Error(), "terminal removal") {
+			t.Fatalf("real no-cache writer during isolation = %v", err)
+		}
+		diagnostic, err := deploy.AcquireExistingOperationLock(t.Context(), from)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := RunLockedProviderBuildV1(t.Context(), LockedProviderBuildRunInputV1{Operation: diagnostic, Store: store, DeploymentDir: from, NoCache: true}); err == nil || !strings.Contains(err.Error(), "terminal removal") {
+			t.Fatalf("caller-held no-cache writer bypassed terminal guard: %v", err)
+		}
+		if _, found, err := diagnostic.ReadStateV1(); err != nil || !found {
+			t.Fatalf("read-only diagnostic blocked: %v", err)
+		}
+		if err := diagnostic.Unlock(); err != nil {
+			t.Fatal(err)
+		}
+		return os.Rename(from, to)
+	}
+	if _, err := removeStagedDeploymentV1(t.Context(), StagedDeploymentRemoveInputV1{DeploymentDir: dir}, backend); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestRemoveStagedDeploymentRemovesOwnedResourcesAndDirectory(t *testing.T) {
 	dir, operation, store, lock, state := currentBuildFixture(t, true)
@@ -230,7 +298,7 @@ func TestStopStagedWorkloadForRemovalAllowsUnmaterializedRuntime(t *testing.T) {
 
 func testStagedRemovalBackendV1(store providerstore.Store) stagedDeploymentRemoveBackendV1 {
 	return stagedDeploymentRemoveBackendV1{
-		acquire:  deploy.AcquireOperationLock,
+		acquire:  deploy.AcquireStagedRemovalOperationLock,
 		newStore: func(string) (providerstore.Store, error) { return store, nil },
 		recoverPending: func(
 			context.Context,

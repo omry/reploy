@@ -266,6 +266,10 @@ func (lock *OperationLock) RemoveUnreachableBuildObjectsForBuilds(
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireWritableLocked(); err != nil {
+		return err
+	}
 	if lock.released || lock.file == nil || lock.path == "" {
 		return fmt.Errorf("operation lock is not held")
 	}
@@ -306,6 +310,10 @@ func (lock *OperationLock) ValidateProviderStore(store providerstore.Store) erro
 }
 
 func (lock *OperationLock) RemoveAllBuildObjects(store providerstore.Store) error {
+	if err := lock.RequireWritable(); err != nil {
+		return err
+	}
+
 	_, err := lock.RemoveProviderStore(store)
 	return err
 }
@@ -318,6 +326,10 @@ func (lock *OperationLock) RemoveProviderStore(store providerstore.Store) (bool,
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireWritableLocked(); err != nil {
+		return false, err
+	}
 	if err := lock.validateProviderStoreLocked(store); err != nil {
 		return false, err
 	}

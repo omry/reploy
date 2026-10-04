@@ -158,6 +158,10 @@ func (lock *OperationLock) PrepareControlledSessionIncidentReceiptV1(channelDire
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireOwnerWritableLocked(); err != nil {
+		return nil, err
+	}
 	if lock.released || lock.file == nil {
 		return nil, fmt.Errorf("operation lock is not held")
 	}
@@ -545,6 +549,10 @@ func (lock *OperationLock) AcknowledgeControlledSessionIncidentReceiptV1(liveRun
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireOwnerWritableLocked(); err != nil {
+		return false, err
+	}
 	if lock.released || lock.file == nil {
 		return false, fmt.Errorf("operation lock is not held")
 	}

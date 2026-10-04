@@ -94,6 +94,9 @@ func runPublishedRuntimeContainerV1(
 	if input.Invocation.PlanID == "" {
 		return fmt.Errorf("runtime invocation plan is required")
 	}
+	if err := input.Operation.RequireOwnerWritable(); err != nil {
+		return err
+	}
 	current, err := requirePublishedRuntimeReady(ctx, PublishedRuntimeReadinessInput{
 		Operation: input.Operation, Store: input.Store, Environment: input.Environment,
 		DeploymentDir: input.DeploymentDir, DockerPlan: input.DockerPlan,

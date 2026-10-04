@@ -27,6 +27,10 @@ type ControlLeaseV1 = QueueEntryLeaseV1
 // marker. The deployment operation lock prevents marker/lease publication from
 // racing queue recovery.
 func (lock *OperationLock) AcquireControlLeaseV1(id string) (*ControlLeaseV1, error) {
+	if err := lock.RequireOwnerWritable(); err != nil {
+		return nil, err
+	}
+
 	if err := ValidateControlMarkerIDV1(id); err != nil {
 		return nil, err
 	}
@@ -35,6 +39,10 @@ func (lock *OperationLock) AcquireControlLeaseV1(id string) (*ControlLeaseV1, er
 
 // AcquireLiveRunLeaseV1 holds ownership of an app or shell queue entry.
 func (lock *OperationLock) AcquireLiveRunLeaseV1(id string) (*QueueEntryLeaseV1, error) {
+	if err := lock.RequireOwnerWritable(); err != nil {
+		return nil, err
+	}
+
 	if err := ValidateLiveRunIDV1(id); err != nil {
 		return nil, err
 	}

@@ -79,7 +79,7 @@ func runProviderUninstallV1(
 		err = errors.Join(err, releaseErr)
 	}()
 
-	if err := requirePublicationConsumerBoundaryV1(operation, "completed installed retirement"); err != nil {
+	if err := recoverTerminalPublicationV1(ctx, operation, deploymentDir); err != nil {
 		return err
 	}
 	planningInput := providerUninstallPlanningInputV1{

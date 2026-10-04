@@ -408,6 +408,9 @@ func discardValidatedBuild(
 	if operation == nil || removeReference == nil {
 		return false, fmt.Errorf("discard validated build requires a complete backend")
 	}
+	if err := operation.RequireOwnerWritable(); err != nil {
+		return false, err
+	}
 	if err := validatePublicationDeployment(operation, store, deploymentDir); err != nil {
 		return false, err
 	}
@@ -462,6 +465,9 @@ func RetryValidatedBuildCleanup(
 	}
 	if operation == nil {
 		return deploy.ValidatedBuildV1{}, false, fmt.Errorf("retry validated build cleanup requires an operation lock")
+	}
+	if err := operation.RequireOwnerWritable(); err != nil {
+		return deploy.ValidatedBuildV1{}, false, err
 	}
 	if err := validatePublicationDeployment(operation, store, deploymentDir); err != nil {
 		return deploy.ValidatedBuildV1{}, false, err
@@ -557,6 +563,9 @@ func publishValidatedBuild(
 	}
 	if operation == nil || backend.newReferences == nil || backend.createReference == nil || backend.removeReference == nil {
 		return deploy.ValidatedBuildV1{}, fmt.Errorf("publish validated build requires a complete backend")
+	}
+	if err := operation.RequireOwnerWritable(); err != nil {
+		return deploy.ValidatedBuildV1{}, err
 	}
 	if err := validatePublicationDeployment(operation, store, deploymentDir); err != nil {
 		return deploy.ValidatedBuildV1{}, err

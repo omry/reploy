@@ -147,7 +147,7 @@ func retryOrdinaryPendingValidatedCleanupWithBackendV1(
 	if operation == nil {
 		return fmt.Errorf("retry validated cleanup before provider preparation requires an operation lock")
 	}
-	if err := operation.RequireHeld(); err != nil {
+	if err := operation.RequireOwnerWritable(); err != nil {
 		return err
 	}
 	record, found, err := operation.ReadValidatedBuildV1()
@@ -182,6 +182,9 @@ func prepareLockedProviderBuildV1(
 	}
 	if input.Operation == nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build requires an operation lock")
+	}
+	if err := input.Operation.RequireOwnerWritable(); err != nil {
+		return LockedProviderBuildPreparationV1{}, err
 	}
 	if input.Sources == nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build sources must use an array")

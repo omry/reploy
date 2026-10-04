@@ -20,6 +20,9 @@ func requireNoPendingValidatedBuildV1(operation *deploy.OperationLock) error {
 }
 
 func requireValidatedPruningBoundaryV1(operation *deploy.OperationLock) error {
+	if err := operation.RequireOwnerWritable(); err != nil {
+		return err
+	}
 	if err := requireNoPendingValidatedBuildV1(operation); err != nil {
 		return err
 	}
@@ -237,6 +240,12 @@ func recoverPendingValidatedPublicationV1(ctx context.Context, operation *deploy
 		return false, fmt.Errorf("pending validated recovery requires a context")
 	}
 	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if operation == nil {
+		return false, fmt.Errorf("pending validated recovery requires an operation lock")
+	}
+	if err := operation.RequireOwnerWritable(); err != nil {
 		return false, err
 	}
 	if err := validatePublicationDeployment(operation, store, dir); err != nil {

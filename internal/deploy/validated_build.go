@@ -228,9 +228,29 @@ func (lock *OperationLock) CommitValidatedBuildV1(record ValidatedBuildV1) error
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireWritableLocked(); err != nil {
+		return err
+	}
 	path, err := lock.validatedBuildPathLocked()
 	if err != nil {
 		return err
+	}
+	if len(lock.terminalRemovalState) != 0 {
+		oldContent, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("terminal retirement requires its retained validated record: %w", err)
+		}
+		old, err := DecodeValidatedBuildV1(oldContent)
+		if err != nil {
+			return err
+		}
+		old.Discarded = record.Discarded
+		old.PendingCleanup = record.PendingCleanup
+		old.PendingStorageCleanup = record.PendingStorageCleanup
+		if !record.Discarded || !reflect.DeepEqual(old, record) {
+			return fmt.Errorf("terminal retirement cannot replace validated ownership")
+		}
 	}
 	if info, statErr := os.Lstat(path); statErr == nil {
 		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
@@ -251,6 +271,10 @@ func (lock *OperationLock) RemoveValidatedBuildV1() error {
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireWritableLocked(); err != nil {
+		return err
+	}
 	path, err := lock.validatedBuildPathLocked()
 	if err != nil {
 		return err
