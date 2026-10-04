@@ -1,0 +1,2 @@
+kind: Fixed
+body: Publish independent installed image and portable companion ownership with resumable transfer cleanup while preserving staged source and validated build references and cache roots.
