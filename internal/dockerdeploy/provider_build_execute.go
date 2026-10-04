@@ -102,7 +102,7 @@ func executeLockedProviderBuildV1(
 		return LockedProviderBuildExecutionResultV1{}, err
 	}
 	preparation := input.Preparation
-	if err := preparation.Operation.RequireHeld(); err != nil {
+	if err := preparation.Operation.RequireOwnerWritable(); err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("execute locked provider build: %w", err)
 	}
 	if input.SourceWheels == nil {

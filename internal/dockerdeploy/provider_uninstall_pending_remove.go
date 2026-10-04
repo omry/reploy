@@ -18,6 +18,7 @@ import (
 type providerUninstallPendingRemovalBackendV1 struct {
 	acquire         func(context.Context, string) (*deploy.OperationLock, error)
 	removeReference func(context.Context, providers.RealizedImageV1, string, string, string) error
+	removeCompanion func(context.Context, *deploy.OperationLock, OwnedImageReferenceV1, deploy.EnvironmentGenerationState, string, string) error
 	finalize        func(string, string) error
 }
 
@@ -33,6 +34,7 @@ func retryPendingProviderUninstallRemovalV1(
 		providerUninstallPendingRemovalBackendV1{
 			acquire:         deploy.AcquireOperationLock,
 			removeReference: RemoveEnvironmentGenerationReference,
+			removeCompanion: removePendingTerminalCompanionV1,
 			finalize:        finalizePendingProviderUninstallRemovalV1,
 		},
 	)
@@ -79,9 +81,6 @@ func retryPendingProviderUninstallRemovalWithV1(
 			err = errors.Join(err, operation.Unlock())
 		}
 	}()
-	if err := requireValidatedConsumerBoundaryV1(operation, "completed installed retirement"); err != nil {
-		return ProviderUninstallResultV1{}, true, err
-	}
 	state, stateFound, err := operation.ReadStateV1()
 	if err != nil {
 		return ProviderUninstallResultV1{}, true, fmt.Errorf("read pending deployment removal state: %w", err)
@@ -131,14 +130,30 @@ func retryPendingProviderUninstallRemovalWithV1(
 	if err != nil {
 		return ProviderUninstallResultV1{}, true, fmt.Errorf("decode pending deployment blueprint: %w", err)
 	}
-	if err := backend.removeReference(
-		context.WithoutCancel(ctx),
-		lock.FinalImage,
-		state.Current.Reference,
-		document.Environment.ID,
-		deploymentDir,
-	); err != nil {
-		return ProviderUninstallResultV1{}, true, fmt.Errorf("remove pending deployment image reference: %w", err)
+	if err := requireTerminalRetirementAuthorityV1(operation, document.Environment.ID, deploymentDir); err != nil {
+		return ProviderUninstallResultV1{}, true, err
+	}
+	pairs, err := projectEnvironmentOwnedReferencesV1(*state.Current, lock, document.Environment.ID, deploymentDir, acceptProviderProfileOwnerForCutoverV1)
+	if err != nil {
+		return ProviderUninstallResultV1{}, true, err
+	}
+	if len(pairs) == 2 && backend.removeCompanion == nil {
+		return ProviderUninstallResultV1{}, true, fmt.Errorf("pending removal requires companion retirement")
+	}
+	retirement := validatedRetirementBackendV1{removeReference: backend.removeReference, removeCompanion: backend.removeCompanion}
+	if _, _, err := discardValidatedBuildWithBackendV1(context.WithoutCancel(ctx), operation, document.Environment.ID, deploymentDir, retirement); err != nil {
+		return ProviderUninstallResultV1{}, true, err
+	}
+	for index, pair := range pairs {
+		var removeErr error
+		if index == 0 {
+			removeErr = backend.removeReference(context.WithoutCancel(ctx), pair.Image, pair.Reference, document.Environment.ID, deploymentDir)
+		} else {
+			removeErr = backend.removeCompanion(context.WithoutCancel(ctx), operation, pair, *state.Current, document.Environment.ID, deploymentDir)
+		}
+		if removeErr != nil {
+			return ProviderUninstallResultV1{}, true, fmt.Errorf("remove pending deployment image reference: %w", removeErr)
+		}
 	}
 	if err := operation.Unlock(); err != nil {
 		return ProviderUninstallResultV1{}, true, fmt.Errorf("release pending deployment lock: %w", err)

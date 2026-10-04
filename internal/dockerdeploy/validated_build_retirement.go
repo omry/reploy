@@ -146,6 +146,9 @@ func removeValidatedRetirementReferenceV1(ctx context.Context, operation *deploy
 }
 
 func cleanupPendingValidatedReferencesV1(ctx context.Context, operation *deploy.OperationLock, record deploy.ValidatedBuildV1, environment, dir string, backend validatedRetirementBackendV1) (deploy.ValidatedBuildV1, []error) {
+	if err := operation.RequireWritable(); err != nil {
+		return record, []error{err}
+	}
 	if ctx == nil {
 		return record, []error{fmt.Errorf("validated retirement requires a context")}
 	}
@@ -193,6 +196,9 @@ func cleanupPendingValidatedReferencesV1(ctx context.Context, operation *deploy.
 }
 
 func discardValidatedBuildWithBackendV1(ctx context.Context, operation *deploy.OperationLock, environment, dir string, backend validatedRetirementBackendV1) (deploy.ValidatedBuildV1, bool, error) {
+	if err := operation.RequireWritable(); err != nil {
+		return deploy.ValidatedBuildV1{}, false, err
+	}
 	if ctx == nil {
 		return deploy.ValidatedBuildV1{}, false, fmt.Errorf("discard validated build requires a context")
 	}

@@ -69,6 +69,9 @@ func publishBuild(
 	if operation == nil {
 		return deploy.StateV1{}, fmt.Errorf("publish build requires an operation lock")
 	}
+	if err := operation.RequireOwnerWritable(); err != nil {
+		return deploy.StateV1{}, err
+	}
 	if backend.newReferences == nil || backend.createReference == nil || backend.removeReference == nil {
 		return deploy.StateV1{}, fmt.Errorf("publish build requires a complete image-reference backend")
 	}

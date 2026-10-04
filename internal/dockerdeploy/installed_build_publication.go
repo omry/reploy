@@ -80,8 +80,14 @@ func publishInstalledBuildV1(
 	if backend.transferClosure == nil || backend.createReference == nil || backend.removeReference == nil {
 		return deploy.StateV1{}, fmt.Errorf("publish installed build requires a complete backend")
 	}
+	if err := sourceOperation.RequireOwnerWritable(); err != nil {
+		return deploy.StateV1{}, fmt.Errorf("installed build source: %w", err)
+	}
 	if err := validatePublicationDeployment(sourceOperation, sourceStore, input.SourceDeploymentDir); err != nil {
 		return deploy.StateV1{}, fmt.Errorf("installed build source: %w", err)
+	}
+	if err := destinationOperation.RequireOwnerWritable(); err != nil {
+		return deploy.StateV1{}, fmt.Errorf("installed build destination: %w", err)
 	}
 	if err := validatePublicationDeployment(destinationOperation, destinationStore, input.DestinationDeploymentDir); err != nil {
 		return deploy.StateV1{}, fmt.Errorf("installed build destination: %w", err)

@@ -93,8 +93,8 @@ func TestRemoveProviderUninstallDeploymentTransfersLockThenDeletesTombstone(t *t
 		t.Fatalf("remove deployment: %v", err)
 	}
 	want := []string{
-		"store", "load", "reserve", "marker", "lease", "rename:" + dir + "->" + tombstone,
-		"unlock", "reference", "remove:" + tombstone,
+		"store", "load", "reference", "reserve", "marker", "lease", "rename:" + dir + "->" + tombstone,
+		"unlock", "remove:" + tombstone,
 	}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("removal order = %#v, want %#v", order, want)
@@ -107,7 +107,7 @@ func TestRemoveProviderUninstallDeploymentTransfersLockThenDeletesTombstone(t *t
 	}
 }
 
-func TestRemoveProviderUninstallDeploymentRestoresPublicPathWhenReferenceRemovalFails(t *testing.T) {
+func TestRemoveProviderUninstallDeploymentRetainsPublicPathWhenReferenceRemovalFails(t *testing.T) {
 	dir := t.TempDir()
 	operation, _, current := installedBuildPublicationSourceFixtureAtDir(t, dir)
 	plan := providerUninstallPlanV1{
@@ -151,8 +151,8 @@ func TestRemoveProviderUninstallDeploymentRestoresPublicPathWhenReferenceRemoval
 	if !errors.Is(err, want) {
 		t.Fatalf("reference failure = %v, want %v", err, want)
 	}
-	wantRenames := [][2]string{{dir, tombstone}, {tombstone, dir}}
-	if !reflect.DeepEqual(renames, wantRenames) {
+	var wantRenames [][2]string
+	if len(renames) != len(wantRenames) {
 		t.Fatalf("renames = %#v, want %#v", renames, wantRenames)
 	}
 	if removed {

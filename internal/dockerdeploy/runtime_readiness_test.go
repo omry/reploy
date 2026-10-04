@@ -57,6 +57,7 @@ func TestRunPublishedRuntimeContainerV1GatesRunnerAndPassesExactBuild(t *testing
 	}
 	order := []string{}
 	input := PublishedRuntimeContainerInput{
+		Operation:   runtimeReadinessOperationFixtureV1(t),
 		Environment: "demo", DeploymentDir: "/srv/demo", DockerPlan: buildInput.DockerPlan, Invocation: invocation,
 	}
 	err = runPublishedRuntimeContainerV1(t.Context(), input, func(
@@ -93,6 +94,7 @@ func TestRunPublishedRuntimeContainerV1NeverRunsForStaleBuild(t *testing.T) {
 	refreshCurrentBuildReuseGeneration(t, &current)
 	runs := 0
 	err = runPublishedRuntimeContainerV1(t.Context(), PublishedRuntimeContainerInput{
+		Operation:   runtimeReadinessOperationFixtureV1(t),
 		Environment: "demo", DeploymentDir: "/srv/demo", DockerPlan: buildInput.DockerPlan, Invocation: invocation,
 	}, func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (CurrentBuild, bool, error) {
 		return current, true, nil
@@ -146,6 +148,7 @@ func TestRunPublishedRuntimeContainerV1NeverRunsForRootHostBind(t *testing.T) {
 	}
 	runs := 0
 	err = runPublishedRuntimeContainerV1(t.Context(), PublishedRuntimeContainerInput{
+		Operation:   runtimeReadinessOperationFixtureV1(t),
 		Environment: "demo", DeploymentDir: "/srv/demo", DockerPlan: plan, Invocation: invocation,
 	}, func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (CurrentBuild, bool, error) {
 		return current, true, nil
@@ -159,6 +162,16 @@ func TestRunPublishedRuntimeContainerV1NeverRunsForRootHostBind(t *testing.T) {
 	if runs != 0 {
 		t.Fatalf("runner called %d times", runs)
 	}
+}
+
+func runtimeReadinessOperationFixtureV1(t *testing.T) *deploy.OperationLock {
+	t.Helper()
+	operation, err := deploy.AcquireOperationLock(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = operation.Unlock() })
+	return operation
 }
 
 func TestRunPublishedRuntimeContainerV1RejectsMissingBoundaryInputs(t *testing.T) {

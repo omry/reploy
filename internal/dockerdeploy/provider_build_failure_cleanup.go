@@ -13,6 +13,9 @@ import (
 // Failed execution cannot invalidate either independently committed owner.
 // Resolve publication first, then prune against their complete union of roots.
 func cleanupFailedProviderBuildV1(ctx context.Context, preparation LockedProviderBuildPreparationV1) error {
+	if err := preparation.Operation.RequireOwnerWritable(); err != nil {
+		return err
+	}
 	if err := validatePublicationDeployment(preparation.Operation, preparation.Store, preparation.DeploymentDir); err != nil {
 		return err
 	}

@@ -21,6 +21,10 @@ func (lock *OperationLock) PublishBuildLock(record BuildLockV1, validateProfileO
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireOwnerWritableLocked(); err != nil {
+		return "", err
+	}
 	digest, err := BuildLockDigestV1(record, validateProfileOwner)
 	if err != nil {
 		return "", err
@@ -94,6 +98,10 @@ func (lock *OperationLock) RemoveBuildLock(digest canonical.Digest, validateProf
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireWritableLocked(); err != nil {
+		return err
+	}
 	path, err := lock.buildLockPathLocked(digest, false)
 	if err != nil {
 		return err
@@ -126,6 +134,10 @@ func (lock *OperationLock) RemoveBuildLocksExcept(keep []canonical.Digest, valid
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireWritableLocked(); err != nil {
+		return err
+	}
 	if lock.released || lock.file == nil || lock.path == "" {
 		return fmt.Errorf("operation lock is not held")
 	}
@@ -213,6 +225,10 @@ func (lock *OperationLock) RemoveAllBuildLocks(validateProfileOwner providers.Re
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireWritableLocked(); err != nil {
+		return err
+	}
 	if lock.released || lock.file == nil || lock.path == "" {
 		return fmt.Errorf("operation lock is not held")
 	}

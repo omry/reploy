@@ -31,7 +31,8 @@ type StateV1 struct {
 // StagingStateV1 marks a deployment as staged. Staging-only package overrides
 // live in the private sidecar rather than deployment state.
 type StagingStateV1 struct {
-	Schema string `json:"schema"`
+	Schema          string `json:"schema"`
+	TerminalRemoval bool   `json:"terminal_removal,omitempty"`
 }
 
 func ValidateStateV1(state StateV1) error {

@@ -39,6 +39,12 @@ func (sourceLock *OperationLock) TransferBuildLockStoreClosure(
 	defer sourceLock.mutex.Unlock()
 	destinationLock.mutex.Lock()
 	defer destinationLock.mutex.Unlock()
+	if err := sourceLock.requireOwnerWritableLocked(); err != nil {
+		return nil, fmt.Errorf("source provider store: %w", err)
+	}
+	if err := destinationLock.requireOwnerWritableLocked(); err != nil {
+		return nil, fmt.Errorf("destination provider store: %w", err)
+	}
 	if err := sourceLock.validateProviderStoreLocked(sourceStore); err != nil {
 		return nil, fmt.Errorf("source provider store: %w", err)
 	}

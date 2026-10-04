@@ -65,6 +65,10 @@ func (lock *OperationLock) PrepareLegacyComponentsStagingRecoveryV1(
 	validatePackage PackageRequestValidator,
 	preserveSelectedPlatform bool,
 ) (LegacyComponentsStagingRecoveryV1, error) {
+	if err := lock.RequireWritable(); err != nil {
+		return LegacyComponentsStagingRecoveryV1{}, err
+	}
+
 	if selectPlatform == nil {
 		return LegacyComponentsStagingRecoveryV1{}, fmt.Errorf(
 			"recover legacy staging state requires a platform selector",
@@ -166,6 +170,10 @@ func (lock *OperationLock) PrepareLegacyComponentsStagingRecoveryV1(
 func (lock *OperationLock) CommitLegacyComponentsStagingRecoveryV1(
 	recovery LegacyComponentsStagingRecoveryV1,
 ) error {
+	if err := lock.RequireWritable(); err != nil {
+		return err
+	}
+
 	if recovery.path == "" || len(recovery.original) == 0 {
 		return fmt.Errorf("commit legacy staging recovery requires a prepared recovery")
 	}
@@ -332,6 +340,9 @@ func (lock *OperationLock) commitRecoveredStateV1(
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+	if err := lock.requireOwnerWritableLocked(); err != nil {
+		return err
+	}
 	currentPath, err := lock.statePathV1Locked()
 	if err != nil {
 		return err
