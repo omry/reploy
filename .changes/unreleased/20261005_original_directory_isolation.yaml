@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve the original deployment directory identity when isolating terminal removal, without replacing an occupied removal destination.
