@@ -47,7 +47,7 @@ func executeProviderUninstallWithV1(
 	if operation == nil {
 		return fmt.Errorf("execute provider uninstall requires the operation lock")
 	}
-	if err := operation.RequireHeld(); err != nil {
+	if err := operation.RequireWritable(); err != nil {
 		return err
 	}
 	if cleanupHost == nil {

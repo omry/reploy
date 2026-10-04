@@ -47,6 +47,9 @@ func (lock *OperationLock) acquireQueueEntryLeaseV1(id string) (*QueueEntryLease
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+	if err := lock.requireWritableLocked(); err != nil {
+		return nil, err
+	}
 	directory, err := lock.controlLeaseDirectoryLockedV1()
 	if err != nil {
 		return nil, err
@@ -143,8 +146,8 @@ func (lease *QueueEntryLeaseV1) Release() error {
 }
 
 func (lock *OperationLock) controlLeaseDirectoryLockedV1() (string, error) {
-	if lock.released || lock.file == nil || lock.path == "" {
-		return "", fmt.Errorf("operation lock is not held")
+	if err := lock.requireHeldLocked(); err != nil {
+		return "", err
 	}
 	return filepath.Dir(lock.path), nil
 }

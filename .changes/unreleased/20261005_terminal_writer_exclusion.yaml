@@ -1,0 +1,2 @@
+kind: Fixed
+body: Reject deployment ownership writers after terminal removal admission closes, while preserving diagnostics and explicit cleanup retry.

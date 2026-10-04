@@ -82,7 +82,7 @@ func runCurrentWorkloadLifecycleV1(ctx context.Context, input CurrentWorkloadLif
 		return err
 	}
 	if input.Operation != nil {
-		if err := input.Operation.RequireHeld(); err != nil {
+		if err := input.Operation.RequireWritable(); err != nil {
 			return err
 		}
 	} else if input.DeploymentDir == "" {

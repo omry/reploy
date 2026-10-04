@@ -193,7 +193,7 @@ func runControlledSessionWithControllerReservationV1(
 	if operation == nil {
 		return ControlledSessionRunResultV1{}, fmt.Errorf("run controlled session requires an admitted operation lock")
 	}
-	if err := operation.RequireHeld(); err != nil {
+	if err := operation.RequireWritable(); err != nil {
 		return ControlledSessionRunResultV1{}, err
 	}
 	absoluteDir, err := filepath.Abs(plan.Workload.DeploymentDirectory)
@@ -204,7 +204,7 @@ func runControlledSessionWithControllerReservationV1(
 		return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionPairV1(operation, controllerOperation, plan.LiveRunID, fmt.Errorf("controlled-session operation lock does not belong to workload deployment %q", absoluteDir))
 	}
 	if controllerOperation != nil {
-		if err := controllerOperation.RequireHeld(); err != nil {
+		if err := controllerOperation.RequireWritable(); err != nil {
 			return ControlledSessionRunResultV1{}, removeUnstartedControlledSessionPairV1(operation, controllerOperation, plan.LiveRunID, err)
 		}
 		controllerDir, err := filepath.Abs(plan.Controller.DeploymentDirectory)

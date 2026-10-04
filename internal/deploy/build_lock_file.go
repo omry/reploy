@@ -21,6 +21,9 @@ func (lock *OperationLock) PublishBuildLock(record BuildLockV1, validateProfileO
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+	if err := lock.requireWritableLocked(); err != nil {
+		return "", err
+	}
 	digest, err := BuildLockDigestV1(record, validateProfileOwner)
 	if err != nil {
 		return "", err
@@ -94,6 +97,9 @@ func (lock *OperationLock) RemoveBuildLock(digest canonical.Digest, validateProf
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+	if err := lock.requireRetirementLocked(); err != nil {
+		return err
+	}
 	path, err := lock.buildLockPathLocked(digest, false)
 	if err != nil {
 		return err
@@ -126,8 +132,8 @@ func (lock *OperationLock) RemoveBuildLocksExcept(keep []canonical.Digest, valid
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
-	if lock.released || lock.file == nil || lock.path == "" {
-		return fmt.Errorf("operation lock is not held")
+	if err := lock.requireRetirementLocked(); err != nil {
+		return err
 	}
 	kept := make(map[canonical.Digest]struct{}, len(keep))
 	for _, digest := range keep {
@@ -213,8 +219,8 @@ func (lock *OperationLock) RemoveAllBuildLocks(validateProfileOwner providers.Re
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
-	if lock.released || lock.file == nil || lock.path == "" {
-		return fmt.Errorf("operation lock is not held")
+	if err := lock.requireRetirementLocked(); err != nil {
+		return err
 	}
 	directory := filepath.Join(filepath.Dir(lock.path), buildLockDirectoryName)
 	entries, err := os.ReadDir(directory)
@@ -260,8 +266,8 @@ func (lock *OperationLock) RemoveAllBuildLocks(validateProfileOwner providers.Re
 }
 
 func (lock *OperationLock) buildLockPathLocked(digest canonical.Digest, createDirectory bool) (string, error) {
-	if lock.released || lock.file == nil || lock.path == "" {
-		return "", fmt.Errorf("operation lock is not held")
+	if err := lock.requireHeldLocked(); err != nil {
+		return "", err
 	}
 	if err := digest.Validate(); err != nil {
 		return "", fmt.Errorf("build lock digest: %w", err)
