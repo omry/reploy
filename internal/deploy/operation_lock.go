@@ -180,6 +180,10 @@ func (lock *OperationLock) Unlock() error {
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+	return lock.unlockLocked()
+}
+
+func (lock *OperationLock) unlockLocked() error {
 	if lock.released {
 		return nil
 	}
