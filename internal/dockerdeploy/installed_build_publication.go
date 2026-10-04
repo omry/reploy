@@ -77,6 +77,12 @@ func publishInstalledBuildV1(
 	if sourceOperation == nil || destinationOperation == nil || sourceOperation == destinationOperation {
 		return deploy.StateV1{}, fmt.Errorf("publish installed build requires distinct source and destination operation locks")
 	}
+	if err := sourceOperation.RequireWritable(); err != nil {
+		return deploy.StateV1{}, err
+	}
+	if err := destinationOperation.RequireWritable(); err != nil {
+		return deploy.StateV1{}, err
+	}
 	if backend.transferClosure == nil || backend.createReference == nil || backend.removeReference == nil {
 		return deploy.StateV1{}, fmt.Errorf("publish installed build requires a complete backend")
 	}

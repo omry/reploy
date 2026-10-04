@@ -558,6 +558,9 @@ func publishValidatedBuild(
 	if operation == nil || backend.newReferences == nil || backend.createReference == nil || backend.removeReference == nil {
 		return deploy.ValidatedBuildV1{}, fmt.Errorf("publish validated build requires a complete backend")
 	}
+	if err := operation.RequireWritable(); err != nil {
+		return deploy.ValidatedBuildV1{}, err
+	}
 	if err := validatePublicationDeployment(operation, store, deploymentDir); err != nil {
 		return deploy.ValidatedBuildV1{}, err
 	}

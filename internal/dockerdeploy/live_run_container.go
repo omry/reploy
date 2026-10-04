@@ -52,6 +52,9 @@ func runAdmittedTransientContainerV1(
 	if operation == nil {
 		return fmt.Errorf("run admitted transient container requires an operation lock")
 	}
+	if err := operation.RequireWritable(); err != nil {
+		return releaseAdmittedTransientOperationV1(operation, err)
+	}
 	if deploymentDir == "" {
 		return releaseAdmittedTransientOperationV1(operation, fmt.Errorf("run admitted transient container requires a deployment directory"))
 	}

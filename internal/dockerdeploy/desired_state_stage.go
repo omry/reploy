@@ -192,7 +192,7 @@ func stopLegacyStagedWorkloadForRecoveryWithV1(
 	options RunOptions,
 	removeProject func(context.Context, string, time.Duration) error,
 ) error {
-	if err := operation.RequireHeld(); err != nil {
+	if err := operation.RequireWritable(); err != nil {
 		return err
 	}
 	if removeProject == nil {

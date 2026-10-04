@@ -34,6 +34,9 @@ func (lock *OperationLock) CommitStateV1(expected *EnvironmentGenerationState, s
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+	if err := lock.requireWritableLocked(); err != nil {
+		return err
+	}
 	path, err := lock.statePathV1Locked()
 	if err != nil {
 		return err
@@ -60,8 +63,8 @@ func (lock *OperationLock) CommitStateV1(expected *EnvironmentGenerationState, s
 }
 
 func (lock *OperationLock) statePathV1Locked() (string, error) {
-	if lock.released || lock.file == nil || lock.path == "" {
-		return "", fmt.Errorf("operation lock is not held")
+	if err := lock.requireHeldLocked(); err != nil {
+		return "", err
 	}
 	return filepath.Join(filepath.Dir(lock.path), stateFilenameV1), nil
 }

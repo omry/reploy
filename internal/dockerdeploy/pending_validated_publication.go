@@ -239,6 +239,9 @@ func recoverPendingValidatedPublicationV1(ctx context.Context, operation *deploy
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
+	if err := operation.RequireWritable(); err != nil {
+		return false, err
+	}
 	if err := validatePublicationDeployment(operation, store, dir); err != nil {
 		return false, err
 	}

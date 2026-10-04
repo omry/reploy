@@ -19,6 +19,9 @@ func PublishCurrentRuntimeInputsV1(
 	deploymentDir string,
 	plan CurrentRuntimePlanV1,
 ) (changed bool, err error) {
+	if err := operation.RequireWritable(); err != nil {
+		return false, err
+	}
 	dir, err := filepath.Abs(deploymentDir)
 	if err != nil {
 		return false, fmt.Errorf("resolve current runtime input directory: %w", err)

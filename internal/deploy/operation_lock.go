@@ -16,10 +16,13 @@ const operationLockPollInterval = 10 * time.Millisecond
 // OperationLock holds the kernel advisory lock for one deployment directory.
 // The lock-file path is stable, but file existence never indicates ownership.
 type OperationLock struct {
-	file     *os.File
-	path     string
-	mutex    sync.Mutex
-	released bool
+	file            *os.File
+	path            string
+	mutex           sync.Mutex
+	released        bool
+	directory       os.FileInfo
+	stateDirectory  os.FileInfo
+	retirementState []byte
 }
 
 // AcquireOperationLock acquires the deployment's exclusive advisory operation
@@ -52,6 +55,25 @@ func acquireOperationLock(ctx context.Context, deploymentDir string, create bool
 	if err != nil {
 		return nil, err
 	}
+	directory, err := os.Lstat(absoluteDir)
+	if err != nil {
+		return nil, err
+	}
+	stateDirectory, err := os.Lstat(filepath.Dir(lockPath))
+	if err != nil {
+		return nil, err
+	}
+	// Force identity capture now: Windows Lstat otherwise defers file IDs
+	// until SameFile, after a waiting acquisition's directory may have moved.
+	if !os.SameFile(directory, directory) || !os.SameFile(stateDirectory, stateDirectory) {
+		return nil, fmt.Errorf("capture operation lock directory identity")
+	}
+	if create {
+		guard, err := readTerminalStateV1(filepath.Join(filepath.Dir(lockPath), stateFilenameV1))
+		if err != nil || len(guard) != 0 {
+			return nil, fmt.Errorf("ordinary operation admission rejected terminal authority: %v", err)
+		}
+	}
 	flags := os.O_RDWR
 	if create {
 		flags |= os.O_CREATE
@@ -67,7 +89,16 @@ func acquireOperationLock(ctx context.Context, deploymentDir string, create bool
 			return nil, fmt.Errorf("acquire operation lock: %w", err)
 		}
 		if acquired {
-			return &OperationLock{file: file, path: lockPath}, nil
+			lock := &OperationLock{file: file, path: lockPath, directory: directory, stateDirectory: stateDirectory}
+			err := lock.RequireHeld()
+			if err == nil && create {
+				err = lock.RequireWritable()
+			}
+			if err != nil {
+				_ = lock.Unlock()
+				return nil, err
+			}
+			return lock, nil
 		}
 		timer := time.NewTimer(operationLockPollInterval)
 		select {
@@ -131,17 +162,14 @@ func (lock *OperationLock) Path() string {
 }
 
 // RequireHeld fails when the operation lock has not been acquired or has
-// already been released. It performs no filesystem access.
+// already been released, or its original directory or lock file was replaced.
 func (lock *OperationLock) RequireHeld() error {
 	if lock == nil {
 		return fmt.Errorf("operation lock is not held")
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
-	if lock.released || lock.file == nil || lock.path == "" {
-		return fmt.Errorf("operation lock is not held")
-	}
-	return nil
+	return lock.requireHeldLocked()
 }
 
 // Unlock releases the kernel lock and closes its descriptor. Repeated calls

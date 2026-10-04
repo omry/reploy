@@ -26,6 +26,7 @@ type StateV1 struct {
 	Current         *EnvironmentGenerationState  `json:"current"`
 	Staging         *StagingStateV1              `json:"staging"`
 	Deployment      *DeploymentStateV1           `json:"deployment"`
+	TerminalRemoval bool                         `json:"terminal_removal,omitempty"`
 }
 
 // StagingStateV1 marks a deployment as staged. Staging-only package overrides
@@ -37,6 +38,9 @@ type StagingStateV1 struct {
 func ValidateStateV1(state StateV1) error {
 	if state.Schema != StateSchemaV1 {
 		return fmt.Errorf("state schema must be %q", StateSchemaV1)
+	}
+	if state.TerminalRemoval && state.Staging == nil && state.Deployment == nil {
+		return fmt.Errorf("terminal removal requires retained staging or deployment authority")
 	}
 	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
 	if err != nil {

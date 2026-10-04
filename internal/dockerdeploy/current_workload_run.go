@@ -319,7 +319,7 @@ func currentWorkloadCommandsV1(state deploy.StateV1) (*CommandSpec, *CommandSpec
 }
 
 func stopOwnedCurrentWorkloadV1(ctx context.Context, operation *deploy.OperationLock, state deploy.StateV1, dir string, options RunOptions) error {
-	if err := operation.RequireHeld(); err != nil {
+	if err := operation.RequireRetirement(); err != nil {
 		return err
 	}
 	var spec CommandSpec

@@ -95,6 +95,9 @@ func completeProviderBuild(
 	if operation == nil {
 		return ProviderBuildCompletionResult{}, fmt.Errorf("complete provider build requires an operation lock")
 	}
+	if err := operation.RequireWritable(); err != nil {
+		return ProviderBuildCompletionResult{}, err
+	}
 	if backend.validateAndFinalize == nil || backend.assemble == nil ||
 		backend.removeFinalized == nil ||
 		(input.ValidateChoices && backend.publishValidated == nil) ||

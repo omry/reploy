@@ -833,7 +833,7 @@ func TestRecoverLiveRunQueuePathV1RejectsUnknownCurrentSessionWithoutMutation(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := recoverLiveRunQueuePathV1(path, ""); err == nil || !strings.Contains(err.Error(), "empty") {
+	if _, err := recoverLiveRunQueuePathV1(path, "", false); err == nil || !strings.Contains(err.Error(), "empty") {
 		t.Fatalf("missing-session error = %v", err)
 	}
 	after, err := os.ReadFile(path)

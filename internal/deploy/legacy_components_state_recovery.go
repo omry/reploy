@@ -332,6 +332,9 @@ func (lock *OperationLock) commitRecoveredStateV1(
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+	if err := lock.requireWritableLocked(); err != nil {
+		return err
+	}
 	currentPath, err := lock.statePathV1Locked()
 	if err != nil {
 		return err

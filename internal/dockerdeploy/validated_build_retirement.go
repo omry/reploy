@@ -24,6 +24,9 @@ func validatedRetirementBackend(remove func(context.Context, providers.RealizedI
 // Retirement needs canonical ownership, but must work when cache objects have
 // disappeared. A completed discard retains its exact record after lock pruning.
 func validateValidatedRetirementV1(operation *deploy.OperationLock, record deploy.ValidatedBuildV1, environment, dir string) ([]deploy.ValidatedBuildReferenceV1, error) {
+	if err := operation.RequireRetirement(); err != nil {
+		return nil, err
+	}
 	if err := requireNoPendingValidatedBuildV1(operation); err != nil {
 		return nil, err
 	}

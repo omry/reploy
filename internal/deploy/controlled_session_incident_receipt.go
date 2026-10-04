@@ -158,8 +158,8 @@ func (lock *OperationLock) PrepareControlledSessionIncidentReceiptV1(channelDire
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
-	if lock.released || lock.file == nil {
-		return nil, fmt.Errorf("operation lock is not held")
+	if err := lock.requireWritableLocked(); err != nil {
+		return nil, err
 	}
 	path, err := ControlledSessionIncidentReceiptPathV1(channelDirectory, liveRunID)
 	if err != nil {
@@ -484,8 +484,8 @@ func (lock *OperationLock) ReadControlledSessionIncidentReceiptsV1() ([]Controll
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
-	if lock.released || lock.file == nil {
-		return nil, fmt.Errorf("operation lock is not held")
+	if err := lock.requireHeldLocked(); err != nil {
+		return nil, err
 	}
 	directory := filepath.Join(filepath.Dir(lock.path), "incidents")
 	entries, err := os.ReadDir(directory)
@@ -545,8 +545,8 @@ func (lock *OperationLock) AcknowledgeControlledSessionIncidentReceiptV1(liveRun
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
-	if lock.released || lock.file == nil {
-		return false, fmt.Errorf("operation lock is not held")
+	if err := lock.requireRetirementLocked(); err != nil {
+		return false, err
 	}
 	path := filepath.Join(filepath.Dir(lock.path), "incidents", liveRunID+".json")
 	info, err := os.Lstat(path)

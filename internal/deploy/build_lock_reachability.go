@@ -266,8 +266,8 @@ func (lock *OperationLock) RemoveUnreachableBuildObjectsForBuilds(
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
-	if lock.released || lock.file == nil || lock.path == "" {
-		return fmt.Errorf("operation lock is not held")
+	if err := lock.requireRetirementLocked(); err != nil {
+		return err
 	}
 	if err := lock.validateProviderStoreLocked(store); err != nil {
 		return err
@@ -318,6 +318,9 @@ func (lock *OperationLock) RemoveProviderStore(store providerstore.Store) (bool,
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+	if err := lock.requireRetirementLocked(); err != nil {
+		return false, err
+	}
 	if err := lock.validateProviderStoreLocked(store); err != nil {
 		return false, err
 	}
@@ -325,8 +328,8 @@ func (lock *OperationLock) RemoveProviderStore(store providerstore.Store) (bool,
 }
 
 func (lock *OperationLock) validateProviderStoreLocked(store providerstore.Store) error {
-	if lock.released || lock.file == nil || lock.path == "" {
-		return fmt.Errorf("operation lock is not held")
+	if err := lock.requireHeldLocked(); err != nil {
+		return err
 	}
 	deploymentRoot := filepath.Dir(filepath.Dir(lock.path))
 	expectedStoreRoot := filepath.Join(deploymentRoot, ".reploy", providerstore.StoreDirName)

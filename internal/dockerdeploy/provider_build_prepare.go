@@ -98,6 +98,9 @@ func PrepareLockedProviderBuildV1(
 	ctx context.Context,
 	input LockedProviderBuildPreparationInputV1,
 ) (LockedProviderBuildPreparationV1, error) {
+	if err := input.Operation.RequireWritable(); err != nil {
+		return LockedProviderBuildPreparationV1{}, err
+	}
 	if _, err := RecoverPendingValidatedPublicationV1(ctx, input.Operation, input.Store, input.Environment, input.DeploymentDir); err != nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("recover pending validated build before preparation: %w", err)
 	}
@@ -147,7 +150,7 @@ func retryOrdinaryPendingValidatedCleanupWithBackendV1(
 	if operation == nil {
 		return fmt.Errorf("retry validated cleanup before provider preparation requires an operation lock")
 	}
-	if err := operation.RequireHeld(); err != nil {
+	if err := operation.RequireWritable(); err != nil {
 		return err
 	}
 	record, found, err := operation.ReadValidatedBuildV1()
@@ -182,6 +185,9 @@ func prepareLockedProviderBuildV1(
 	}
 	if input.Operation == nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build requires an operation lock")
+	}
+	if err := input.Operation.RequireWritable(); err != nil {
+		return LockedProviderBuildPreparationV1{}, err
 	}
 	if input.Sources == nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build sources must use an array")

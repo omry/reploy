@@ -81,8 +81,8 @@ func DecodePendingValidatedBuildV1(content []byte) (PendingValidatedBuildV1, err
 }
 
 func (lock *OperationLock) pendingValidatedBuildPathLocked() (string, error) {
-	if lock.released || lock.file == nil || lock.path == "" {
-		return "", fmt.Errorf("operation lock is not held")
+	if err := lock.requireHeldLocked(); err != nil {
+		return "", err
 	}
 	return filepath.Join(filepath.Dir(lock.path), pendingValidatedBuildFilenameV1), nil
 }
@@ -125,6 +125,9 @@ func (lock *OperationLock) WritePendingValidatedBuildV1(intent PendingValidatedB
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+	if err := lock.requireWritableLocked(); err != nil {
+		return err
+	}
 	path, err := lock.pendingValidatedBuildPathLocked()
 	if err != nil {
 		return err
@@ -143,6 +146,9 @@ func (lock *OperationLock) RemovePendingValidatedBuildV1() error {
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+	if err := lock.requireRetirementLocked(); err != nil {
+		return err
+	}
 	path, err := lock.pendingValidatedBuildPathLocked()
 	if err != nil {
 		return err
