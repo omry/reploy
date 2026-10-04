@@ -10,7 +10,6 @@ import (
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
-	"github.com/omry/reploy/internal/providers/registry"
 	"github.com/omry/reploy/internal/providerstore"
 )
 
@@ -31,6 +30,7 @@ type stagedDeploymentRemoveBackendV1 struct {
 	recoverPending   func(context.Context, *deploy.OperationLock, providerstore.Store, *deploy.EnvironmentGenerationState, string, string) (bool, error)
 	admit            func(context.Context, string, *deploy.OperationLock, ControlAdmissionInputV1) (AdmittedControlV1, error)
 	stopOwned        func(context.Context, *deploy.OperationLock, deploy.StateV1, string, RunOptions) error
+	beginRemoval     func(*deploy.OperationLock, deploy.StateV1) error
 	discardValidated func(context.Context, *deploy.OperationLock, string, string) error
 	removeMarker     func(*deploy.OperationLock, string) error
 	releaseLease     func(*deploy.ControlLeaseV1) error
@@ -38,6 +38,7 @@ type stagedDeploymentRemoveBackendV1 struct {
 	rename           func(string, string) error
 	unlock           func(*deploy.OperationLock) error
 	removeReference  func(context.Context, providers.RealizedImageV1, string, string, string) error
+	removeCompanion  func(context.Context, *deploy.OperationLock, OwnedImageReferenceV1, deploy.EnvironmentGenerationState, string, string) error
 	removeAll        func(string) error
 	complete         func(*deploy.OperationLock, string, *deploy.ControlLeaseV1) error
 }
@@ -49,7 +50,7 @@ func RemoveStagedDeploymentV1(
 	input StagedDeploymentRemoveInputV1,
 ) (StagedDeploymentRemoveResultV1, error) {
 	return removeStagedDeploymentV1(ctx, input, stagedDeploymentRemoveBackendV1{
-		acquire:  deploy.AcquireOperationLock,
+		acquire:  deploy.AcquireStagedRemovalOperationLock,
 		newStore: providerstore.NewStore,
 		recoverPending: func(
 			ctx context.Context,
@@ -59,16 +60,13 @@ func RemoveStagedDeploymentV1(
 			environment string,
 			dir string,
 		) (bool, error) {
-			return RecoverPendingPublication(
-				ctx, operation, store, current, environment, dir,
-				registry.ValidateRequirementProfileV1,
-				registry.ValidateResolvedBundlePayloadV1,
-			)
+			return recoverTerminalPublicationWithStoreV1(ctx, operation, store, current, environment, dir)
 		},
 		admit:     AdmitControlOperationV1,
 		stopOwned: stopStagedWorkloadForRemovalV1,
 		discardValidated: func(ctx context.Context, operation *deploy.OperationLock, environment, deploymentDir string) error {
-			return DiscardValidatedBuild(ctx, operation, environment, deploymentDir, input.RunOptions.Progress)
+			_, _, err := discardValidatedBuildWithBackendV1(ctx, operation, environment, deploymentDir, validatedRetirementBackend(RemoveEnvironmentGenerationReference))
+			return err
 		},
 		removeMarker: func(operation *deploy.OperationLock, markerID string) error {
 			_, removed, err := operation.RemoveControlMarkerV1(markerID)
@@ -82,6 +80,7 @@ func RemoveStagedDeploymentV1(
 		rename:          os.Rename,
 		unlock:          func(operation *deploy.OperationLock) error { return operation.Unlock() },
 		removeReference: RemoveEnvironmentGenerationReference,
+		removeCompanion: RemovePortableEnvironmentReferenceV1,
 		removeAll:       os.RemoveAll,
 		complete:        CompleteControlAdmissionV1,
 	})
@@ -146,9 +145,6 @@ func removeStagedDeploymentV1(
 	if err != nil {
 		return result, err
 	}
-	if err := requirePublicationConsumerBoundaryV1(operation, "completed staged retirement"); err != nil {
-		return result, err
-	}
 	result = StagedDeploymentRemoveResultV1{
 		DeploymentDir: dir,
 		Environment:   environment,
@@ -157,82 +153,90 @@ func removeStagedDeploymentV1(
 	if err != nil {
 		return result, err
 	}
-	if _, err := backend.recoverPending(
-		ctx, operation, store, state.Current, environment, dir,
-	); err != nil {
-		return result, fmt.Errorf("recover staged build before removal: %w", err)
+	if !state.Staging.TerminalRemoval {
+		if _, err := backend.recoverPending(
+			ctx, operation, store, state.Current, environment, dir,
+		); err != nil {
+			return result, fmt.Errorf("recover staged build before removal: %w", err)
+		}
 	}
 	state, environment, err = readStagedDeploymentForRemovalV1(operation)
 	if err != nil {
 		return result, err
 	}
-	if err := requirePublicationConsumerBoundaryV1(operation, "completed staged retirement"); err != nil {
-		return result, err
-	}
-	generationReference := "staged/" + environment
-	if state.Current != nil {
-		generationReference = state.Current.Reference
-	}
-	admissionOperation := operation
-	operation = nil
-	admitted, err := backend.admit(ctx, dir, admissionOperation, ControlAdmissionInputV1{
-		Operation:              deploy.ControlOperationStageV1,
-		GenerationReference:    generationReference,
-		Mode:                   input.ControlMode,
-		DockerPreflightTimeout: input.RunOptions.DockerPreflightTimeout,
-		Notice:                 controlWaitNoticeWriterV1(input.RunOptions),
-	})
-	if err != nil {
-		return result, err
-	}
-	operation = admitted.Operation
-	markerID = admitted.Marker.ID
-	lease = admitted.Lease
-
-	state, environment, err = readStagedDeploymentForRemovalV1(operation)
-	if err != nil {
-		return result, err
-	}
-	if err := requirePublicationConsumerBoundaryV1(operation, "completed staged retirement"); err != nil {
-		return result, err
-	}
-	if _, err := backend.recoverPending(
-		ctx, operation, store, state.Current, environment, dir,
-	); err != nil {
-		return result, fmt.Errorf("recover staged build after removal admission: %w", err)
-	}
-	state, environment, err = readStagedDeploymentForRemovalV1(operation)
-	if err != nil {
-		return result, err
-	}
-	result.Environment = environment
-
-	var image *providers.RealizedImageV1
-	var reference string
-	if state.Current != nil {
-		lock, found, err := operation.ReadBuildLock(
-			state.Current.BuildLockDigest,
-			registry.ValidateRequirementProfileV1,
-		)
+	if !state.Staging.TerminalRemoval {
+		generationReference := "staged/" + environment
+		if state.Current != nil {
+			generationReference = state.Current.Reference
+		}
+		admissionOperation := operation
+		operation = nil
+		admitted, err := backend.admit(ctx, dir, admissionOperation, ControlAdmissionInputV1{
+			Operation:              deploy.ControlOperationStageV1,
+			GenerationReference:    generationReference,
+			Mode:                   input.ControlMode,
+			DockerPreflightTimeout: input.RunOptions.DockerPreflightTimeout,
+			Notice:                 controlWaitNoticeWriterV1(input.RunOptions),
+		})
 		if err != nil {
-			return result, fmt.Errorf("load staged build for removal: %w", err)
+			return result, err
+		}
+		operation = admitted.Operation
+		markerID = admitted.Marker.ID
+		lease = admitted.Lease
+
+		state, environment, err = readStagedDeploymentForRemovalV1(operation)
+		if err != nil {
+			return result, err
+		}
+		if _, err := backend.recoverPending(
+			ctx, operation, store, state.Current, environment, dir,
+		); err != nil {
+			return result, fmt.Errorf("recover staged build after removal admission: %w", err)
+		}
+		state, environment, err = readStagedDeploymentForRemovalV1(operation)
+		if err != nil {
+			return result, err
+		}
+		result.Environment = environment
+
+	}
+	if err := requireTerminalRetirementAuthorityV1(operation, environment, dir); err != nil {
+		return result, err
+	}
+	var pairs []OwnedImageReferenceV1
+	if state.Current != nil {
+		lock, found, err := operation.ReadBuildLock(state.Current.BuildLockDigest, acceptProviderProfileOwnerForCutoverV1)
+		if err != nil {
+			return result, err
 		}
 		if !found {
-			return result, fmt.Errorf(
-				"staged generation build lock %s is missing",
-				state.Current.BuildLockDigest,
-			)
+			return result, fmt.Errorf("staged generation build lock is missing")
 		}
-		if err := validateGenerationBuildLock(
-			*state.Current,
-			lock,
-			registry.ValidateRequirementProfileV1,
-		); err != nil {
-			return result, fmt.Errorf("validate staged build for removal: %w", err)
+		pairs, err = projectEnvironmentOwnedReferencesV1(*state.Current, lock, environment, dir, acceptProviderProfileOwnerForCutoverV1)
+		if err != nil {
+			return result, err
 		}
-		currentImage := lock.FinalImage
-		image = &currentImage
-		reference = state.Current.Reference
+		if len(pairs) == 2 && backend.removeCompanion == nil {
+			return result, fmt.Errorf("staged retirement requires companion removal")
+		}
+	}
+	begin := backend.beginRemoval
+	if begin == nil {
+		begin = func(op *deploy.OperationLock, st deploy.StateV1) error { return op.BeginStagedRemovalV1(st) }
+	}
+	if err := begin(operation, state); err != nil {
+		return result, fmt.Errorf("begin staged terminal removal: %w", err)
+	}
+	state, environment, err = readStagedDeploymentForRemovalV1(operation)
+	if err != nil {
+		return result, err
+	}
+	if !state.Staging.TerminalRemoval {
+		return result, fmt.Errorf("staged terminal removal guard is missing")
+	}
+	if err := operation.RequireWritable(); err != nil {
+		return result, err
 	}
 	if err := backend.stopOwned(
 		ctx, operation, state, dir, input.RunOptions,
@@ -244,18 +248,33 @@ func removeStagedDeploymentV1(
 	); err != nil {
 		return result, fmt.Errorf("discard validated staging build before removal: %w", err)
 	}
+	for index, pair := range pairs {
+		var removeErr error
+		if index == 0 {
+			removeErr = backend.removeReference(context.WithoutCancel(ctx), pair.Image, pair.Reference, environment, dir)
+		} else {
+			removeErr = backend.removeCompanion(context.WithoutCancel(ctx), operation, pair, *state.Current, environment, dir)
+		}
+		if removeErr != nil {
+			return result, fmt.Errorf("remove staged image reference %q: %w", pair.Reference, removeErr)
+		}
+	}
 	tombstone, err := backend.reserve(dir)
 	if err != nil {
 		return result, fmt.Errorf("reserve staged removal path: %w", err)
 	}
-	if err := backend.removeMarker(operation, markerID); err != nil {
-		return result, fmt.Errorf("complete staging removal admission: %w", err)
+	if markerID != "" {
+		if err := backend.removeMarker(operation, markerID); err != nil {
+			return result, fmt.Errorf("complete staging removal admission: %w", err)
+		}
+		markerID = ""
 	}
-	markerID = ""
-	if err := backend.releaseLease(lease); err != nil {
-		return result, fmt.Errorf("release staging removal queue ownership: %w", err)
+	if lease != nil {
+		if err := backend.releaseLease(lease); err != nil {
+			return result, fmt.Errorf("release staging removal queue ownership: %w", err)
+		}
+		lease = nil
 	}
-	lease = nil
 	if stagedRemovalMustUnlockBeforeRename() {
 		if err := backend.unlock(operation); err != nil {
 			operation = nil
@@ -274,21 +293,6 @@ func removeStagedDeploymentV1(
 		operation = nil
 	}
 
-	if image != nil {
-		if err := backend.removeReference(
-			context.WithoutCancel(ctx),
-			*image,
-			reference,
-			environment,
-			dir,
-		); err != nil {
-			restoreErr := backend.rename(tombstone, dir)
-			return result, errors.Join(
-				fmt.Errorf("remove staged image reference: %w", err),
-				stagedRemovalRestoreErrorV1(restoreErr),
-			)
-		}
-	}
 	if err := backend.removeAll(tombstone); err != nil {
 		return result, fmt.Errorf(
 			"remove staging directory: %w; partial removal retained at %s",
@@ -347,11 +351,4 @@ func reserveStagedDeploymentTombstoneV1(deploymentDir string) (string, error) {
 		return "", err
 	}
 	return reserved, nil
-}
-
-func stagedRemovalRestoreErrorV1(err error) error {
-	if err == nil {
-		return nil
-	}
-	return fmt.Errorf("restore staging directory after failed removal: %w", err)
 }

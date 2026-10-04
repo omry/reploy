@@ -34,6 +34,10 @@ func (lock *OperationLock) CommitStateV1(expected *EnvironmentGenerationState, s
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireStateCommitAllowedLocked(); err != nil {
+		return err
+	}
 	path, err := lock.statePathV1Locked()
 	if err != nil {
 		return err

@@ -14,6 +14,10 @@ func (lock *OperationLock) WritePendingBuild(record PendingBuildV1) error {
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireOwnerWritableLocked(); err != nil {
+		return err
+	}
 	path, err := lock.pendingBuildPathLocked()
 	if err != nil {
 		return err
@@ -40,6 +44,10 @@ func (lock *OperationLock) AdvancePendingBuildPhase(next string) error {
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireWritableLocked(); err != nil {
+		return err
+	}
 	path, err := lock.pendingBuildPathLocked()
 	if err != nil {
 		return err
@@ -88,6 +96,10 @@ func (lock *OperationLock) RemovePendingBuild() error {
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireWritableLocked(); err != nil {
+		return err
+	}
 	path, err := lock.pendingBuildPathLocked()
 	if err != nil {
 		return err

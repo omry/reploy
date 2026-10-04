@@ -11,6 +11,65 @@ import (
 	"github.com/omry/reploy/internal/deploy"
 )
 
+func TestRunProviderUninstallTerminalRetryOnlyRetiresRetainedOwnersV1(t *testing.T) {
+	dir, _, current, _, images := installedTerminalRetirementFixtureV1(t)
+	if err := images.operation.BeginInstalledRemovalV1(current.State); err != nil {
+		t.Fatal(err)
+	}
+	if err := images.operation.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunProviderUninstallV1(t.Context(), ProviderUninstallInputV1{DeploymentDir: dir}); !errors.Is(err, deploy.ErrStagedTerminalRemoval) {
+		t.Fatalf("ordinary uninstall reopened terminal deployment: %v", err)
+	}
+	removed := false
+	backend := providerUninstallRunBackendV1{
+		acquire: deploy.AcquireInstalledRemovalOperationLock,
+		release: func(op *deploy.OperationLock) error { return op.Unlock() },
+		plan:    planProviderUninstallV1,
+		admit: func(context.Context, string, *deploy.OperationLock, ControlAdmissionInputV1) (AdmittedControlV1, error) {
+			t.Fatal("terminal retry repeated ordinary control admission")
+			return AdmittedControlV1{}, nil
+		},
+		complete: func(*deploy.OperationLock, string, *deploy.ControlLeaseV1) error {
+			t.Fatal("terminal retry completed nonexistent admission")
+			return nil
+		},
+		execute: func(context.Context, *deploy.OperationLock, providerUninstallPlanV1, RunOptions) error {
+			t.Fatal("terminal retry repeated host cleanup")
+			return nil
+		},
+		removeDeployment: func(_ context.Context, op *deploy.OperationLock, marker string, lease *deploy.ControlLeaseV1, plan providerUninstallPlanV1, _ RunOptions) error {
+			if marker != "" || lease != nil || plan.State.Deployment == nil || !plan.State.Deployment.TerminalRemoval || plan.GenerationReference != current.Generation.Reference {
+				t.Fatal("terminal retry lost exact installed ownership")
+			}
+			if err := op.RequireWritable(); err != nil {
+				t.Fatal(err)
+			}
+			if err := op.RequireOwnerWritable(); err == nil {
+				t.Fatal("terminal retry admitted owner writes")
+			}
+			removed = true
+			return op.Unlock()
+		},
+	}
+	input := ProviderUninstallInputV1{DeploymentDir: dir, RemoveDir: true, Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux}}
+	input.Service = "other-service"
+	if err := runProviderUninstallV1(t.Context(), input, backend); err == nil {
+		t.Fatal("terminal retry ignored service mismatch")
+	}
+	if removed {
+		t.Fatal("mismatched service retired owners")
+	}
+	input.Service = "demo"
+	if err := runProviderUninstallV1(t.Context(), input, backend); err != nil {
+		t.Fatal(err)
+	}
+	if !removed {
+		t.Fatal("terminal retry never reached retained-owner retirement")
+	}
+}
+
 func TestRunProviderUninstallAdmitsBeforeExecutionAndCompletes(t *testing.T) {
 	dir := t.TempDir()
 	operation, _, _ := installedBuildPublicationSourceFixtureAtDir(t, dir)

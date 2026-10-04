@@ -646,6 +646,10 @@ func (lock *OperationLock) CommitPackageOverridesV1(overrides PackageOverridesV1
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireOwnerWritableLocked(); err != nil {
+		return err
+	}
 	if lock.released || lock.file == nil || lock.path == "" {
 		return fmt.Errorf("operation lock is not held")
 	}
@@ -671,6 +675,10 @@ func (lock *OperationLock) removePackageOverridesV1() error {
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireWritableLocked(); err != nil {
+		return err
+	}
 	if lock.released || lock.file == nil || lock.path == "" {
 		return fmt.Errorf("operation lock is not held")
 	}

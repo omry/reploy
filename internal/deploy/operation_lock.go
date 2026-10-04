@@ -16,17 +16,29 @@ const operationLockPollInterval = 10 * time.Millisecond
 // OperationLock holds the kernel advisory lock for one deployment directory.
 // The lock-file path is stable, but file existence never indicates ownership.
 type OperationLock struct {
-	file     *os.File
-	path     string
-	mutex    sync.Mutex
-	released bool
+	file                 *os.File
+	path                 string
+	mutex                sync.Mutex
+	released             bool
+	terminalRemovalState []byte
 }
 
 // AcquireOperationLock acquires the deployment's exclusive advisory operation
 // lock and keeps its descriptor open until Unlock. Waiting is bounded only by
 // caller cancellation.
 func AcquireOperationLock(ctx context.Context, deploymentDir string) (*OperationLock, error) {
-	return acquireOperationLock(ctx, deploymentDir, true)
+	if err := preflightStagedWriterV1(deploymentDir); err != nil {
+		return nil, err
+	}
+	lock, err := acquireOperationLock(ctx, deploymentDir, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := lock.RequireWritable(); err != nil {
+		_ = lock.Unlock()
+		return nil, err
+	}
+	return lock, nil
 }
 
 // AcquireExistingOperationLock acquires an already-initialized deployment's
@@ -52,11 +64,7 @@ func acquireOperationLock(ctx context.Context, deploymentDir string, create bool
 	if err != nil {
 		return nil, err
 	}
-	flags := os.O_RDWR
-	if create {
-		flags |= os.O_CREATE
-	}
-	file, err := os.OpenFile(lockPath, flags, 0o600)
+	file, err := openOperationFile(lockPath, create)
 	if err != nil {
 		return nil, fmt.Errorf("open operation lock: %w", err)
 	}

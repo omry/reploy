@@ -13,16 +13,18 @@ import (
 )
 
 type providerUninstallRemoveDirBackendV1 struct {
-	newStore        func(string) (providerstore.Store, error)
-	load            func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (CurrentBuild, bool, error)
-	complete        func(*deploy.OperationLock, string, *deploy.ControlLeaseV1) error
-	removeMarker    func(*deploy.OperationLock, string) error
-	releaseLease    func(*deploy.ControlLeaseV1) error
-	reserve         func(string) (string, error)
-	rename          func(string, string) error
-	unlock          func(*deploy.OperationLock) error
-	removeReference func(context.Context, providers.RealizedImageV1, string, string, string) error
-	finalize        func(string, string) error
+	newStore         func(string) (providerstore.Store, error)
+	load             func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (CurrentBuild, bool, error)
+	complete         func(*deploy.OperationLock, string, *deploy.ControlLeaseV1) error
+	removeMarker     func(*deploy.OperationLock, string) error
+	releaseLease     func(*deploy.ControlLeaseV1) error
+	reserve          func(string) (string, error)
+	rename           func(string, string) error
+	unlock           func(*deploy.OperationLock) error
+	removeReference  func(context.Context, providers.RealizedImageV1, string, string, string) error
+	removeCompanion  func(context.Context, *deploy.OperationLock, OwnedImageReferenceV1, deploy.EnvironmentGenerationState, string, string) error
+	discardValidated func(context.Context, *deploy.OperationLock, string, string) error
+	finalize         func(string, string) error
 }
 
 func removeProviderUninstallDeploymentV1(
@@ -35,7 +37,7 @@ func removeProviderUninstallDeploymentV1(
 ) error {
 	return removeProviderUninstallDeploymentWithV1(ctx, operation, markerID, lease, plan, options, providerUninstallRemoveDirBackendV1{
 		newStore: providerstore.NewStore,
-		load:     ValidateCurrentBuild,
+		load:     loadTerminalCurrentBuildV1,
 		complete: CompleteControlAdmissionV1,
 		removeMarker: func(operation *deploy.OperationLock, markerID string) error {
 			_, removed, err := operation.RemoveControlMarkerV1(markerID)
@@ -49,6 +51,7 @@ func removeProviderUninstallDeploymentV1(
 		rename:          os.Rename,
 		unlock:          func(operation *deploy.OperationLock) error { return operation.Unlock() },
 		removeReference: RemoveEnvironmentGenerationReference,
+		removeCompanion: RemovePortableEnvironmentReferenceV1,
 		finalize:        finalizePendingProviderUninstallRemovalV1,
 	})
 }
@@ -62,8 +65,17 @@ func removeProviderUninstallDeploymentWithV1(
 	options RunOptions,
 	backend providerUninstallRemoveDirBackendV1,
 ) (err error) {
-	if operation == nil || markerID == "" || lease == nil {
+	if operation == nil || (markerID == "") != (lease == nil) {
 		return fmt.Errorf("remove provider uninstall deployment requires admitted lock ownership")
+	}
+	if markerID == "" {
+		state, found, err := operation.ReadStateV1()
+		if err != nil || !found || state.Deployment == nil || !state.Deployment.TerminalRemoval {
+			return fmt.Errorf("unadmitted removal requires retained installed terminal authority: %v", err)
+		}
+		if err := operation.RequireWritable(); err != nil {
+			return err
+		}
 	}
 	if !plan.RemoveDir {
 		return fmt.Errorf("remove provider uninstall deployment requires remove-dir")
@@ -71,8 +83,8 @@ func removeProviderUninstallDeploymentWithV1(
 	if backend.newStore == nil || backend.load == nil || backend.complete == nil || backend.removeMarker == nil || backend.releaseLease == nil || backend.reserve == nil || backend.rename == nil || backend.unlock == nil || backend.removeReference == nil || backend.finalize == nil {
 		return fmt.Errorf("remove provider uninstall deployment requires a complete backend")
 	}
-	markerOutstanding := true
-	leaseOutstanding := true
+	markerOutstanding := markerID != ""
+	leaseOutstanding := lease != nil
 	operationHeld := true
 	defer func() {
 		if !operationHeld {
@@ -96,7 +108,7 @@ func removeProviderUninstallDeploymentWithV1(
 		return err
 	}
 
-	if err := requirePublicationConsumerBoundaryV1(operation, "completed installed retirement"); err != nil {
+	if err := requireTerminalRetirementAuthorityV1(operation, plan.Environment, plan.Installation.TargetDir); err != nil {
 		return err
 	}
 	store, err := backend.newStore(plan.Installation.TargetDir)
@@ -110,18 +122,53 @@ func removeProviderUninstallDeploymentWithV1(
 	if !found || current.Generation.Reference != plan.GenerationReference {
 		return fmt.Errorf("installed generation changed before deployment removal")
 	}
+	pairs, err := projectEnvironmentOwnedReferencesV1(current.Generation, current.Lock, plan.Environment, plan.Installation.TargetDir, acceptProviderProfileOwnerForCutoverV1)
+	if err != nil {
+		return err
+	}
+	if len(pairs) == 2 && backend.removeCompanion == nil {
+		return fmt.Errorf("installed retirement requires companion removal")
+	}
+	if err := operation.BeginInstalledRemovalV1(current.State); err != nil {
+		return fmt.Errorf("begin installed terminal removal: %w", err)
+	}
+	discard := backend.discardValidated
+	if discard == nil {
+		discard = func(ctx context.Context, op *deploy.OperationLock, env, dir string) error {
+			_, _, err := discardValidatedBuildWithBackendV1(ctx, op, env, dir, validatedRetirementBackendV1{removeReference: backend.removeReference, removeCompanion: backend.removeCompanion})
+			return err
+		}
+	}
+	if err := discard(context.WithoutCancel(ctx), operation, plan.Environment, plan.Installation.TargetDir); err != nil {
+		return err
+	}
+	for index, pair := range pairs {
+		var removeErr error
+		if index == 0 {
+			removeErr = backend.removeReference(context.WithoutCancel(ctx), pair.Image, pair.Reference, plan.Environment, plan.Installation.TargetDir)
+		} else {
+			removeErr = backend.removeCompanion(context.WithoutCancel(ctx), operation, pair, current.Generation, plan.Environment, plan.Installation.TargetDir)
+		}
+		if removeErr != nil {
+			return fmt.Errorf("remove deployment image reference: %w", removeErr)
+		}
+	}
 	tombstone, err := backend.reserve(plan.Installation.TargetDir)
 	if err != nil {
 		return fmt.Errorf("reserve deployment removal path: %w", err)
 	}
-	if err := backend.removeMarker(operation, markerID); err != nil {
-		return fmt.Errorf("complete uninstall admission before deployment removal: %w", err)
+	if markerOutstanding {
+		if err := backend.removeMarker(operation, markerID); err != nil {
+			return fmt.Errorf("complete uninstall admission before deployment removal: %w", err)
+		}
+		markerOutstanding = false
 	}
-	markerOutstanding = false
-	if err := backend.releaseLease(lease); err != nil {
-		return fmt.Errorf("release uninstall queue ownership before deployment removal: %w", err)
+	if leaseOutstanding {
+		if err := backend.releaseLease(lease); err != nil {
+			return fmt.Errorf("release uninstall queue ownership before deployment removal: %w", err)
+		}
+		leaseOutstanding = false
 	}
-	leaseOutstanding = false
 	if err := backend.rename(plan.Installation.TargetDir, tombstone); err != nil {
 		return fmt.Errorf("move deployment for removal: %w", err)
 	}
@@ -131,10 +178,6 @@ func removeProviderUninstallDeploymentWithV1(
 	}
 	operationHeld = false
 
-	if err := backend.removeReference(ctx, current.Lock.FinalImage, plan.GenerationReference, plan.Environment, plan.Installation.TargetDir); err != nil {
-		restoreErr := backend.rename(tombstone, plan.Installation.TargetDir)
-		return errors.Join(fmt.Errorf("remove deployment image reference: %w", err), providerUninstallRestoreErrorV1(restoreErr))
-	}
 	if err := backend.finalize(plan.Installation.TargetDir, tombstone); err != nil {
 		return pendingProviderUninstallRemovalErrorV1(
 			"remove deployment directory",

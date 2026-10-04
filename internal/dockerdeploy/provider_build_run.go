@@ -237,6 +237,9 @@ func runLockedProviderBuildV1(
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("resolve locked provider build deployment directory: %w", err)
 	}
+	if err := input.Operation.RequireOwnerWritable(); err != nil {
+		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("run locked provider build deployment: %w", err)
+	}
 	if err := validatePublicationDeployment(input.Operation, input.Store, deploymentDir); err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("run locked provider build deployment: %w", err)
 	}

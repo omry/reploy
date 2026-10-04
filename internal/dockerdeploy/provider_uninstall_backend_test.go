@@ -19,7 +19,7 @@ func TestExecuteProviderUninstallKeepsInstalledStateWhenHostCleanupFails(t *test
 	}
 	want := errors.New("docker unavailable")
 	err := executeProviderUninstallWithV1(t.Context(), operation, providerUninstallPlanV1{
-		Installation: installation,
+		Installation: installation, Environment: "demo",
 	}, RunOptions{}, func(context.Context, providerUninstallPlanV1, RunOptions) error { return want })
 	if !errors.Is(err, want) {
 		t.Fatalf("cleanup failure = %v, want %v", err, want)
@@ -79,7 +79,7 @@ func TestExecuteProviderUninstallDefersRemoveDirFinalization(t *testing.T) {
 	}
 	called := false
 	var stdout bytes.Buffer
-	err := executeProviderUninstallWithV1(t.Context(), operation, providerUninstallPlanV1{Installation: installation, RemoveDir: true}, RunOptions{Stdout: &stdout}, func(context.Context, providerUninstallPlanV1, RunOptions) error {
+	err := executeProviderUninstallWithV1(t.Context(), operation, providerUninstallPlanV1{Installation: installation, Environment: "demo", RemoveDir: true}, RunOptions{Stdout: &stdout}, func(context.Context, providerUninstallPlanV1, RunOptions) error {
 		called = true
 		return nil
 	})

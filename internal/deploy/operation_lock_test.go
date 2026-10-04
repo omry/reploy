@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -28,6 +29,56 @@ func TestOperationLockSerializesOneDeploymentDirectory(t *testing.T) {
 	}
 
 	second, err = AcquireOperationLock(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOperationLockRemainsHeldAcrossDirectoryRename(t *testing.T) {
+	for _, longPath := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ordinary path", true: "long path"}[longPath], func(t *testing.T) {
+			testOperationLockRemainsHeldAcrossDirectoryRename(t, longPath)
+		})
+	}
+}
+
+func testOperationLockRemainsHeldAcrossDirectoryRename(t *testing.T, longPath bool) {
+	parent := t.TempDir()
+	if longPath {
+		parent = filepath.Join(parent, strings.Repeat("a", 100), strings.Repeat("b", 100))
+		if err := os.MkdirAll(parent, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := filepath.Join(parent, "deployment")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	first, err := AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = first.Unlock() })
+	moved := filepath.Join(parent, "removed-deployment")
+	if err := os.Rename(dir, moved); err != nil {
+		t.Fatalf("rename with operation lock held: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	second, err := AcquireExistingOperationLock(ctx, moved)
+	if second != nil {
+		_ = second.Unlock()
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("renamed directory admitted another lock: %v", err)
+	}
+	if err := first.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	second, err = AcquireExistingOperationLock(t.Context(), moved)
 	if err != nil {
 		t.Fatal(err)
 	}

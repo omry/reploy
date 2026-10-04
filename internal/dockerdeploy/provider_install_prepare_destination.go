@@ -46,10 +46,10 @@ func prepareProviderInstallDestinationWithV1(
 	if locked.SourceOperation == nil || locked.DestinationOperation == nil || locked.SourceOperation == locked.DestinationOperation {
 		return preparedProviderInstallFilesV1{}, fmt.Errorf("prepare provider install destination requires distinct operation locks")
 	}
-	if err := locked.SourceOperation.RequireHeld(); err != nil {
+	if err := locked.SourceOperation.RequireOwnerWritable(); err != nil {
 		return preparedProviderInstallFilesV1{}, err
 	}
-	if err := locked.DestinationOperation.RequireHeld(); err != nil {
+	if err := locked.DestinationOperation.RequireOwnerWritable(); err != nil {
 		return preparedProviderInstallFilesV1{}, err
 	}
 	if backend.files == nil || backend.diskRequirements == nil || backend.preflight == nil || backend.prepare == nil {

@@ -17,7 +17,7 @@ import (
 
 func TestRemoveProviderUninstallDeploymentTransfersLockThenDeletesTombstone(t *testing.T) {
 	dir := t.TempDir()
-	operation, _, current := installedBuildPublicationSourceFixtureAtDir(t, dir)
+	operation, current := installedSingleReferenceRemovalFixtureV1(t, dir)
 	installation := installedBuildPublicationInstallation(dir)
 	plan := providerUninstallPlanV1{
 		State: current.State, Installation: installation, Environment: "demo",
@@ -93,8 +93,8 @@ func TestRemoveProviderUninstallDeploymentTransfersLockThenDeletesTombstone(t *t
 		t.Fatalf("remove deployment: %v", err)
 	}
 	want := []string{
-		"store", "load", "reserve", "marker", "lease", "rename:" + dir + "->" + tombstone,
-		"unlock", "reference", "remove:" + tombstone,
+		"store", "load", "reference", "reserve", "marker", "lease", "rename:" + dir + "->" + tombstone,
+		"unlock", "remove:" + tombstone,
 	}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("removal order = %#v, want %#v", order, want)
@@ -107,9 +107,9 @@ func TestRemoveProviderUninstallDeploymentTransfersLockThenDeletesTombstone(t *t
 	}
 }
 
-func TestRemoveProviderUninstallDeploymentRestoresPublicPathWhenReferenceRemovalFails(t *testing.T) {
+func TestRemoveProviderUninstallDeploymentRetainsPublicPathWhenReferenceRemovalFails(t *testing.T) {
 	dir := t.TempDir()
-	operation, _, current := installedBuildPublicationSourceFixtureAtDir(t, dir)
+	operation, current := installedSingleReferenceRemovalFixtureV1(t, dir)
 	plan := providerUninstallPlanV1{
 		Installation: installedBuildPublicationInstallation(dir), Environment: "demo",
 		GenerationReference: current.Generation.Reference, RemoveDir: true,
@@ -151,8 +151,8 @@ func TestRemoveProviderUninstallDeploymentRestoresPublicPathWhenReferenceRemoval
 	if !errors.Is(err, want) {
 		t.Fatalf("reference failure = %v, want %v", err, want)
 	}
-	wantRenames := [][2]string{{dir, tombstone}, {tombstone, dir}}
-	if !reflect.DeepEqual(renames, wantRenames) {
+	var wantRenames [][2]string
+	if len(renames) != len(wantRenames) {
 		t.Fatalf("renames = %#v, want %#v", renames, wantRenames)
 	}
 	if removed {
@@ -162,7 +162,7 @@ func TestRemoveProviderUninstallDeploymentRestoresPublicPathWhenReferenceRemoval
 
 func TestRemoveProviderUninstallDeploymentRetainsTombstoneWhenDirectoryRemovalFails(t *testing.T) {
 	dir := t.TempDir()
-	operation, _, current := installedBuildPublicationSourceFixtureAtDir(t, dir)
+	operation, current := installedSingleReferenceRemovalFixtureV1(t, dir)
 	plan := providerUninstallPlanV1{
 		Installation: installedBuildPublicationInstallation(dir), Environment: "demo",
 		GenerationReference: current.Generation.Reference, RemoveDir: true,
@@ -213,6 +213,17 @@ func TestReserveProviderUninstallTombstoneUsesAbsentDeterministicSiblingPath(t *
 	if _, err := os.Lstat(tombstone); !os.IsNotExist(err) {
 		t.Fatalf("reserved tombstone left filesystem entry: %v", err)
 	}
+}
+
+func installedSingleReferenceRemovalFixtureV1(t *testing.T, dir string) (*deploy.OperationLock, CurrentBuild) {
+	t.Helper()
+	op, _, current := installedBuildPublicationSourceFixtureAtDir(t, dir)
+	state, _, err := op.SetInstallationStateV1(installedBuildPublicationInstallation(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.State = state
+	return op, current
 }
 
 func TestReserveProviderUninstallTombstoneRejectsExistingPendingRemoval(t *testing.T) {

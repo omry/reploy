@@ -39,6 +39,9 @@ func verifyPortableEnvironmentReferenceV1(ctx context.Context, operation *deploy
 }
 
 func createPortableEnvironmentReferenceV1(ctx context.Context, operation *deploy.OperationLock, owned OwnedImageReferenceV1, generation deploy.EnvironmentGenerationState, environment, deploymentDir string, run dockerOutputRunner) error {
+	if err := operation.RequireOwnerWritable(); err != nil {
+		return err
+	}
 	if err := validatePortableReferenceOperationV1(ctx, operation, owned, generation, environment, deploymentDir, run); err != nil {
 		return err
 	}
@@ -65,9 +68,16 @@ func createPortableEnvironmentReferenceV1(ctx context.Context, operation *deploy
 }
 
 func removePortableEnvironmentReferenceV1(ctx context.Context, operation *deploy.OperationLock, owned OwnedImageReferenceV1, generation deploy.EnvironmentGenerationState, environment, deploymentDir string, run dockerOutputRunner) error {
+	if err := operation.RequireWritable(); err != nil {
+		return err
+	}
 	if err := validatePortableReferenceOperationV1(ctx, operation, owned, generation, environment, deploymentDir, run); err != nil {
 		return err
 	}
+	return removePortableOwnedImageV1(ctx, owned, generation, run)
+}
+
+func removePortableOwnedImageV1(ctx context.Context, owned OwnedImageReferenceV1, generation deploy.EnvironmentGenerationState, run dockerOutputRunner) error {
 	present, err := inspectPortableOwnedImageV1(ctx, owned.Reference, owned, generation.Platform, run)
 	if err != nil || !present {
 		return err

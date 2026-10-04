@@ -28,6 +28,10 @@ func (lock *OperationLock) CommitLiveRunQueueV1(queue LiveRunQueueV1) error {
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireOwnerWritableLocked(); err != nil {
+		return err
+	}
 	path, err := lock.liveRunQueuePathLockedV1()
 	if err != nil {
 		return err
@@ -41,6 +45,10 @@ func (lock *OperationLock) AdmitLiveRunV1(candidate LiveRunV1, wait bool) (LiveR
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireOwnerWritableLocked(); err != nil {
+		return "", err
+	}
 	path, err := lock.liveRunQueuePathLockedV1()
 	if err != nil {
 		return "", err
@@ -69,6 +77,10 @@ func (lock *OperationLock) AdmitControlMarkerV1(candidate ControlMarkerV1, wait 
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireOwnerWritableLocked(); err != nil {
+		return "", err
+	}
 	path, err := lock.liveRunQueuePathLockedV1()
 	if err != nil {
 		return "", err
@@ -103,6 +115,10 @@ func (lock *OperationLock) RecordLiveRunContainerV1(id string, container string)
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireOwnerWritableLocked(); err != nil {
+		return err
+	}
 	path, err := lock.liveRunQueuePathLockedV1()
 	if err != nil {
 		return err
@@ -141,6 +157,10 @@ func (lock *OperationLock) RecordControlledSessionOwnershipV1(ownership Controll
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireOwnerWritableLocked(); err != nil {
+		return ControlledSessionOwnershipV1{}, err
+	}
 	path, err := lock.liveRunQueuePathLockedV1()
 	if err != nil {
 		return ControlledSessionOwnershipV1{}, err
@@ -268,6 +288,10 @@ func (lock *OperationLock) CompleteControlledSessionV1(id string) (bool, error) 
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireWritableLocked(); err != nil {
+		return false, err
+	}
 	path, err := lock.liveRunQueuePathLockedV1()
 	if err != nil {
 		return false, err
@@ -304,6 +328,10 @@ func (lock *OperationLock) RemoveLiveRunV1(id string) (LiveRunQueueV1, bool, err
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireWritableLocked(); err != nil {
+		return LiveRunQueueV1{}, false, err
+	}
 	path, err := lock.liveRunQueuePathLockedV1()
 	if err != nil {
 		return LiveRunQueueV1{}, false, err
@@ -328,6 +356,10 @@ func (lock *OperationLock) RemoveControlMarkerV1(id string) (LiveRunQueueV1, boo
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireWritableLocked(); err != nil {
+		return LiveRunQueueV1{}, false, err
+	}
 	path, err := lock.liveRunQueuePathLockedV1()
 	if err != nil {
 		return LiveRunQueueV1{}, false, err
@@ -352,6 +384,10 @@ func (lock *OperationLock) ActivateReadyLiveRunV1(id string) error {
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireOwnerWritableLocked(); err != nil {
+		return err
+	}
 	path, err := lock.liveRunQueuePathLockedV1()
 	if err != nil {
 		return err
@@ -376,6 +412,10 @@ func (lock *OperationLock) ActivateReadyControlMarkerV1(id string) error {
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireOwnerWritableLocked(); err != nil {
+		return err
+	}
 	path, err := lock.liveRunQueuePathLockedV1()
 	if err != nil {
 		return err
@@ -404,6 +444,10 @@ func (lock *OperationLock) CancelWaitingLiveRunsV1() (LiveRunQueueV1, []LiveRunV
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireWritableLocked(); err != nil {
+		return LiveRunQueueV1{}, nil, err
+	}
 	path, err := lock.liveRunQueuePathLockedV1()
 	if err != nil {
 		return LiveRunQueueV1{}, nil, err
@@ -436,6 +480,10 @@ func (lock *OperationLock) RecoverLiveRunQueueV1() (LiveRunRecoveryV1, error) {
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireWritableLocked(); err != nil {
+		return LiveRunRecoveryV1{}, err
+	}
 	path, err := lock.liveRunQueuePathLockedV1()
 	if err != nil {
 		return LiveRunRecoveryV1{}, err
@@ -577,6 +625,10 @@ func (lock *OperationLock) CompleteLiveRunContainerCleanupV1(container string) (
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireWritableLocked(); err != nil {
+		return false, err
+	}
 	path, err := lock.liveRunQueuePathLockedV1()
 	if err != nil {
 		return false, err
@@ -612,6 +664,10 @@ func (lock *OperationLock) CompleteLiveRunWithContainerCleanupV1(id string, cont
 	}
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireWritableLocked(); err != nil {
+		return false, err
+	}
 	path, err := lock.liveRunQueuePathLockedV1()
 	if err != nil {
 		return false, err
@@ -655,6 +711,10 @@ func (lock *OperationLock) CompleteLiveRunWithContainerCleanupV1(id string, cont
 // no longer holds its kernel-backed lease. It is valid while the deployment
 // operation lock is held and recovers waiting, ready, and active entries.
 func (lock *OperationLock) RecoverAbandonedControlMarkerV1() (ControlMarkerV1, bool, error) {
+	if err := lock.RequireWritable(); err != nil {
+		return ControlMarkerV1{}, false, err
+	}
+
 	recovery, err := lock.RecoverLiveRunQueueV1()
 	if err != nil {
 		return ControlMarkerV1{}, false, err

@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -22,11 +23,19 @@ type liveRunsBackendV1 struct {
 }
 
 func ListLiveRunsV1(ctx context.Context, deploymentDir string) ([]deploy.LiveRunV1, error) {
-	return listLiveRunsV1(ctx, deploymentDir, nil, liveRunsBackendV1{acquire: deploy.AcquireOperationLock})
+	return listLiveRunsV1(ctx, deploymentDir, nil, liveRunsBackendV1{acquire: acquireLiveRunInspectionV1})
 }
 
 func ListLiveRunsWithNoticeV1(ctx context.Context, deploymentDir string, notice io.Writer) ([]deploy.LiveRunV1, error) {
-	return listLiveRunsV1(ctx, deploymentDir, notice, liveRunsBackendV1{acquire: deploy.AcquireOperationLock})
+	return listLiveRunsV1(ctx, deploymentDir, notice, liveRunsBackendV1{acquire: acquireLiveRunInspectionV1})
+}
+
+func acquireLiveRunInspectionV1(ctx context.Context, dir string) (*deploy.OperationLock, error) {
+	operation, err := deploy.AcquireOperationLock(ctx, dir)
+	if errors.Is(err, deploy.ErrStagedTerminalRemoval) {
+		return deploy.AcquireExistingOperationLock(ctx, dir)
+	}
+	return operation, err
 }
 
 func StopLiveRunV1(ctx context.Context, deploymentDir string, id string, dockerPreflightTimeout time.Duration) (LiveRunStopResultV1, error) {
@@ -62,8 +71,16 @@ func listLiveRunsV1(ctx context.Context, deploymentDir string, notice io.Writer,
 			err = unlockErr
 		}
 	}()
-	if _, err := recoverLiveRunQueueV1(ctx, operation, notice, nil); err != nil {
+	state, found, err := operation.ReadStateV1()
+	if err != nil {
 		return nil, err
+	}
+	terminalRemoval := found && (state.Staging != nil && state.Staging.TerminalRemoval ||
+		state.Deployment != nil && state.Deployment.TerminalRemoval)
+	if !terminalRemoval {
+		if _, err := recoverLiveRunQueueV1(ctx, operation, notice, nil); err != nil {
+			return nil, err
+		}
 	}
 	queue, _, err := operation.ReadLiveRunQueueV1()
 	if err != nil {

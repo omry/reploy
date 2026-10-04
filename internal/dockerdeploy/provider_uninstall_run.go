@@ -79,7 +79,7 @@ func runProviderUninstallV1(
 		err = errors.Join(err, releaseErr)
 	}()
 
-	if err := requirePublicationConsumerBoundaryV1(operation, "completed installed retirement"); err != nil {
+	if err := recoverTerminalPublicationV1(ctx, operation, deploymentDir); err != nil {
 		return err
 	}
 	planningInput := providerUninstallPlanningInputV1{
@@ -97,6 +97,13 @@ func runProviderUninstallV1(
 			Service: plan.Installation.Service, RemovedDirectory: plan.RemoveDir,
 			RetainedDirectory: !plan.RemoveDir,
 		}
+	}
+	if plan.RemoveDir && plan.State.Deployment != nil && plan.State.Deployment.TerminalRemoval {
+		// Host cleanup and control admission completed before the durable guard.
+		// A retry only retires the retained exact owners and isolates the directory.
+		ownedOperation := operation
+		operation = nil
+		return backend.removeDeployment(ctx, ownedOperation, "", nil, plan, input.RunOptions)
 	}
 	admitted, err := backend.admit(ctx, deploymentDir, operation, ControlAdmissionInputV1{
 		Operation: deploy.ControlOperationUninstallV1, GenerationReference: plan.GenerationReference,
@@ -150,5 +157,9 @@ func runProviderUninstallV1(
 // RunProviderUninstallV1 removes the persistent host integration for one
 // installed state-v1 deployment under serialized runtime admission.
 func RunProviderUninstallV1(ctx context.Context, input ProviderUninstallInputV1) error {
-	return runProviderUninstallV1(ctx, input, newProviderUninstallRunBackendV1())
+	backend := newProviderUninstallRunBackendV1()
+	if input.RemoveDir {
+		backend.acquire = deploy.AcquireInstalledRemovalOperationLock
+	}
+	return runProviderUninstallV1(ctx, input, backend)
 }

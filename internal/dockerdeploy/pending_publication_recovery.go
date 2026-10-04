@@ -41,6 +41,9 @@ func RecoverPendingPublication(
 	if operation == nil {
 		return false, fmt.Errorf("pending publication recovery requires an operation lock")
 	}
+	if err := operation.RequireWritable(); err != nil {
+		return false, err
+	}
 	if err := operation.ValidateProviderStore(store); err != nil {
 		return false, err
 	}

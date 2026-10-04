@@ -17,8 +17,9 @@ const (
 // DeploymentStateV1 contains machine-local operational facts. It is not an
 // input to environment resolution, provider identity, or build reuse.
 type DeploymentStateV1 struct {
-	Schema       string              `json:"schema"`
-	Installation InstallationStateV1 `json:"installation"`
+	Schema          string              `json:"schema"`
+	Installation    InstallationStateV1 `json:"installation"`
+	TerminalRemoval bool                `json:"terminal_removal,omitempty"`
 }
 
 type InstallationStateV1 struct {
@@ -115,6 +116,10 @@ func (lock *OperationLock) MarkInstallationReadyV1(ready InstallationStateV1) (S
 
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireOwnerWritableLocked(); err != nil {
+		return StateV1{}, false, err
+	}
 	path, err := lock.statePathV1Locked()
 	if err != nil {
 		return StateV1{}, false, err
@@ -168,6 +173,10 @@ func (lock *OperationLock) SetInstallationStateV1(installation InstallationState
 
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireOwnerWritableLocked(); err != nil {
+		return StateV1{}, false, err
+	}
 	path, err := lock.statePathV1Locked()
 	if err != nil {
 		return StateV1{}, false, err
@@ -211,6 +220,10 @@ func (lock *OperationLock) ClearInstallationStateV1(expected InstallationStateV1
 
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+
+	if err := lock.requireOwnerWritableLocked(); err != nil {
+		return StateV1{}, false, err
+	}
 	path, err := lock.statePathV1Locked()
 	if err != nil {
 		return StateV1{}, false, err
@@ -263,6 +276,9 @@ func (lock *OperationLock) CommitInstalledStateV1(
 
 	lock.mutex.Lock()
 	defer lock.mutex.Unlock()
+	if err := lock.requireOwnerWritableLocked(); err != nil {
+		return StateV1{}, false, err
+	}
 	path, err := lock.statePathV1Locked()
 	if err != nil {
 		return StateV1{}, false, err
