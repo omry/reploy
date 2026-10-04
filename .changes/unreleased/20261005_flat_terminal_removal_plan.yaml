@@ -1,0 +1,2 @@
+kind: Docs
+body: Split terminal-removal delivery into four flat review units and move forced replacement and final-content verification after them.
