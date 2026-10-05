@@ -1,0 +1,2 @@
+kind: Fixed
+body: Verify the exact selected portable payload content in final images and both owned image references before cached build reuse.

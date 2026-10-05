@@ -384,6 +384,19 @@ func runLockedProviderBuildV1(
 	}
 	effectiveNoCache := input.NoCache
 	verificationFailure := ""
+	if preparation.Reused &&
+		((preparation.ReusedCandidate && preparation.ValidatedCandidate != nil && preparation.ValidatedCandidate.Current.Lock.PortableRuntimeLayer != nil) ||
+			(!preparation.ReusedCandidate && preparation.Current != nil && preparation.Current.Lock.PortableRuntimeLayer != nil)) {
+		reused, err := providerBuildVerificationCurrentV1(preparation)
+		if err != nil {
+			return LockedProviderBuildExecutionResultV1{}, err
+		}
+		if reused.Lock.PortableRuntimeLayer != nil {
+			if err := verifyCurrentBuildOwnedReferencesV1(ctx, input.Operation, input.Store, reused, document.Environment.ID, deploymentDir); err != nil {
+				return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("portable cached build ownership: %w", err)
+			}
+		}
+	}
 	if input.Verify && preparation.Reused {
 		reused, err := providerBuildVerificationCurrentV1(preparation)
 		if err != nil {
@@ -397,7 +410,7 @@ func runLockedProviderBuildV1(
 		if err == nil {
 			verifyCtx, endVerify := buildprofile.Start(ctx, "Verify reusable build")
 			_, err = backend.verifyCurrent(verifyCtx, CurrentBuildVerificationInputV1{
-				Store: input.Store, Current: reused, Runtime: currentRuntime,
+				Store: input.Store, Current: reused, Runtime: currentRuntime, Operation: input.Operation, DeploymentDir: deploymentDir,
 			})
 			endVerify(err)
 		}
