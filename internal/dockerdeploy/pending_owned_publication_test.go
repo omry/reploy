@@ -464,7 +464,7 @@ func TestPendingOwnedPublicationRejectsMissingValidatedRootBeforeEffectsV1(t *te
 }
 
 func TestPendingOwnedPublicationConsumerGuardsV1(t *testing.T) {
-	for _, boundary := range []string{"staged removal", "forced replacement", "uninstall", "uninstall held lock", "provider failure", "validated publication", "installed transfer"} {
+	for _, boundary := range []string{"forced replacement", "uninstall", "uninstall held lock", "provider failure", "validated publication", "installed transfer"} {
 		t.Run(boundary, func(t *testing.T) {
 			dir, store, lock := pendingPortablePublicationFixtureV1(t)
 			operation, err := deploy.AcquireOperationLock(t.Context(), dir)
@@ -483,11 +483,6 @@ func TestPendingOwnedPublicationConsumerGuardsV1(t *testing.T) {
 			}
 			mutations := 0
 			switch boundary {
-			case "staged removal":
-				if err := operation.Unlock(); err != nil {
-					t.Fatal(err)
-				}
-				_, err = RemoveStagedDeploymentV1(t.Context(), StagedDeploymentRemoveInputV1{DeploymentDir: dir, ControlMode: ControlAdmissionForceV1})
 			case "forced replacement":
 				if err := operation.Unlock(); err != nil {
 					t.Fatal(err)
@@ -556,7 +551,7 @@ func TestPendingOwnedPublicationConsumerGuardsV1(t *testing.T) {
 	}
 }
 
-func TestPendingOwnedPublicationStagedRemovalAdmissionBoundaryV1(t *testing.T) {
+func TestPendingOwnedPublicationStagedRemovalRecoversAfterAdmissionV1(t *testing.T) {
 	for _, scenario := range []string{"portable current owner", "portable pending intent"} {
 		t.Run(scenario, func(t *testing.T) {
 			stubNoAbandonedBuildReferences(t)
@@ -582,26 +577,21 @@ func TestPendingOwnedPublicationStagedRemovalAdmissionBoundaryV1(t *testing.T) {
 			images := &pendingPublicationImagesV1{
 				images: map[string]providers.RealizedImageV1{}, t: t, sequence: 140,
 			}
-			var stateAtAdmission deploy.StateV1
-			var stateFoundAtAdmission bool
-			var pendingAtAdmission deploy.PendingBuildV1
-			var pendingFoundAtAdmission bool
-			var imagesAtAdmission map[string]providers.RealizedImageV1
-			var filesAtAdmission map[string]string
 			backend := testStagedRemovalBackendV1(store)
 			recoveryCalls := 0
-			postAdmissionEffects := 0
+			removedReferences := 0
 			backend.newStore = func(string) (providerstore.Store, error) { return store, nil }
 			backend.recoverPending = func(
-				context.Context,
-				*deploy.OperationLock,
-				providerstore.Store,
-				*deploy.EnvironmentGenerationState,
-				string,
-				string,
+				_ context.Context,
+				op *deploy.OperationLock,
+				_ providerstore.Store,
+				_ *deploy.EnvironmentGenerationState,
+				_ string,
+				_ string,
 			) (bool, error) {
 				recoveryCalls++
-				return false, nil
+				images.operation = op
+				return true, images.recover(store, dir)
 			}
 			backend.admit = func(
 				ctx context.Context,
@@ -637,20 +627,8 @@ func TestPendingOwnedPublicationStagedRemovalAdmissionBoundaryV1(t *testing.T) {
 						return AdmittedControlV1{}, fmt.Errorf("portable pending intent was not retained: %w", publishErr)
 					}
 				}
-				stateAtAdmission, stateFoundAtAdmission, err = writer.ReadStateV1()
-				if err == nil {
-					pendingAtAdmission, pendingFoundAtAdmission, err = writer.ReadPendingBuild()
-				}
-				if err == nil {
-					imagesAtAdmission = make(map[string]providers.RealizedImageV1, len(images.images))
-					for reference, image := range images.images {
-						imagesAtAdmission[reference] = image
-					}
-					filesAtAdmission = pendingOwnedFilesystemSnapshotV1(t, deploymentDir, store.Root())
-				}
-				unlockErr := writer.Unlock()
-				if err != nil || unlockErr != nil {
-					return AdmittedControlV1{}, errors.Join(err, unlockErr)
+				if err := writer.Unlock(); err != nil {
+					return AdmittedControlV1{}, err
 				}
 				admittedOperation, err := deploy.AcquireOperationLock(ctx, deploymentDir)
 				if err != nil {
@@ -658,78 +636,36 @@ func TestPendingOwnedPublicationStagedRemovalAdmissionBoundaryV1(t *testing.T) {
 				}
 				return AdmittedControlV1{Operation: admittedOperation}, nil
 			}
-			backend.stopOwned = func(context.Context, *deploy.OperationLock, deploy.StateV1, string, RunOptions) error {
-				postAdmissionEffects++
-				return nil
+			backend.removeReference = func(_ context.Context, image providers.RealizedImageV1, reference, _, _ string) error {
+				removedReferences++
+				return images.remove("staged-remove-primary", reference, image)
 			}
-			backend.discardValidated = func(context.Context, *deploy.OperationLock, string, string) error {
-				postAdmissionEffects++
-				return nil
+			backend.removeCompanion = func(_ context.Context, _ *deploy.OperationLock, pair OwnedImageReferenceV1, owner deploy.EnvironmentGenerationState, environment, dir string) error {
+				removedReferences++
+				return images.companionRemove(owner, pair, environment, dir)
 			}
-			backend.removeMarker = func(*deploy.OperationLock, string) error {
-				postAdmissionEffects++
-				return nil
-			}
-			backend.reserve = func(string) (string, error) {
-				postAdmissionEffects++
-				return filepath.Join(dir, "staged-removal-tombstone"), nil
-			}
-			backend.rename = func(string, string) error {
-				postAdmissionEffects++
-				return nil
-			}
-			backend.removeReference = func(context.Context, providers.RealizedImageV1, string, string, string) error {
-				postAdmissionEffects++
-				return nil
-			}
-			backend.removeAll = func(string) error {
-				postAdmissionEffects++
-				return nil
+			backend.isolate = func(op *deploy.OperationLock, destination string) (bool, error) {
+				if len(images.images) != 0 {
+					t.Fatal("isolation reached with surviving publication references")
+				}
+				return op.IsolateOriginalDirectory(destination)
 			}
 
 			_, err = removeStagedDeploymentV1(t.Context(), StagedDeploymentRemoveInputV1{
 				DeploymentDir: dir, ControlMode: ControlAdmissionWaitV1,
 			}, backend)
-			if err == nil || !strings.Contains(err.Error(), "portable") {
-				t.Fatalf("portable owner was not rejected after admission: %v", err)
-			}
-			if recoveryCalls != 1 || postAdmissionEffects != 0 {
-				t.Fatalf("recovery calls=%d, post-admission effects=%d", recoveryCalls, postAdmissionEffects)
-			}
-			if _, err := os.Lstat(dir); err != nil {
-				t.Fatalf("staging directory was removed: %v", err)
-			}
-			if !reflect.DeepEqual(images.images, imagesAtAdmission) {
-				t.Fatal("portable owner references changed after rejection")
-			}
-			if got := pendingOwnedFilesystemSnapshotV1(t, dir, store.Root()); !reflect.DeepEqual(got, filesAtAdmission) {
-				t.Fatal("deployment, build-lock, pending, or provider-store files changed after rejection")
-			}
-			inspection, err := deploy.AcquireOperationLock(t.Context(), dir)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer inspection.Unlock()
-			stateAfter, stateFoundAfter, err := inspection.ReadStateV1()
-			if err != nil || stateFoundAfter != stateFoundAtAdmission || !reflect.DeepEqual(stateAfter, stateAtAdmission) {
-				t.Fatalf("state changed after rejection: found=%t err=%v", stateFoundAfter, err)
-			}
-			pendingAfter, pendingFoundAfter, err := inspection.ReadPendingBuild()
-			if err != nil || pendingFoundAfter != pendingFoundAtAdmission || pendingFoundAfter && !reflect.DeepEqual(pendingAfter, pendingAtAdmission) {
-				t.Fatalf("pending intent changed after rejection: found=%t err=%v", pendingFoundAfter, err)
-			}
+			wantRemoved := 0
 			if scenario == "portable current owner" {
-				if stateAfter.Current == nil {
-					t.Fatal("portable current owner was lost")
-				}
-				if _, found, err := inspection.ReadBuildLock(stateAfter.Current.BuildLockDigest, registry.ValidateRequirementProfileV1); err != nil || !found {
-					t.Fatalf("portable current build lock was lost: found=%t err=%v", found, err)
-				}
-				if _, err := deploy.BuildLockStoreClosure(lock, store, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1); err != nil {
-					t.Fatalf("portable current store roots were lost: %v", err)
-				}
-			} else if !pendingFoundAfter || pendingAfter.Candidate.Companion == nil {
-				t.Fatal("portable pending intent was lost")
+				wantRemoved = 2
+			}
+			if recoveryCalls != 2 || removedReferences != wantRemoved || len(images.images) != 0 {
+				t.Fatalf("recovery calls=%d, retired pairs=%d, survivors=%v", recoveryCalls, removedReferences, images.images)
+			}
+			if _, err := os.Lstat(dir); !os.IsNotExist(err) {
+				t.Fatalf("staging directory remains: %v", err)
 			}
 		})
 	}
