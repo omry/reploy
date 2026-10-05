@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sort"
@@ -145,7 +146,107 @@ func PlanApplicationPortableToolsV1(ctx context.Context, input PlanApplicationPo
 	if err != nil {
 		return nil, fmt.Errorf("seal application portable tool selection: %w", err)
 	}
+	selected.sealed.documentDigest = digest
 	return selected, nil
+}
+
+func validateApplicationPortableBuildLockV1(
+	document blueprint.Document, selected *ApplicationPortableToolPlanV1,
+	lock deploy.BuildLockV1, image InspectedImageCandidate,
+) error {
+	if selected == nil || selected.sealed == nil || lock.PortableTools == nil || lock.PortableRuntimeLayer == nil {
+		return fmt.Errorf("complete application build requires selected portable materialization")
+	}
+	digest, err := blueprint.DocumentDigestV1(document)
+	if err != nil || digest != selected.sealed.documentDigest || lock.BlueprintDigest != digest {
+		return fmt.Errorf("application build lock does not consume the exact selected blueprint")
+	}
+	if err := deploy.ValidateBuildLockV1(lock, registry.ValidateRequirementProfileV1); err != nil {
+		return err
+	}
+	wanted, err := selected.sealed.selection.Plan()
+	if err != nil {
+		return err
+	}
+	keys := make(map[string]struct{})
+	for _, entry := range lock.PortableTools.Plan.PortableToolPlan.Tools {
+		if strings.HasPrefix(entry.Scope, "application:") {
+			keys[portableToolCompletionPlanKeyV1(entry.Scope, entry.Provenance.Tool)] = struct{}{}
+		}
+	}
+	actual, err := portableToolLockForPlanKeysV1(*lock.PortableTools, keys)
+	if err != nil {
+		return err
+	}
+	if actual == nil {
+		return fmt.Errorf("application build lock is missing selected tool scopes")
+	}
+	wantBytes, err := providers.CanonicalPortableToolPlanBytesV1(wanted)
+	if err != nil {
+		return err
+	}
+	actualBytes, err := providers.CanonicalPortableToolPlanBytesV1(actual.Plan.PortableToolPlan)
+	if err != nil || !bytes.Equal(wantBytes, actualBytes) {
+		return fmt.Errorf("application build lock does not contain exactly its selected closures")
+	}
+	_, scopes, err := applicationPortableRequirementGroupsV1(document)
+	if err != nil {
+		return err
+	}
+	for _, scope := range scopes {
+		if _, err := PortableToolApplicationValidationInputFromBuildLockV1(image, lock, scope); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func materializeApplicationPortableRuntimeV1(
+	ctx context.Context, store providerstore.Store, selected *ApplicationPortableToolPlanV1,
+	reusable *deploy.BuildLockV1, acquisitions []providers.PortableToolArtifactAcquisitionInputV1,
+) (*PortableRuntimePayloadsV1, error) {
+	if selected == nil || selected.sealed == nil {
+		return nil, fmt.Errorf("application payloads require sealed selection")
+	}
+	plan, err := selected.sealed.selection.Plan()
+	if err != nil {
+		return nil, err
+	}
+	keys := make(map[string]struct{}, len(plan.Tools))
+	for _, entry := range plan.Tools {
+		if !strings.HasPrefix(entry.Scope, "application:") {
+			return nil, fmt.Errorf("application selection contains a foreign tool scope")
+		}
+		keys[portableToolCompletionPlanKeyV1(entry.Scope, entry.Provenance.Tool)] = struct{}{}
+	}
+	if reusable != nil && reusable.PortableTools != nil {
+		locked, err := portableToolLockForPlanKeysV1(*reusable.PortableTools, keys)
+		if err != nil {
+			return nil, err
+		}
+		if locked != nil {
+			want, err := providers.CanonicalPortableToolPlanBytesV1(plan)
+			if err != nil {
+				return nil, err
+			}
+			got, err := providers.CanonicalPortableToolPlanBytesV1(locked.Plan.PortableToolPlan)
+			if err != nil {
+				return nil, err
+			}
+			if bytes.Equal(want, got) {
+				return MaterializePortableRuntimePayloadsLockedV1(ctx, store, *locked)
+			}
+		}
+	}
+	domains, err := applicationPortableProviderDomainsV1(plan, selected.sealed.providerPlan)
+	if err != nil {
+		return nil, err
+	}
+	dag, err := providers.BuildPortableToolProviderDAGV1(selected.sealed.providerPlan, plan, domains)
+	if err != nil {
+		return nil, err
+	}
+	return MaterializePortableRuntimePayloadsFreshV1(ctx, store, dag, selected.sealed.closures, acquisitions)
 }
 
 // A Python provider request constrains the interpreter independently of its

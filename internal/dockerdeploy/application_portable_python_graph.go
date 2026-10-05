@@ -28,13 +28,14 @@ type ApplicationPortablePythonGraphResultV1 struct {
 // join between the selected catalog closures and their provider plan. All
 // provider-facing views are derived from selection after this boundary.
 type applicationPortablePythonSelectionSealV1 struct {
-	selection    *pythonprovider.PortableToolPythonSelectionV1
-	closures     []toolcatalog.SelectedClosureV1
-	providerPlan providers.ProviderPlanV1
-	target       toolcatalog.TargetIdentityV1
-	snapshot     toolcatalog.ImmutableOperationSnapshotV1
-	baseBytes    []byte
-	configBytes  []byte
+	documentDigest canonical.Digest
+	selection      *pythonprovider.PortableToolPythonSelectionV1
+	closures       []toolcatalog.SelectedClosureV1
+	providerPlan   providers.ProviderPlanV1
+	target         toolcatalog.TargetIdentityV1
+	snapshot       toolcatalog.ImmutableOperationSnapshotV1
+	baseBytes      []byte
+	configBytes    []byte
 }
 
 type portablePythonAcquisitionCollectorV1 struct {

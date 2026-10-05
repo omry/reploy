@@ -269,11 +269,7 @@ func executeLockedProviderBuildV1(
 	graphCtx, endGraph := buildprofile.Start(ctx, "Execute provider graph")
 	graphOptions := options
 	graphOptions.Context = graphCtx
-	// The ordinary build path deliberately leaves PortablePython unset: its
-	// request loader rejects unresolved runtime portable tools before provider
-	// preparation. The generic portable-tool production caller owns supplying
-	// that projection when it replaces the rejection boundary.
-	graph, err := backend.executeGraph(graphCtx, PreparedPythonGraphExecutionInput{
+	graphInput := PreparedPythonGraphExecutionInput{
 		Store: preparation.Store, Plan: preparedBase.Plan, BaseDescriptor: preparedBase.Descriptor,
 		BaseCatalog: preparedBase.Catalog, Sources: preparation.Loaded.Request.Sources,
 		SourceWheels:   append([]providerstore.ArtifactDescriptor{}, input.SourceWheels...),
@@ -282,14 +278,31 @@ func executeLockedProviderBuildV1(
 		CurrentLock:    preparation.ReusableLock, DesiredPortableToolPlan: input.DesiredPortableToolPlan,
 		FinalImageConfig: preparation.FinalImageConfig,
 		Progress:         input.Progress, BuildProgress: input.BuildProgress, RunOptions: graphOptions,
-	})
+	}
+	var graph providers.GraphExecutionResult
+	var err error
+	var applicationGraph ApplicationPortablePythonGraphResultV1
+	if preparation.ApplicationTools != nil {
+		if input.DesiredPortableToolPlan != nil {
+			endGraph(fmt.Errorf("application selection may not be overridden"))
+			return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("application selection may not be overridden")
+		}
+		applicationGraph, err = ExecuteApplicationPortablePythonGraphV1(graphCtx, preparation.ApplicationTools, graphInput)
+		graph = applicationGraph.Graph
+	} else {
+		graph, err = backend.executeGraph(graphCtx, graphInput)
+	}
 	endGraph(err)
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("execute provider graph: %w", err)
 	}
-	portableTools, portableToolsErr := portableToolLockForCompletedGraphV1(
-		coordinator.PortableToolLock(), preparation.ReusableLock, input.DesiredPortableToolPlan,
-	)
+	portableTools := coordinator.PortableToolLock()
+	var portableToolsErr error
+	if preparation.ApplicationTools == nil {
+		portableTools, portableToolsErr = portableToolLockForCompletedGraphV1(
+			portableTools, preparation.ReusableLock, input.DesiredPortableToolPlan,
+		)
+	}
 	cleanupErr := coordinator.Cleanup()
 	if portableToolsErr != nil {
 		if cleanupErr != nil {
@@ -308,7 +321,7 @@ func executeLockedProviderBuildV1(
 	})
 	resolvedRequest, relevantPackageOverrides, err := finalizeResolvedRequestV1(
 		preparation.Loaded.Document, preparation.Loaded.State.Overlay, preparation.Loaded.PackageOverrides,
-		preparation.Loaded.Request, graph,
+		preparation.Loaded.Request, graph, preparation.ApplicationTools,
 	)
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("finalize provider request: %w", err)
@@ -328,6 +341,51 @@ func executeLockedProviderBuildV1(
 	endValidationPlan(err)
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("prepare provider build validation: %w", err)
+	}
+	var portableLayer *deploy.PortableRuntimeLayerV1
+	if preparation.ApplicationTools != nil {
+		payloads, err := materializeApplicationPortableRuntimeV1(ctx, preparation.Store, preparation.ApplicationTools, preparation.ReusableLock, applicationGraph.Acquisitions)
+		if err != nil {
+			return LockedProviderBuildExecutionResultV1{}, err
+		}
+		defer func() {
+			if cleanupErr := payloads.Cleanup(); cleanupErr != nil {
+				result = LockedProviderBuildExecutionResultV1{}
+				resultErr = errors.Join(resultErr, cleanupErr)
+			}
+		}()
+		image, err := PreparePortableRuntimePayloadLayerV1(ctx, preparation.Store, payloads, validation.Final.Image.Descriptor, options)
+		if err != nil {
+			return LockedProviderBuildExecutionResultV1{}, err
+		}
+		defer func() {
+			if cleanupErr := image.Cleanup(context.WithoutCancel(ctx)); cleanupErr != nil {
+				result = LockedProviderBuildExecutionResultV1{}
+				resultErr = errors.Join(resultErr, cleanupErr)
+			}
+		}()
+		applicationLock, err := rebindPortableToolLockProviderPlanV1(&payloads.authorityLock, graph.Plan)
+		if err != nil {
+			return LockedProviderBuildExecutionResultV1{}, err
+		}
+		if portableTools != nil {
+			portableTools, err = rebindPortableToolLockProviderPlanV1(portableTools, graph.Plan)
+			if err != nil {
+				return LockedProviderBuildExecutionResultV1{}, err
+			}
+			combined, err := mergePortableToolLocksV1(*portableTools, *applicationLock)
+			if err != nil {
+				return LockedProviderBuildExecutionResultV1{}, err
+			}
+			portableTools = &combined
+		} else {
+			portableTools = applicationLock
+		}
+		portableLayer = &deploy.PortableRuntimeLayerV1{Schema: deploy.PortableRuntimeLayerSchemaV1, Upstream: validation.Final.Image.Image, Result: image.Image.Image}
+		validation.Final.Image = image.Image
+		if err := payloads.Cleanup(); err != nil {
+			return LockedProviderBuildExecutionResultV1{}, err
+		}
 	}
 	if input.ValidateChoices {
 		writeProviderBuildProgress(input.Progress, "validating build and caching result")
@@ -351,6 +409,7 @@ func executeLockedProviderBuildV1(
 		PackageOverrides: relevantPackageOverrides,
 		Base:             preparedBase.Descriptor, BaseCatalog: preparedBase.Catalog,
 		Graph: graph, PortableTools: portableTools, Validation: validation,
+		ApplicationTools: preparation.ApplicationTools, PortableRuntimeLayer: portableLayer,
 		StartupVerifier: preparation.StartupVerifier,
 		ValidateChoices: input.ValidateChoices, ValidatedInputs: preparation.ValidatedInputs,
 		NoCache:       preparation.NoCache,
