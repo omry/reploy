@@ -134,14 +134,31 @@ func (lease *QueueEntryLeaseV1) Release() error {
 	if lease.released {
 		return nil
 	}
+	closeErr := lease.closeLocked()
+	return errors.Join(closeErr, removeControlLeasePathV1(lease.path))
+}
+
+// Close releases the kernel lease while preserving its file. Terminal removal
+// uses it to retain the original admission files after incomplete retirement.
+func (lease *QueueEntryLeaseV1) Close() error {
+	if lease == nil {
+		return nil
+	}
+	lease.mutex.Lock()
+	defer lease.mutex.Unlock()
+	return lease.closeLocked()
+}
+
+func (lease *QueueEntryLeaseV1) closeLocked() error {
+	if lease.released {
+		return nil
+	}
 	lease.released = true
 	unlockErr := unlockOperationFile(lease.file)
 	closeErr := lease.file.Close()
-	removeErr := removeControlLeasePathV1(lease.path)
 	return errors.Join(
 		wrapControlLeaseErrorV1("release control lease", unlockErr),
 		wrapControlLeaseErrorV1("close control lease", closeErr),
-		removeErr,
 	)
 }
 
