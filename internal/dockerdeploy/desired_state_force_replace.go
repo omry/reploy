@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
@@ -26,6 +27,8 @@ type forceReplaceStagedDesiredStateBackendV1 struct {
 	complete        func(*deploy.OperationLock, string, *deploy.ControlLeaseV1) error
 	stopOwned       func(context.Context, *deploy.OperationLock, deploy.StateV1, string, RunOptions) error
 	removeReference func(context.Context, providers.RealizedImageV1, string, string, string) error
+	removeCompanion func(context.Context, *deploy.OperationLock, OwnedImageReferenceV1, deploy.EnvironmentGenerationState, string, string) error
+	cleanupStorage  func(*deploy.OperationLock, providerstore.Store, *deploy.BuildLockV1) error
 	commit          func(*deploy.OperationLock, *deploy.EnvironmentGenerationState, deploy.StateV1) error
 	stageSame       func(context.Context, DesiredStateStageInputV1) (deploy.DesiredStateUpdateResult, error)
 	probeNative     func(context.Context) (blueprint.Platform, error)
@@ -37,9 +40,26 @@ type forceReplaceStagedDesiredStateBackendV1 struct {
 // unbuilt desired state for the replacement blueprint.
 func ForceReplaceStagedDesiredStateV1(ctx context.Context, input ForceReplaceStagedDesiredStateInputV1) (deploy.DesiredStateUpdateResult, error) {
 	return forceReplaceStagedDesiredStateV1(ctx, input, forceReplaceStagedDesiredStateBackendV1{
-		acquire:  deploy.AcquireOperationLock,
+		acquire:  deploy.AcquireExistingOperationLock,
 		newStore: providerstore.NewStore,
 		recoverPending: func(ctx context.Context, operation *deploy.OperationLock, store providerstore.Store, current *deploy.EnvironmentGenerationState, environment string, dir string) (bool, error) {
+			_, currentPending, err := operation.ReadPendingBuild()
+			if err != nil {
+				return false, err
+			}
+			_, validatedPending, err := operation.ReadPendingValidatedBuildV1()
+			if err != nil {
+				return false, err
+			}
+			if currentPending && validatedPending {
+				return false, fmt.Errorf("current and validated publication intents conflict; ownership was preserved")
+			}
+			if validatedPending {
+				return RecoverPendingValidatedPublicationV1(ctx, operation, store, environment, dir)
+			}
+			if !currentPending {
+				return false, nil
+			}
 			return RecoverPendingPublication(
 				ctx, operation, store, current, environment, dir,
 				registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1,
@@ -49,6 +69,8 @@ func ForceReplaceStagedDesiredStateV1(ctx context.Context, input ForceReplaceSta
 		complete:        CompleteControlAdmissionV1,
 		stopOwned:       stopOwnedCurrentWorkloadV1,
 		removeReference: RemoveEnvironmentGenerationReference,
+		removeCompanion: RemovePortableEnvironmentReferenceV1,
+		cleanupStorage:  cleanupValidatedBuildStorage,
 		commit: func(operation *deploy.OperationLock, expected *deploy.EnvironmentGenerationState, state deploy.StateV1) error {
 			return operation.CommitStateV1(expected, state)
 		},
@@ -81,6 +103,22 @@ func forceReplaceStagedDesiredStateV1(
 	selected, err := selectDesiredStateTargetV1(ctx, desired, backend.probeNative)
 	if err != nil {
 		return result, err
+	}
+	payload, err := blueprint.EncodeResolvedDocumentV1(desired.Document)
+	if err != nil {
+		return result, err
+	}
+	candidate := deploy.StateV1{
+		Schema: deploy.StateSchemaV1, Blueprint: payload, BlueprintSource: desired.BlueprintSource,
+		Platform: selected, Overlay: deploy.EmptyRequestOverlayV1(), Current: nil,
+		Staging: &deploy.StagingStateV1{Schema: deploy.StagingStateSchemaV1},
+	}
+	if err := deploy.ValidateStateV1(candidate); err != nil {
+		return result, fmt.Errorf("validate force-replacement staged state: %w", err)
+	}
+	cleanupStorage := backend.cleanupStorage
+	if cleanupStorage == nil {
+		cleanupStorage = cleanupValidatedBuildStorage
 	}
 	dir, err := filepath.Abs(desired.DeploymentDir)
 	if err != nil {
@@ -116,19 +154,80 @@ func forceReplaceStagedDesiredStateV1(
 		return result, fmt.Errorf("--force can only replace a staging deployment")
 	}
 	if oldEnvironment == desired.Document.Environment.ID {
+		// A prior replacement may have committed before storage cleanup failed.
+		// Read surviving owner roots under this lock; never replay old tag cleanup.
+		store, err := backend.newStore(dir)
+		if err != nil {
+			return result, err
+		}
+		if err := cleanupStorage(operation, store, nil); err != nil {
+			return result, fmt.Errorf("clean retained replacement storage: %w", err)
+		}
 		if unlockErr := operation.Unlock(); unlockErr != nil {
 			return result, unlockErr
 		}
 		operation = nil
 		return backend.stageSame(ctx, desired)
 	}
-	if err := requirePublicationConsumerBoundaryV1(operation, "completed forced replacement"); err != nil {
-		return result, err
-	}
-
 	store, err := backend.newStore(dir)
 	if err != nil {
 		return result, err
+	}
+	{
+		_, currentPending, readErr := operation.ReadPendingBuild()
+		if readErr != nil {
+			return result, fmt.Errorf("inspect current publication before force replacement recovery: %w", readErr)
+		}
+		validatedIntent, validatedPending, readErr := operation.ReadPendingValidatedBuildV1()
+		if readErr != nil {
+			return result, fmt.Errorf("inspect validated publication before force replacement recovery: %w", readErr)
+		}
+		if currentPending && validatedPending {
+			return result, fmt.Errorf("current and validated publication intents conflict; ownership was preserved")
+		}
+		if validatedPending {
+			candidateReferences, err := validatedRecordReferencesV1(validatedIntent.Candidate, oldEnvironment, dir)
+			if err != nil {
+				return result, fmt.Errorf("validate retained owners before force replacement recovery: %w", err)
+			}
+			cleanup, err := pendingValidatedCleanupV1(validatedIntent.Previous, validatedIntent.Candidate, oldEnvironment, dir)
+			if err != nil {
+				return result, fmt.Errorf("validate retained owners before force replacement recovery: %w", err)
+			}
+			if !reflect.DeepEqual(cleanup, validatedIntent.Candidate.PendingCleanup) {
+				return result, fmt.Errorf("validate retained owners before force replacement recovery: pending validated cleanup differs from previous ownership")
+			}
+			if _, err := validateValidatedRecordLockV1(operation, store, validatedIntent.Candidate, oldEnvironment, dir); err != nil {
+				return result, fmt.Errorf("validate retained owners before force replacement recovery: %w", err)
+			}
+			selected, selectedFound, err := operation.ReadValidatedBuildV1()
+			if err != nil {
+				return result, fmt.Errorf("validate retained owners before force replacement recovery: %w", err)
+			}
+			committed := selectedFound && reflect.DeepEqual(selected, validatedIntent.Candidate)
+			if !committed && !sameValidatedRecordV1(selected, selectedFound, validatedIntent.Previous) {
+				return result, fmt.Errorf("validate retained owners before force replacement recovery: pending validated state conflict; ownership was preserved")
+			}
+			retiring := append(append([]deploy.ValidatedBuildReferenceV1{}, candidateReferences...), cleanup...)
+			if previous := validatedIntent.Previous; previous != nil && !previous.Discarded {
+				previousReferences, err := validatedRecordReferencesV1(*previous, oldEnvironment, dir)
+				if err != nil {
+					return result, fmt.Errorf("validate retained owners before force replacement recovery: %w", err)
+				}
+				if _, err := validateValidatedRecordLockV1(operation, store, *previous, oldEnvironment, dir); err != nil {
+					return result, fmt.Errorf("validate retained owners before force replacement recovery: %w", err)
+				}
+				retiring = append(retiring, previousReferences...)
+			}
+			if err := requireValidatedRetirementSeparationV1(operation, retiring, oldEnvironment, dir); err != nil {
+				return result, fmt.Errorf("validate retained owners before force replacement recovery: %w", err)
+			}
+		}
+		if currentPending {
+			if _, err := stagedRemovalOwnedReferencesV1(operation, state, oldEnvironment, dir); err != nil {
+				return result, fmt.Errorf("validate retained owners before force replacement recovery: %w", err)
+			}
+		}
 	}
 	if _, err := backend.recoverPending(ctx, operation, store, state.Current, oldEnvironment, dir); err != nil {
 		return result, fmt.Errorf("recover staged build before force replacement: %w", err)
@@ -137,6 +236,36 @@ func forceReplaceStagedDesiredStateV1(
 	if err != nil {
 		return result, err
 	}
+	if err := requireNoPendingValidatedBuildV1(operation); err != nil {
+		return result, err
+	}
+	if _, pending, err := operation.ReadPendingBuild(); err != nil || pending {
+		return result, fmt.Errorf("force replacement requires completed current publication: %v", err)
+	}
+	pairs, err := stagedRemovalOwnedReferencesV1(operation, state, oldEnvironment, dir)
+	if err != nil {
+		return result, fmt.Errorf("validate former owners before force replacement: %w", err)
+	}
+	validated, validatedFound, err := operation.ReadValidatedBuildV1()
+	if err != nil {
+		return result, err
+	}
+	if len(pairs) > 1 && backend.removeCompanion == nil {
+		return result, fmt.Errorf("force replacement requires portable companion retirement")
+	}
+	if validatedFound && backend.removeCompanion == nil {
+		// Validate the complete validated/superseded inventory before stopping work.
+		validatedPairs, err := validateValidatedRetirementV1(operation, validated, oldEnvironment, dir)
+		if err != nil {
+			return result, err
+		}
+		for _, pair := range append(validatedPairs, validated.PendingCleanup...) {
+			if pair.CompanionOwner != nil {
+				return result, fmt.Errorf("force replacement requires validated companion retirement")
+			}
+		}
+	}
+	retainedState, retainedEnvironment := state, oldEnvironment
 	generationReference := "staged/" + oldEnvironment
 	if state.Current != nil {
 		generationReference = state.Current.Reference
@@ -166,8 +295,61 @@ func forceReplaceStagedDesiredStateV1(
 	if oldEnvironment == desired.Document.Environment.ID {
 		return result, fmt.Errorf("staging blueprint changed while force replacement was waiting; retry the command")
 	}
-	if err := requirePublicationConsumerBoundaryV1(operation, "completed forced replacement"); err != nil {
-		return result, err
+	{
+		_, currentPending, readErr := operation.ReadPendingBuild()
+		if readErr != nil {
+			return result, fmt.Errorf("inspect current publication after force replacement admission: %w", readErr)
+		}
+		validatedIntent, validatedPending, readErr := operation.ReadPendingValidatedBuildV1()
+		if readErr != nil {
+			return result, fmt.Errorf("inspect validated publication after force replacement admission: %w", readErr)
+		}
+		if currentPending && validatedPending {
+			return result, fmt.Errorf("current and validated publication intents conflict; ownership was preserved")
+		}
+		if validatedPending {
+			candidateReferences, err := validatedRecordReferencesV1(validatedIntent.Candidate, oldEnvironment, dir)
+			if err != nil {
+				return result, fmt.Errorf("validate retained owners before force replacement recovery: %w", err)
+			}
+			cleanup, err := pendingValidatedCleanupV1(validatedIntent.Previous, validatedIntent.Candidate, oldEnvironment, dir)
+			if err != nil {
+				return result, fmt.Errorf("validate retained owners before force replacement recovery: %w", err)
+			}
+			if !reflect.DeepEqual(cleanup, validatedIntent.Candidate.PendingCleanup) {
+				return result, fmt.Errorf("validate retained owners before force replacement recovery: pending validated cleanup differs from previous ownership")
+			}
+			if _, err := validateValidatedRecordLockV1(operation, store, validatedIntent.Candidate, oldEnvironment, dir); err != nil {
+				return result, fmt.Errorf("validate retained owners before force replacement recovery: %w", err)
+			}
+			selected, selectedFound, err := operation.ReadValidatedBuildV1()
+			if err != nil {
+				return result, fmt.Errorf("validate retained owners before force replacement recovery: %w", err)
+			}
+			committed := selectedFound && reflect.DeepEqual(selected, validatedIntent.Candidate)
+			if !committed && !sameValidatedRecordV1(selected, selectedFound, validatedIntent.Previous) {
+				return result, fmt.Errorf("validate retained owners before force replacement recovery: pending validated state conflict; ownership was preserved")
+			}
+			retiring := append(append([]deploy.ValidatedBuildReferenceV1{}, candidateReferences...), cleanup...)
+			if previous := validatedIntent.Previous; previous != nil && !previous.Discarded {
+				previousReferences, err := validatedRecordReferencesV1(*previous, oldEnvironment, dir)
+				if err != nil {
+					return result, fmt.Errorf("validate retained owners before force replacement recovery: %w", err)
+				}
+				if _, err := validateValidatedRecordLockV1(operation, store, *previous, oldEnvironment, dir); err != nil {
+					return result, fmt.Errorf("validate retained owners before force replacement recovery: %w", err)
+				}
+				retiring = append(retiring, previousReferences...)
+			}
+			if err := requireValidatedRetirementSeparationV1(operation, retiring, oldEnvironment, dir); err != nil {
+				return result, fmt.Errorf("validate retained owners before force replacement recovery: %w", err)
+			}
+		}
+		if currentPending {
+			if _, err := stagedRemovalOwnedReferencesV1(operation, state, oldEnvironment, dir); err != nil {
+				return result, fmt.Errorf("validate retained owners before force replacement recovery: %w", err)
+			}
+		}
 	}
 	if _, err := backend.recoverPending(ctx, operation, store, state.Current, oldEnvironment, dir); err != nil {
 		return result, fmt.Errorf("recover staged build after force replacement admission: %w", err)
@@ -176,46 +358,66 @@ func forceReplaceStagedDesiredStateV1(
 	if err != nil {
 		return result, err
 	}
-
-	var oldBuild *CurrentBuild
+	if err := requireNoPendingValidatedBuildV1(operation); err != nil {
+		return result, err
+	}
+	if _, pending, err := operation.ReadPendingBuild(); err != nil || pending {
+		return result, fmt.Errorf("force replacement requires completed current publication: %v", err)
+	}
+	currentPairs, err := stagedRemovalOwnedReferencesV1(operation, state, oldEnvironment, dir)
+	if err != nil {
+		return result, err
+	}
+	currentValidated, currentValidatedFound, err := operation.ReadValidatedBuildV1()
+	if err != nil {
+		return result, err
+	}
+	if oldEnvironment != retainedEnvironment || !reflect.DeepEqual(state, retainedState) ||
+		!reflect.DeepEqual(pairs, currentPairs) || validatedFound != currentValidatedFound || !reflect.DeepEqual(validated, currentValidated) {
+		return result, fmt.Errorf("former ownership changed while force replacement was waiting; retry the command")
+	}
 	if state.Current != nil {
-		loaded, currentFound, loadErr := LoadRecordedCurrentBuildV1(ctx, operation, store, oldEnvironment, dir)
-		if loadErr != nil {
-			return result, fmt.Errorf("load staged build for force replacement: %w", loadErr)
-		}
-		if !currentFound {
-			return result, fmt.Errorf("staged generation is missing its build record")
-		}
-		oldBuild = &loaded
 		if err := backend.stopOwned(ctx, operation, state, dir, input.RunOptions); err != nil {
 			return result, fmt.Errorf("stop staged workload before force replacement: %w", err)
 		}
 	}
 
-	payload, err := blueprint.EncodeResolvedDocumentV1(desired.Document)
+	retired, found, err := discardValidatedBuildWithBackendV1(ctx, operation, oldEnvironment, dir, validatedRetirementBackendV1{
+		removeReference: backend.removeReference, removeCompanion: backend.removeCompanion,
+	})
 	if err != nil {
-		return result, err
+		return result, fmt.Errorf("retire validated owners before force replacement: %w", err)
 	}
-	candidate := deploy.StateV1{
-		Schema: deploy.StateSchemaV1, Blueprint: payload, BlueprintSource: desired.BlueprintSource,
-		Platform: selected, Overlay: deploy.EmptyRequestOverlayV1(), Current: nil,
-		Staging: &deploy.StagingStateV1{Schema: deploy.StagingStateSchemaV1},
+	if found {
+		if !retired.Discarded || len(retired.PendingCleanup) != 0 {
+			return result, fmt.Errorf("validated retirement remains incomplete; old environment was preserved")
+		}
+		if err := operation.RemoveValidatedBuildV1(); err != nil {
+			return result, fmt.Errorf("remove retired validated record before force replacement: %w", err)
+		}
 	}
-	if err := deploy.ValidateStateV1(candidate); err != nil {
-		return result, fmt.Errorf("validate force-replacement staged state: %w", err)
+	for index, pair := range pairs {
+		if index == 0 {
+			err = backend.removeReference(ctx, pair.Image, pair.Reference, oldEnvironment, dir)
+		} else {
+			err = backend.removeCompanion(ctx, operation, pair, *state.Current, oldEnvironment, dir)
+		}
+		if err != nil {
+			return result, fmt.Errorf("retire current owner before force replacement: %w", err)
+		}
 	}
 	if err := backend.commit(operation, state.Current, candidate); err != nil {
-		if oldBuild != nil {
-			return result, fmt.Errorf("write force-replacement staged state after stopping the old workload: %w", err)
+		actual, found, _, readErr := readForceReplacementStateV1(operation)
+		if readErr == nil && found && reflect.DeepEqual(actual, candidate) {
+			result = deploy.DesiredStateUpdateResult{State: actual, Changed: true}
 		}
-		return result, fmt.Errorf("write force-replacement staged state: %w", err)
+		return result, errors.Join(fmt.Errorf("write force-replacement staged state after former owners retired: %w", err), readErr)
 	}
-	if oldBuild != nil {
-		if err := backend.removeReference(ctx, oldBuild.Lock.FinalImage, oldBuild.Generation.Reference, oldEnvironment, dir); err != nil {
-			return deploy.DesiredStateUpdateResult{State: candidate, Changed: true}, fmt.Errorf("staging was replaced but the old image reference could not be removed: %w", err)
-		}
+	result = deploy.DesiredStateUpdateResult{State: candidate, Changed: true}
+	if err := cleanupStorage(operation, store, nil); err != nil {
+		return result, fmt.Errorf("staging was replaced but storage cleanup remains pending; retry the command: %w", err)
 	}
-	return deploy.DesiredStateUpdateResult{State: candidate, Changed: true}, nil
+	return result, nil
 }
 
 func readForceReplacementStateV1(operation *deploy.OperationLock) (deploy.StateV1, bool, string, error) {
