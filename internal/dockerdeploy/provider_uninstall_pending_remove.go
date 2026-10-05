@@ -12,12 +12,12 @@ import (
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
-	"github.com/omry/reploy/internal/providers/registry"
 )
 
 type providerUninstallPendingRemovalBackendV1 struct {
 	acquire         func(context.Context, string) (*deploy.OperationLock, error)
 	removeReference func(context.Context, providers.RealizedImageV1, string, string, string) error
+	confirmAbsent   func(context.Context, string) error
 	finalize        func(string, string) error
 }
 
@@ -31,9 +31,16 @@ func retryPendingProviderUninstallRemovalV1(
 		deploymentDir,
 		service,
 		providerUninstallPendingRemovalBackendV1{
-			acquire:         deploy.AcquireOperationLock,
+			acquire:         deploy.AcquireExistingOperationLock,
 			removeReference: RemoveEnvironmentGenerationReference,
-			finalize:        finalizePendingProviderUninstallRemovalV1,
+			confirmAbsent: func(ctx context.Context, reference string) error {
+				output, err := runDockerOutput(ctx, "image", "ls", "--quiet", "--no-trunc", reference)
+				if err != nil || strings.TrimSpace(output) != "" {
+					return errors.Join(fmt.Errorf("owned reference %q is not confirmed absent after installed isolation", reference), err)
+				}
+				return nil
+			},
+			finalize: finalizePendingProviderUninstallRemovalV1,
 		},
 	)
 }
@@ -79,9 +86,6 @@ func retryPendingProviderUninstallRemovalWithV1(
 			err = errors.Join(err, operation.Unlock())
 		}
 	}()
-	if err := requireValidatedConsumerBoundaryV1(operation, "completed installed retirement"); err != nil {
-		return ProviderUninstallResultV1{}, true, err
-	}
 	state, stateFound, err := operation.ReadStateV1()
 	if err != nil {
 		return ProviderUninstallResultV1{}, true, fmt.Errorf("read pending deployment removal state: %w", err)
@@ -102,14 +106,22 @@ func retryPendingProviderUninstallRemovalWithV1(
 			service, installation.Service,
 		)
 	}
+	if state.TerminalRemoval {
+		if err := operation.ResumeTerminalRemovalV1(state); err != nil {
+			return ProviderUninstallResultV1{}, true, err
+		}
+	}
 	if _, pending, err := operation.ReadPendingBuild(); err != nil {
 		return ProviderUninstallResultV1{}, true, fmt.Errorf("read pending deployment build: %w", err)
 	} else if pending {
 		return ProviderUninstallResultV1{}, true, fmt.Errorf("pending deployment removal has an incomplete build publication")
 	}
+	if err := requireNoPendingValidatedBuildV1(operation); err != nil {
+		return ProviderUninstallResultV1{}, true, err
+	}
 	lock, lockFound, err := operation.ReadBuildLock(
 		state.Current.BuildLockDigest,
-		registry.ValidateRequirementProfileV1,
+		acceptProviderProfileOwnerForCutoverV1,
 	)
 	if err != nil {
 		return ProviderUninstallResultV1{}, true, fmt.Errorf("read pending deployment build lock: %w", err)
@@ -123,7 +135,7 @@ func retryPendingProviderUninstallRemovalWithV1(
 	if err := validateGenerationBuildLock(
 		*state.Current,
 		lock,
-		registry.ValidateRequirementProfileV1,
+		acceptProviderProfileOwnerForCutoverV1,
 	); err != nil {
 		return ProviderUninstallResultV1{}, true, fmt.Errorf("pending deployment current build: %w", err)
 	}
@@ -131,14 +143,43 @@ func retryPendingProviderUninstallRemovalWithV1(
 	if err != nil {
 		return ProviderUninstallResultV1{}, true, fmt.Errorf("decode pending deployment blueprint: %w", err)
 	}
-	if err := backend.removeReference(
-		context.WithoutCancel(ctx),
-		lock.FinalImage,
-		state.Current.Reference,
-		document.Environment.ID,
-		deploymentDir,
-	); err != nil {
-		return ProviderUninstallResultV1{}, true, fmt.Errorf("remove pending deployment image reference: %w", err)
+	pairs, err := stagedRemovalOwnedReferencesV1(operation, state, document.Environment.ID, deploymentDir)
+	if err != nil {
+		return ProviderUninstallResultV1{}, true, err
+	}
+	validated, validatedFound, err := operation.ReadValidatedBuildV1()
+	if err != nil {
+		return ProviderUninstallResultV1{}, true, err
+	}
+	if state.TerminalRemoval {
+		// Every owner retired before isolation. Retained canonical authority
+		// proves exact absence here; missing original paths grant no deletion.
+		if backend.confirmAbsent == nil || validatedFound && (!validated.Discarded || len(validated.PendingCleanup) != 0) {
+			return ProviderUninstallResultV1{}, true, fmt.Errorf("pending installed removal has unconfirmed retirement")
+		}
+		if validatedFound {
+			validatedPairs, err := validatedRecordReferencesV1(validated, document.Environment.ID, deploymentDir)
+			if err != nil {
+				return ProviderUninstallResultV1{}, true, err
+			}
+			for _, pair := range validatedPairs {
+				pairs = append(pairs, OwnedImageReferenceV1{Reference: pair.ImageReference, Image: pair.Image})
+			}
+		}
+		for _, pair := range pairs {
+			if err := backend.confirmAbsent(context.WithoutCancel(ctx), pair.Reference); err != nil {
+				return ProviderUninstallResultV1{}, true, err
+			}
+		}
+	} else {
+		// Preserve the existing previous-profile, primary-only pending cleanup.
+		// Unreleased incomplete portable tombstones are never a new retry format.
+		if len(pairs) != 1 || validatedFound {
+			return ProviderUninstallResultV1{}, true, fmt.Errorf("unguarded pending removal lacks completed paired retirement authority")
+		}
+		if err := backend.removeReference(context.WithoutCancel(ctx), lock.FinalImage, state.Current.Reference, document.Environment.ID, deploymentDir); err != nil {
+			return ProviderUninstallResultV1{}, true, fmt.Errorf("remove pending deployment image reference: %w", err)
+		}
 	}
 	if err := operation.Unlock(); err != nil {
 		return ProviderUninstallResultV1{}, true, fmt.Errorf("release pending deployment lock: %w", err)
