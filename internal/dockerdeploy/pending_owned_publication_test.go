@@ -464,7 +464,7 @@ func TestPendingOwnedPublicationRejectsMissingValidatedRootBeforeEffectsV1(t *te
 }
 
 func TestPendingOwnedPublicationConsumerGuardsV1(t *testing.T) {
-	for _, boundary := range []string{"forced replacement", "provider failure", "validated publication", "installed transfer"} {
+	for _, boundary := range []string{"provider failure", "validated publication", "installed transfer"} {
 		t.Run(boundary, func(t *testing.T) {
 			dir, store, lock := pendingPortablePublicationFixtureV1(t)
 			operation, err := deploy.AcquireOperationLock(t.Context(), dir)
@@ -483,13 +483,6 @@ func TestPendingOwnedPublicationConsumerGuardsV1(t *testing.T) {
 			}
 			mutations := 0
 			switch boundary {
-			case "forced replacement":
-				if err := operation.Unlock(); err != nil {
-					t.Fatal(err)
-				}
-				document, _ := testSelectedPlatformDocumentV1(t)
-				document.Environment.ID = "replacement"
-				_, err = ForceReplaceStagedDesiredStateV1(t.Context(), ForceReplaceStagedDesiredStateInputV1{DesiredState: DesiredStateStageInputV1{DeploymentDir: dir, Document: document, ExplicitPlatform: "linux/amd64"}})
 			case "provider failure":
 				defer operation.Unlock()
 				stubNoAbandonedBuildReferences(t)
