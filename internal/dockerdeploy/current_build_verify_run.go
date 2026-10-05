@@ -121,7 +121,7 @@ func verifyCurrentBuildV1(
 		return VerifyCurrentBuildResultV1{}, fmt.Errorf("plan current build verification: %w", err)
 	}
 	details, err := backend.verify(ctx, CurrentBuildVerificationInputV1{
-		Store: store, Current: current, Runtime: runtime,
+		Store: store, Current: current, Runtime: runtime, Operation: operation, DeploymentDir: dir,
 	})
 	if err != nil {
 		return VerifyCurrentBuildResultV1{}, err

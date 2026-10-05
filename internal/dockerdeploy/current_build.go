@@ -19,9 +19,9 @@ type CurrentBuild struct {
 type currentBuildReferenceVerifier func(context.Context, providers.RealizedImageV1, string, string, string) error
 
 // ValidateCurrentBuild is read-only and intentionally does not rehash the
-// provider-store closure. Runtime operations need the selected lock and one
-// Docker reference check; install transfer validates artifacts separately when
-// it consumes them. Absence is reported separately, while a state, lock, or
+// provider-store closure. Runtime operations need the selected lock and exact
+// owned Docker reference checks; install transfer validates artifacts separately
+// when it consumes them. Absence is reported separately, while a state, lock, or
 // Docker-reference mismatch is corruption rather than absence.
 func ValidateCurrentBuild(
 	ctx context.Context,
@@ -32,7 +32,13 @@ func ValidateCurrentBuild(
 ) (CurrentBuild, bool, error) {
 	current, found, err := validateCurrentBuild(ctx, operation, store, environment, deploymentDir, VerifyEnvironmentGenerationReference)
 	if err == nil && found && current.Lock.PortableRuntimeLayer != nil {
-		return CurrentBuild{}, false, fmt.Errorf("portable current-image reuse is not yet supported by this version")
+		pairs, projectErr := ProjectEnvironmentOwnedReferencesV1(current.Generation, current.Lock, environment, deploymentDir)
+		if projectErr != nil {
+			return CurrentBuild{}, false, projectErr
+		}
+		if verifyErr := VerifyPortableEnvironmentReferenceV1(ctx, operation, pairs[1], current.Generation, environment, deploymentDir); verifyErr != nil {
+			return CurrentBuild{}, false, verifyErr
+		}
 	}
 	return current, found, err
 }
@@ -101,8 +107,32 @@ func validateCurrentBuild(
 	if err := validateGenerationBuildLock(generation, lock, registry.ValidateRequirementProfileV1); err != nil {
 		return CurrentBuild{}, false, fmt.Errorf("current build: %w", err)
 	}
+	if lock.PortableRuntimeLayer != nil {
+		if _, err := ProjectEnvironmentOwnedReferencesV1(generation, lock, environment, deploymentDir); err != nil {
+			return CurrentBuild{}, false, err
+		}
+	}
 	if err := verifyReference(ctx, lock.FinalImage, generation.Reference, environment, deploymentDir); err != nil {
 		return CurrentBuild{}, false, err
 	}
 	return CurrentBuild{State: state, Generation: generation, Lock: lock}, true, nil
+}
+
+// Reuse checks the accepted owner, including a trial generation that is not
+// State.Current. The operation lock protects its deployment and store scope.
+func verifyCurrentBuildOwnedReferencesV1(ctx context.Context, operation *deploy.OperationLock, store providerstore.Store, current CurrentBuild, environment, dir string) error {
+	if err := validatePublicationDeployment(operation, store, dir); err != nil {
+		return err
+	}
+	pairs, err := ProjectEnvironmentOwnedReferencesV1(current.Generation, current.Lock, environment, dir)
+	if err != nil {
+		return err
+	}
+	if err := VerifyEnvironmentGenerationReference(ctx, pairs[0].Image, pairs[0].Reference, environment, dir); err != nil {
+		return err
+	}
+	if len(pairs) == 2 {
+		return VerifyPortableEnvironmentReferenceV1(ctx, operation, pairs[1], current.Generation, environment, dir)
+	}
+	return nil
 }

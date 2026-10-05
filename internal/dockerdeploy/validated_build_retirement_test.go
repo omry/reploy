@@ -945,12 +945,9 @@ func TestProviderBuildAdmissionRecoversPendingValidatedBeforeConsumersV1(t *test
 				if recoveryCalls != 1 {
 					t.Fatalf("recovery calls=%d error=%v", recoveryCalls, err)
 				}
-				if committed && !noCache {
-					// Content acceptance remains the independently owned .8 gate.
-					if preparationCalls != 0 || err == nil || !strings.Contains(err.Error(), "completed validated content acceptance") {
-						t.Fatalf("recovered owner bypassed content gate: %d %v", preparationCalls, err)
-					}
-				} else if preparationCalls != 1 || !errors.Is(err, stop) {
+				// Completed owners can now reach preparation. Any actual reuse
+				// must pass the exact paired ownership and optional content audit.
+				if preparationCalls != 1 || !errors.Is(err, stop) {
 					t.Fatalf("provider admission did not reach recovered state: %d %v", preparationCalls, err)
 				}
 				if _, pending, err := images.operation.ReadPendingValidatedBuildV1(); err != nil || pending {
@@ -1255,42 +1252,71 @@ func TestProviderBuildPreparationCleanupFailurePreservesOwnersV1(t *testing.T) {
 	}
 }
 
-func TestNoCacheProviderBuildCleanupRetryRetainsPortableContentGuardV1(t *testing.T) {
-	dir, store, lock, inputs, images := validatedPublicationFixtureV1(t)
-	if _, err := images.operation.PublishBuildLock(lock, registry.ValidateRequirementProfileV1); err != nil {
-		t.Fatal(err)
-	}
-	previous := validatedPublicationRecordV1(t, dir, lock, inputs, 31)
-	current := validatedPublicationRecordV1(t, dir, lock, inputs, 41)
-	pendingCleanup, err := pendingValidatedCleanupV1(&previous, current, "demo", dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	current.PendingCleanup = pendingCleanup
-	if err := images.operation.CommitValidatedBuildV1(current); err != nil {
-		t.Fatal(err)
-	}
-	images.retain(t, current, dir)
-	before := pendingOwnedFilesystemSnapshotV1(t, dir, store.Root())
-	beforeImages := make(map[string]providers.RealizedImageV1, len(images.images))
-	for reference, image := range images.images {
-		beforeImages[reference] = image
-	}
-	if err := retryOrdinaryPendingValidatedCleanupV1(t.Context(), images.operation, store, "demo", dir); err == nil || !strings.Contains(err.Error(), "portable validated ownership requires ordinary provider build cleanup retry") {
-		t.Fatalf("no-cache cleanup retry bypassed portable content guard: %v", err)
-	}
-	if images.effects != 0 || !reflect.DeepEqual(beforeImages, images.images) {
-		t.Fatalf("portable cleanup changed references: effects=%d before=%#v after=%#v", images.effects, beforeImages, images.images)
-	}
-	if !reflect.DeepEqual(before, pendingOwnedFilesystemSnapshotV1(t, dir, store.Root())) {
-		t.Fatal("portable content guard changed canonical files, locks, or provider-store roots")
-	}
-	retained, found, err := images.operation.ReadValidatedBuildV1()
-	if err != nil || !found || !reflect.DeepEqual(retained, current) {
-		t.Fatalf("portable content guard changed canonical cleanup inventory: found=%v err=%v record=%#v", found, err, retained)
-	}
-	if _, err := deploy.BuildLockStoreClosure(lock, store, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1); err != nil {
-		t.Fatalf("portable content guard pruned retained roots: %v", err)
+func TestProviderBuildCleanupRetryRetiresSupersededPortablePairV1(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failure=%v", fail), func(t *testing.T) {
+			dir, store, lock, inputs, images := validatedPublicationFixtureV1(t)
+			if _, err := images.operation.PublishBuildLock(lock, registry.ValidateRequirementProfileV1); err != nil {
+				t.Fatal(err)
+			}
+			previous := validatedPublicationRecordV1(t, dir, lock, inputs, 31)
+			current := validatedPublicationRecordV1(t, dir, lock, inputs, 41)
+			pending, err := pendingValidatedCleanupV1(&previous, current, "demo", dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			current.PendingCleanup = pending
+			if err := images.operation.CommitValidatedBuildV1(current); err != nil {
+				t.Fatal(err)
+			}
+			images.retain(t, previous, dir)
+			images.retain(t, current, dir)
+			fault := ""
+			if fail {
+				fault = previous.Companion.Reference
+			}
+			err = retryOrdinaryPendingValidatedCleanupWithBackendV1(t.Context(), images.operation, store, "demo", dir, validatedRetirementImagesBackendV1(t, images, fault, false))
+			if fail && !errors.Is(err, errPendingPublicationFaultV1) || !fail && err != nil {
+				t.Fatalf("cleanup retry = %v", err)
+			}
+			retained, found, err := images.operation.ReadValidatedBuildV1()
+			if err != nil || !found {
+				t.Fatalf("retained candidate found=%v err=%v", found, err)
+			}
+			expected := current
+			expected.PendingCleanup = nil
+			if fail {
+				for _, pair := range pending {
+					if pair.ImageReference == fault {
+						expected.PendingCleanup = append(expected.PendingCleanup, pair)
+					}
+				}
+			}
+			if !reflect.DeepEqual(retained, expected) {
+				t.Fatalf("retained progress = %#v, want %#v", retained, expected)
+			}
+			if images.images[current.ImageReference] != current.Image || images.images[current.Companion.Reference] != current.Companion.Image {
+				t.Fatal("retry changed live candidate pair")
+			}
+			if _, found := images.images[previous.ImageReference]; found {
+				t.Fatal("retry did not remove superseded primary")
+			}
+			if fail {
+				if images.images[fault] != previous.Companion.Image {
+					t.Fatal("failed companion owner was lost")
+				}
+				if err := retryOrdinaryPendingValidatedCleanupWithBackendV1(t.Context(), images.operation, store, "demo", dir, validatedRetirementImagesBackendV1(t, images, "", false)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			retained, found, err = images.operation.ReadValidatedBuildV1()
+			if err != nil || !found || len(retained.PendingCleanup) != 0 || len(images.images) != 2 {
+				t.Fatalf("completed retry found=%v err=%v record=%#v images=%#v", found, err, retained, images.images)
+			}
+			if _, err := deploy.BuildLockStoreClosure(lock, store, registry.ValidateRequirementProfileV1, registry.ValidateResolvedBundlePayloadV1); err != nil {
+				t.Fatalf("retry pruned live closure: %v", err)
+			}
+		})
 	}
 }
 

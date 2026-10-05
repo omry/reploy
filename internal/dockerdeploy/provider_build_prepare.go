@@ -120,9 +120,9 @@ func PrepareLockedProviderBuildV1(
 }
 
 // retryOrdinaryPendingValidatedCleanupV1 retries retained superseded references
-// and discarded owners before ordinary provider preparation. Live portable
-// candidates retain their content gate; discarded inventory needs only exact
-// retirement authority and cannot be reused.
+// and discarded owners before ordinary provider preparation. The existing
+// retirement boundary validates exact retained ownership independently of
+// whether the live candidate can be reused.
 func retryOrdinaryPendingValidatedCleanupV1(
 	ctx context.Context,
 	operation *deploy.OperationLock,
@@ -156,11 +156,6 @@ func retryOrdinaryPendingValidatedCleanupWithBackendV1(
 	record, found, err := operation.ReadValidatedBuildV1()
 	if err != nil || !found || len(record.PendingCleanup) == 0 {
 		return err
-	}
-	if !record.Discarded {
-		if err := requireValidatedConsumerBoundaryV1(operation, "ordinary provider build cleanup retry"); err != nil {
-			return err
-		}
 	}
 	if err := operation.ValidateProviderStore(store); err != nil {
 		return err

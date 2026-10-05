@@ -56,6 +56,53 @@ func TestLoadValidatedBuildCandidateRequiresExactSavedInputs(t *testing.T) {
 	}
 }
 
+func TestLoadValidatedBuildCandidateSkipsStaleProviderProfileV1(t *testing.T) {
+	dir, operation, store, _, state := currentBuildFixture(t, true)
+	defer operation.Unlock()
+	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overrides := deploy.EmptyPackageOverridesV1(document.Environment.ID)
+	inputs, err := ValidatedBuildInputs(document, state.Overlay, overrides, dir, state.Platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := newPreparedPythonGraphReuseFixture(t).lock
+	old.BlueprintDigest = inputs.BlueprintDigest
+	old.PackageOverrides = deploy.EmptyPackageOverrideIntentV1(document.Environment.ID)
+	old.Nodes[0].RequirementProfile.Facts.Schema = "legacy-python-profile"
+	old.Nodes[0].ValidationEvidence.ProfileDigest, err = providers.RequirementProfileDigest(old.Nodes[0].RequirementProfile, acceptProviderProfileOwnerForCutoverV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := operation.PublishBuildLock(old, acceptProviderProfileOwnerForCutoverV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := deploy.ValidatedBuildV1{
+		Schema: deploy.ValidatedBuildSchemaV1, BlueprintDigest: inputs.BlueprintDigest,
+		OverlayDigest: inputs.OverlayDigest, PackageOverridesDigest: inputs.PackageOverridesDigest,
+		Platform: inputs.Platform, BuildLockDigest: digest, Image: old.FinalImage,
+		ImageReference: state.Current.Reference,
+	}
+	if err := operation.CommitValidatedBuildV1(record); err != nil {
+		t.Fatal(err)
+	}
+	before := pendingOwnedFilesystemSnapshotV1(t, dir, store.Root())
+	changed := deploy.EmptyPackageOverridesV1(document.Environment.ID)
+	changed.Environment.PackageOverrides["python"] = map[string]deploy.PackageOverrideChoiceV1{"demo": {Version: "2"}}
+	if _, found, err := LoadValidatedBuildCandidate(t.Context(), operation, store, document, state, changed, dir, false, false); err != nil || found {
+		t.Fatalf("stale legacy candidate found=%v err=%v", found, err)
+	}
+	if _, found, err := LoadValidatedBuildCandidate(t.Context(), operation, store, document, state, overrides, dir, false, false); err == nil || found {
+		t.Fatalf("matching legacy candidate was not strictly rejected: found=%v err=%v", found, err)
+	}
+	if !reflect.DeepEqual(before, pendingOwnedFilesystemSnapshotV1(t, dir, store.Root())) {
+		t.Fatal("candidate reads changed retained lock, state or storage")
+	}
+}
+
 func TestLoadValidatedBuildCandidateCanSkipCacheVerification(t *testing.T) {
 	dir, operation, store, lock, state := currentBuildFixture(t, true)
 	defer operation.Unlock()
