@@ -1,0 +1,2 @@
+kind: Fixed
+body: Retire installed image owners before directory removal and preserve authority for explicit removal retries.

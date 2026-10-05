@@ -26,6 +26,7 @@ type providerUninstallRunBackendV1 struct {
 	plan             func(providerUninstallPlanningInputV1) (providerUninstallPlanV1, error)
 	admit            func(context.Context, string, *deploy.OperationLock, ControlAdmissionInputV1) (AdmittedControlV1, error)
 	complete         func(*deploy.OperationLock, string, *deploy.ControlLeaseV1) error
+	recoverPending   func(context.Context, *deploy.OperationLock, string) error
 	execute          func(context.Context, *deploy.OperationLock, providerUninstallPlanV1, RunOptions) error
 	removeDeployment func(context.Context, *deploy.OperationLock, string, *deploy.ControlLeaseV1, providerUninstallPlanV1, RunOptions) error
 }
@@ -53,7 +54,7 @@ func runProviderUninstallV1(
 	if backend.acquire == nil || backend.release == nil || backend.plan == nil || backend.admit == nil || backend.complete == nil || backend.execute == nil {
 		return fmt.Errorf("run provider uninstall requires a complete backend")
 	}
-	if input.RemoveDir && backend.removeDeployment == nil {
+	if input.RemoveDir && (backend.removeDeployment == nil || backend.recoverPending == nil) {
 		return fmt.Errorf("run provider uninstall --remove-dir requires deployment removal")
 	}
 	deploymentDir, err := filepath.Abs(input.DeploymentDir)
@@ -79,8 +80,21 @@ func runProviderUninstallV1(
 		err = errors.Join(err, releaseErr)
 	}()
 
-	if err := requirePublicationConsumerBoundaryV1(operation, "completed installed retirement"); err != nil {
-		return err
+	state, found, err := operation.ReadStateV1()
+	if err != nil || !found || state.Deployment == nil || state.Current == nil || state.Deployment.Installation.TargetDir != deploymentDir {
+		return errors.Join(fmt.Errorf("installed uninstall state is missing or invalid"), err)
+	}
+	if input.RemoveDir && !state.TerminalRemoval {
+		if err := backend.recoverPending(ctx, operation, deploymentDir); err != nil {
+			return fmt.Errorf("recover publication before installed removal: %w", err)
+		}
+	} else if !input.RemoveDir {
+		if err := requireNoPendingValidatedBuildV1(operation); err != nil {
+			return err
+		}
+		if _, pending, err := operation.ReadPendingBuild(); err != nil || pending {
+			return errors.Join(fmt.Errorf("uninstall requires completed publication"), err)
+		}
 	}
 	planningInput := providerUninstallPlanningInputV1{
 		Operation: operation, DeploymentDir: deploymentDir, Runtime: input.Runtime,
@@ -90,7 +104,6 @@ func runProviderUninstallV1(
 	if err != nil {
 		return err
 	}
-	writeProviderBuildProgress(input.RunOptions.Progress, "planning uninstall")
 	if input.result != nil {
 		*input.result = ProviderUninstallResultV1{
 			DeploymentDir: deploymentDir, Environment: plan.Environment,
@@ -98,6 +111,19 @@ func runProviderUninstallV1(
 			RetainedDirectory: !plan.RemoveDir,
 		}
 	}
+	if input.RemoveDir && plan.State.TerminalRemoval {
+		// Host cleanup preceded the original guard. Continue only its retained
+		// removal authority, without ordinary admission or alias reuse.
+		ownedOperation := operation
+		operation = nil
+		return backend.removeDeployment(ctx, ownedOperation, "", nil, plan, input.RunOptions)
+	}
+	if input.RemoveDir {
+		if _, err := stagedRemovalOwnedReferencesV1(operation, plan.State, plan.Environment, deploymentDir); err != nil {
+			return err
+		}
+	}
+	writeProviderBuildProgress(input.RunOptions.Progress, "planning uninstall")
 	admitted, err := backend.admit(ctx, deploymentDir, operation, ControlAdmissionInputV1{
 		Operation: deploy.ControlOperationUninstallV1, GenerationReference: plan.GenerationReference,
 		Mode: input.ControlMode, DockerPreflightTimeout: input.RunOptions.DockerPreflightTimeout,
@@ -118,6 +144,11 @@ func runProviderUninstallV1(
 		return fmt.Errorf("uninstall admission returned no operation lock")
 	}
 	if operation != previousOperation {
+		if input.RemoveDir {
+			if err := backend.recoverPending(ctx, operation, deploymentDir); err != nil {
+				return fmt.Errorf("recover publication after waiting for uninstall: %w", err)
+			}
+		}
 		planningInput.Operation = operation
 		waitedPlan, planErr := backend.plan(planningInput)
 		if planErr != nil {
@@ -127,6 +158,11 @@ func runProviderUninstallV1(
 			return fmt.Errorf("installed state changed while uninstall was waiting; retry the command")
 		}
 		plan = waitedPlan
+	}
+	if input.RemoveDir {
+		if _, err := stagedRemovalOwnedReferencesV1(operation, plan.State, plan.Environment, deploymentDir); err != nil {
+			return err
+		}
 	}
 	writeProviderBuildProgress(input.RunOptions.Progress, "stopping installed service")
 	writeProviderBuildProgress(input.RunOptions.Progress, "removing runtime resources")

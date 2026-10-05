@@ -25,7 +25,8 @@ func TestRunProviderUninstallAdmitsBeforeExecutionAndCompletes(t *testing.T) {
 	var details ProviderUninstallResultV1
 	lease := new(deploy.ControlLeaseV1)
 	backend := providerUninstallRunBackendV1{
-		acquire: deploy.AcquireOperationLock,
+		recoverPending: recoverProviderUninstallPublicationV1,
+		acquire:        deploy.AcquireOperationLock,
 		release: func(operation *deploy.OperationLock) error {
 			order = append(order, "release")
 			return operation.Unlock()
@@ -98,9 +99,10 @@ func TestRunProviderUninstallRevalidatesStateAfterWaiting(t *testing.T) {
 	executed := false
 	lease := new(deploy.ControlLeaseV1)
 	backend := providerUninstallRunBackendV1{
-		acquire: deploy.AcquireOperationLock,
-		release: func(operation *deploy.OperationLock) error { return operation.Unlock() },
-		plan:    planProviderUninstallV1,
+		recoverPending: recoverProviderUninstallPublicationV1,
+		acquire:        deploy.AcquireOperationLock,
+		release:        func(operation *deploy.OperationLock) error { return operation.Unlock() },
+		plan:           planProviderUninstallV1,
 		admit: func(ctx context.Context, dir string, operation *deploy.OperationLock, _ ControlAdmissionInputV1) (AdmittedControlV1, error) {
 			if err := operation.Unlock(); err != nil {
 				return AdmittedControlV1{}, err
@@ -148,9 +150,10 @@ func TestRunProviderUninstallConflictRecommendsWait(t *testing.T) {
 		t.Fatal(err)
 	}
 	backend := providerUninstallRunBackendV1{
-		acquire: deploy.AcquireOperationLock,
-		release: func(operation *deploy.OperationLock) error { return operation.Unlock() },
-		plan:    planProviderUninstallV1,
+		recoverPending: recoverProviderUninstallPublicationV1,
+		acquire:        deploy.AcquireOperationLock,
+		release:        func(operation *deploy.OperationLock) error { return operation.Unlock() },
+		plan:           planProviderUninstallV1,
 		admit: func(_ context.Context, _ string, operation *deploy.OperationLock, _ ControlAdmissionInputV1) (AdmittedControlV1, error) {
 			if err := operation.Unlock(); err != nil {
 				return AdmittedControlV1{}, err
@@ -185,9 +188,10 @@ func TestRunProviderUninstallRemoveDirTransfersAdmissionOwnership(t *testing.T) 
 	removed := false
 	lease := new(deploy.ControlLeaseV1)
 	backend := providerUninstallRunBackendV1{
-		acquire: deploy.AcquireOperationLock,
-		release: func(operation *deploy.OperationLock) error { return operation.Unlock() },
-		plan:    planProviderUninstallV1,
+		recoverPending: recoverProviderUninstallPublicationV1,
+		acquire:        deploy.AcquireOperationLock,
+		release:        func(operation *deploy.OperationLock) error { return operation.Unlock() },
+		plan:           planProviderUninstallV1,
 		admit: func(_ context.Context, _ string, operation *deploy.OperationLock, input ControlAdmissionInputV1) (AdmittedControlV1, error) {
 			return AdmittedControlV1{Operation: operation, Marker: deploy.ControlMarkerV1{ID: "control-0000000000000003", Operation: input.Operation}, Lease: lease}, nil
 		},
