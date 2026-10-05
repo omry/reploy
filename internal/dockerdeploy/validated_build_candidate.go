@@ -142,8 +142,15 @@ func LoadValidatedBuildCandidate(
 	if record.Discarded {
 		return ValidatedBuildCandidateV1{}, false, nil
 	}
-	if err := requireValidatedConsumerBoundaryV1(operation, "completed validated content acceptance"); err != nil {
+	lock, found, err := operation.ReadBuildLock(record.BuildLockDigest, registry.ValidateRequirementProfileV1)
+	if err != nil {
 		return ValidatedBuildCandidateV1{}, false, err
+	}
+	if !found {
+		return ValidatedBuildCandidateV1{}, false, fmt.Errorf("validated build lock %s is missing", record.BuildLockDigest)
+	}
+	if (record.Owner != nil && record.Companion != nil) != (lock.PortableRuntimeLayer != nil) {
+		return ValidatedBuildCandidateV1{}, false, fmt.Errorf("validated record and retained build lock disagree about portable ownership; ownership was preserved")
 	}
 	inputs, err := ValidatedBuildInputs(document, state.Overlay, overrides, deploymentDir, state.Platform)
 	if err != nil {
@@ -162,13 +169,6 @@ func LoadValidatedBuildCandidate(
 	}
 	if !ValidatedBuildRecordMatchesInputs(record, inputs) {
 		return ValidatedBuildCandidateV1{}, false, nil
-	}
-	lock, found, err := operation.ReadBuildLock(record.BuildLockDigest, registry.ValidateRequirementProfileV1)
-	if err != nil {
-		return ValidatedBuildCandidateV1{}, false, err
-	}
-	if !found {
-		return ValidatedBuildCandidateV1{}, false, fmt.Errorf("validated build lock %s is missing", record.BuildLockDigest)
 	}
 	digest, err := deploy.BuildLockDigestV1(lock, registry.ValidateRequirementProfileV1)
 	if err != nil {
@@ -190,13 +190,6 @@ func LoadValidatedBuildCandidate(
 			return ValidatedBuildCandidateV1{}, false, fmt.Errorf("validated build cache: %w", err)
 		}
 	}
-	if verifyImage {
-		if err := VerifyEnvironmentGenerationReference(
-			ctx, lock.FinalImage, record.ImageReference, document.Environment.ID, deploymentDir,
-		); err != nil {
-			return ValidatedBuildCandidateV1{}, false, fmt.Errorf("validated build image: %w", err)
-		}
-	}
 	policyDigest, err := deploy.RuntimePolicyDigestV1(lock.RuntimePolicy)
 	if err != nil {
 		return ValidatedBuildCandidateV1{}, false, err
@@ -213,6 +206,21 @@ func LoadValidatedBuildCandidate(
 	current := CurrentBuild{State: synthetic, Generation: generation, Lock: lock}
 	if err := deploy.ValidateStateV1(synthetic); err != nil {
 		return ValidatedBuildCandidateV1{}, false, fmt.Errorf("validated build synthetic state: %w", err)
+	}
+	if lock.PortableRuntimeLayer != nil {
+		pairs, err := ProjectEnvironmentOwnedReferencesV1(generation, lock, document.Environment.ID, deploymentDir)
+		if err != nil {
+			return ValidatedBuildCandidateV1{}, false, err
+		}
+		if (len(pairs) == 2) != (record.Companion != nil) ||
+			(len(pairs) == 2 && (*record.Owner != generation || *record.Companion != pairs[1])) {
+			return ValidatedBuildCandidateV1{}, false, fmt.Errorf("validated build companion does not match its complete lock")
+		}
+	}
+	if verifyImage {
+		if err := verifyCurrentBuildOwnedReferencesV1(ctx, operation, store, current, document.Environment.ID, deploymentDir); err != nil {
+			return ValidatedBuildCandidateV1{}, false, fmt.Errorf("validated build image ownership: %w", err)
+		}
 	}
 	return ValidatedBuildCandidateV1{Record: record, Current: current}, true, nil
 }

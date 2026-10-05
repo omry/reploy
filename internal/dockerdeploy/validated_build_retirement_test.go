@@ -945,12 +945,9 @@ func TestProviderBuildAdmissionRecoversPendingValidatedBeforeConsumersV1(t *test
 				if recoveryCalls != 1 {
 					t.Fatalf("recovery calls=%d error=%v", recoveryCalls, err)
 				}
-				if committed && !noCache {
-					// Content acceptance remains the independently owned .8 gate.
-					if preparationCalls != 0 || err == nil || !strings.Contains(err.Error(), "completed validated content acceptance") {
-						t.Fatalf("recovered owner bypassed content gate: %d %v", preparationCalls, err)
-					}
-				} else if preparationCalls != 1 || !errors.Is(err, stop) {
+				// Completed owners can now reach preparation. Any actual reuse
+				// must pass the exact paired ownership and optional content audit.
+				if preparationCalls != 1 || !errors.Is(err, stop) {
 					t.Fatalf("provider admission did not reach recovered state: %d %v", preparationCalls, err)
 				}
 				if _, pending, err := images.operation.ReadPendingValidatedBuildV1(); err != nil || pending {

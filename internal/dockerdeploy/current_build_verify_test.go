@@ -182,7 +182,7 @@ func TestVerifyLockedImagesV1ExplainsMissingProviderLayer(t *testing.T) {
 		Image:  baseImage,
 	}
 	layerID := lock.Nodes[0].Result.ConfigDigest
-	_, err = verifyLockedImagesV1(
+	_, _, err = verifyLockedImagesV1(
 		t.Context(),
 		lock,
 		deploy.PrefixValidationV1{},
@@ -326,7 +326,7 @@ func TestVerifyLockedImagesV1RerunsCumulativeLayerValidation(t *testing.T) {
 	}
 	var inspected []canonical.Digest
 	validationCalls := 0
-	images, err := verifyLockedImagesV1(
+	images, _, err := verifyLockedImagesV1(
 		t.Context(),
 		lock,
 		record,
