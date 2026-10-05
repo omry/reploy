@@ -16,6 +16,8 @@ import (
 )
 
 type CurrentBuildVerificationInputV1 struct {
+	Operation     *deploy.OperationLock
+	DeploymentDir string
 	Store         providerstore.Store
 	Current       CurrentBuild
 	Runtime       CurrentRuntimePlanV1
@@ -79,9 +81,6 @@ func verifyLoadedCurrentBuildV1(
 	input CurrentBuildVerificationInputV1,
 	backend currentBuildVerificationBackendV1,
 ) (CurrentBuildVerificationResultV1, error) {
-	if input.Current.Lock.PortableRuntimeLayer != nil {
-		return CurrentBuildVerificationResultV1{}, fmt.Errorf("portable final-image verification is not yet supported by this version")
-	}
 	if ctx == nil {
 		return CurrentBuildVerificationResultV1{}, fmt.Errorf("verify current build requires a context")
 	}
@@ -116,6 +115,12 @@ func verifyLoadedCurrentBuildV1(
 		return CurrentBuildVerificationResultV1{}, err
 	}
 
+	if input.Current.Lock.PortableRuntimeLayer != nil {
+		if err := verifyCurrentBuildOwnedReferencesV1(ctx, input.Operation, input.Store, input.Current, document.Environment.ID, input.DeploymentDir); err != nil {
+			return CurrentBuildVerificationResultV1{}, fmt.Errorf("verify portable build ownership: %w", err)
+		}
+	}
+
 	closure, err := backend.verifyClosure(
 		input.Current.Lock,
 		input.Store,
@@ -132,7 +137,12 @@ func verifyLoadedCurrentBuildV1(
 	if err != nil {
 		return CurrentBuildVerificationResultV1{}, fmt.Errorf("load current build validation record: %w", err)
 	}
-	images, err := verifyLockedImagesV1(
+	if input.Current.Lock.PortableRuntimeLayer != nil {
+		if err := verifyCurrentBuildOwnedReferencesV1(ctx, input.Operation, input.Store, input.Current, document.Environment.ID, input.DeploymentDir); err != nil {
+			return CurrentBuildVerificationResultV1{}, fmt.Errorf("recheck portable ownership after metadata: %w", err)
+		}
+	}
+	images, final, err := verifyLockedImagesV1(
 		ctx,
 		input.Current.Lock,
 		storedValidation,
@@ -141,6 +151,14 @@ func verifyLoadedCurrentBuildV1(
 	)
 	if err != nil {
 		return CurrentBuildVerificationResultV1{}, err
+	}
+	if input.Current.Lock.PortableRuntimeLayer != nil {
+		if err := verifyCurrentPortableContentV1(ctx, input.Store, input.Current.Lock, final); err != nil {
+			return CurrentBuildVerificationResultV1{}, fmt.Errorf("verify current final portable content: %w", err)
+		}
+		if err := verifyCurrentBuildOwnedReferencesV1(ctx, input.Operation, input.Store, input.Current, document.Environment.ID, input.DeploymentDir); err != nil {
+			return CurrentBuildVerificationResultV1{}, fmt.Errorf("recheck portable build ownership: %w", err)
+		}
 	}
 	return CurrentBuildVerificationResultV1{
 		StoreObjects: len(closure),
@@ -216,14 +234,14 @@ func verifyLockedImagesV1(
 	storedValidation deploy.PrefixValidationV1,
 	run FullImageValidationRunner,
 	inspect providerGraphImageInspector,
-) (int, error) {
+) (int, InspectedImageCandidate, error) {
 	base, err := inspect(
 		ctx,
 		BuiltImageCandidate{ImageID: lock.Base.ConfigDigest},
 		lock.Platform,
 	)
 	if err != nil {
-		return 0, currentBuildImageInspectionError(
+		return 0, InspectedImageCandidate{}, currentBuildImageInspectionError(
 			"current base image",
 			lock.Base.ConfigDigest,
 			err,
@@ -231,13 +249,13 @@ func verifyLockedImagesV1(
 	}
 	expectedBase, err := realizedImageFromDescriptor(lock.Base)
 	if err != nil {
-		return 0, fmt.Errorf("verify current base descriptor: %w", err)
+		return 0, InspectedImageCandidate{}, fmt.Errorf("verify current base descriptor: %w", err)
 	}
 	if base.Image.ConfigDigest != expectedBase.ConfigDigest ||
 		base.Image.RootFSSubject != expectedBase.RootFSSubject ||
 		base.Descriptor.Platform != lock.Base.Platform ||
 		!reflect.DeepEqual(base.Descriptor.RootFSDiffIDs, lock.Base.RootFSDiffIDs) {
-		return 0, fmt.Errorf("current base image no longer matches the locked descriptor")
+		return 0, InspectedImageCandidate{}, fmt.Errorf("current base image no longer matches the locked descriptor")
 	}
 
 	baseOutputs := make([]providers.RealizedOutput, 0, len(lock.Catalog))
@@ -253,7 +271,7 @@ func verifyLockedImagesV1(
 
 	order, err := providers.StableProviderNodeOrder(lock.Graph.Nodes, lock.Graph.Edges)
 	if err != nil {
-		return 0, fmt.Errorf("verify current provider graph order: %w", err)
+		return 0, InspectedImageCandidate{}, fmt.Errorf("verify current provider graph order: %w", err)
 	}
 	nodes := make(map[providers.NodeID]deploy.NodeLockV1, len(lock.Nodes))
 	for _, node := range lock.Nodes {
@@ -272,14 +290,14 @@ func verifyLockedImagesV1(
 			lock.Platform,
 		)
 		if err != nil {
-			return 0, currentBuildImageInspectionError(
+			return 0, InspectedImageCandidate{}, currentBuildImageInspectionError(
 				fmt.Sprintf("cached %s layer image", providerDisplayName(node.Provider)),
 				node.Result.ConfigDigest,
 				err,
 			)
 		}
 		if layer.Image != node.Result {
-			return 0, fmt.Errorf(
+			return 0, InspectedImageCandidate{}, fmt.Errorf(
 				"cached %s layer image no longer matches its locked identity",
 				providerDisplayName(node.Provider),
 			)
@@ -291,7 +309,7 @@ func verifyLockedImagesV1(
 			RuntimePolicy: lock.RuntimePolicy,
 		}, registry.ValidateRequirementProfileV1, run)
 		if err != nil {
-			return 0, fmt.Errorf(
+			return 0, InspectedImageCandidate{}, fmt.Errorf(
 				"verify cached %s layer contents: %w",
 				providerDisplayName(node.Provider),
 				err,
@@ -309,8 +327,30 @@ func verifyLockedImagesV1(
 			RuntimePolicy: lock.RuntimePolicy,
 		}, registry.ValidateRequirementProfileV1, run)
 		if err != nil {
-			return 0, fmt.Errorf("verify current base image contents: %w", err)
+			return 0, InspectedImageCandidate{}, fmt.Errorf("verify current base image contents: %w", err)
 		}
+	}
+
+	if layer := lock.PortableRuntimeLayer; layer != nil {
+		if layer.Upstream != source.Image {
+			return 0, InspectedImageCandidate{}, fmt.Errorf("portable runtime layer does not name the exact provider upstream")
+		}
+		portable, err := inspect(ctx, BuiltImageCandidate{ImageID: layer.Result.ConfigDigest}, lock.Platform)
+		if err != nil {
+			return 0, InspectedImageCandidate{}, currentBuildImageInspectionError("cached portable runtime layer image", layer.Result.ConfigDigest, err)
+		}
+		if err := ValidateInspectedImageCandidateIdentity(portable); err != nil {
+			return 0, InspectedImageCandidate{}, fmt.Errorf("verify portable runtime descriptor: %w", err)
+		}
+		if portable.Image != layer.Result || portable.Descriptor.Platform != lock.Platform {
+			return 0, InspectedImageCandidate{}, fmt.Errorf("cached portable runtime layer image no longer matches its locked identity or platform")
+		}
+		prefix, got := source.Descriptor.RootFSDiffIDs, portable.Descriptor.RootFSDiffIDs
+		if len(got) < len(prefix) || !reflect.DeepEqual(got[:len(prefix)], prefix) {
+			return 0, InspectedImageCandidate{}, fmt.Errorf("portable runtime layer changed the upstream filesystem prefix")
+		}
+		source = portable
+		inspectedImages++
 	}
 
 	runtimeImage, err := inspect(
@@ -319,29 +359,29 @@ func verifyLockedImagesV1(
 		lock.Platform,
 	)
 	if err != nil {
-		return 0, currentBuildImageInspectionError(
+		return 0, InspectedImageCandidate{}, currentBuildImageInspectionError(
 			"cached application runtime layer image",
 			lock.RuntimeLayer.Result.ConfigDigest,
 			err,
 		)
 	}
 	if runtimeImage.Image != lock.RuntimeLayer.Result {
-		return 0, fmt.Errorf("cached application runtime layer image no longer matches its locked identity")
+		return 0, InspectedImageCandidate{}, fmt.Errorf("cached application runtime layer image no longer matches its locked identity")
 	}
 	if err := ValidateInspectedApplicationRuntimeLayerCandidate(ApplicationRuntimeLayerBuildRequest{
 		Source: source, Verifier: lock.RuntimeLayer.Verifier, Account: lock.RuntimeLayer.Account, Platform: lock.Platform,
 	}, runtimeImage); err != nil {
-		return 0, fmt.Errorf("verify cached application runtime layer: %w", err)
+		return 0, InspectedImageCandidate{}, fmt.Errorf("verify cached application runtime layer: %w", err)
 	}
 	runtimeRecord, err := ValidateImage(ctx, FullImageValidationInput{
 		Image: runtimeImage, Profiles: append([]providers.RequirementProfile{}, profiles...),
 		Outputs: append([]providers.RealizedOutput{}, outputs...), RuntimePolicy: lock.RuntimePolicy,
 	}, registry.ValidateRequirementProfileV1, run)
 	if err != nil {
-		return 0, fmt.Errorf("verify application runtime image contents: %w", err)
+		return 0, InspectedImageCandidate{}, fmt.Errorf("verify application runtime image contents: %w", err)
 	}
 	if !reflect.DeepEqual(runtimeRecord, storedValidation) {
-		return 0, fmt.Errorf("current application runtime validation evidence does not match the recorded final-prefix evidence")
+		return 0, InspectedImageCandidate{}, fmt.Errorf("current application runtime validation evidence does not match the recorded final-prefix evidence")
 	}
 	inspectedImages++
 
@@ -351,7 +391,7 @@ func verifyLockedImagesV1(
 		lock.Platform,
 	)
 	if err != nil {
-		return 0, currentBuildImageInspectionError(
+		return 0, InspectedImageCandidate{}, currentBuildImageInspectionError(
 			"current environment image",
 			lock.FinalImage.ConfigDigest,
 			err,
@@ -363,12 +403,12 @@ func verifyLockedImagesV1(
 		ValidationReference: lock.ValidationRecord,
 		Platform:            lock.Platform,
 	}); err != nil {
-		return 0, fmt.Errorf("verify current final image: %w", err)
+		return 0, InspectedImageCandidate{}, fmt.Errorf("verify current final image: %w", err)
 	}
 	if final.Image != lock.FinalImage {
-		return 0, fmt.Errorf("current final image no longer matches the locked image")
+		return 0, InspectedImageCandidate{}, fmt.Errorf("current final image no longer matches the locked image")
 	}
-	return inspectedImages + 1, nil
+	return inspectedImages + 1, final, nil
 }
 
 func currentBuildImageInspectionError(
@@ -385,4 +425,27 @@ func currentBuildImageInspectionError(
 		}
 	}
 	return fmt.Errorf("verify %s: %w", subject, err)
+}
+
+func verifyCurrentPortableContentV1(ctx context.Context, store providerstore.Store, lock deploy.BuildLockV1, final InspectedImageCandidate) (resultErr error) {
+	payloads, err := MaterializePortableRuntimePayloadsLockedV1(ctx, store, *lock.PortableTools)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, payloads.Cleanup()) }()
+	if len(payloads.sealedInventory) == 0 {
+		if len(payloads.authorityEnvironment) == 0 {
+			return fmt.Errorf("portable runtime layer has no selected runtime payloads or environment")
+		}
+		if lock.PortableRuntimeLayer.Result.RootFSSubject != lock.PortableRuntimeLayer.Upstream.RootFSSubject {
+			return fmt.Errorf("portable environment-only layer changed the upstream filesystem")
+		}
+	}
+	if err := requirePortableRuntimeImageEnvironmentV1(final, payloads.authorityEnvironment); err != nil {
+		return err
+	}
+	if len(payloads.sealedInventory) != 0 {
+		return verifyPortableRuntimeInventoryV1(ctx, store, final, payloads.sealedInventory)
+	}
+	return nil
 }
