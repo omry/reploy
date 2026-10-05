@@ -1,0 +1,2 @@
+kind: Fixed
+body: Allow three minutes per Go test package so the complete lifecycle suite can finish on slower native CI runners.
