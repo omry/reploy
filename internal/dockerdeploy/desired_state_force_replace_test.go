@@ -85,7 +85,7 @@ func TestForceReplaceStagedDesiredStateStopsBuiltWorkloadAndRemovesGeneration(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(effects, []string{"stop", "commit-state", "remove-reference"}) {
+	if !reflect.DeepEqual(effects, []string{"stop", "remove-reference", "commit-state"}) {
 		t.Fatalf("effects = %#v", effects)
 	}
 	if !result.Changed || result.State.Current != nil || result.State.Staging == nil || !reflect.DeepEqual(result.State.Overlay, deploy.EmptyRequestOverlayV1()) {
@@ -100,7 +100,7 @@ func TestForceReplaceStagedDesiredStateStopsBuiltWorkloadAndRemovesGeneration(t 
 	}
 }
 
-func TestForceReplaceStagedDesiredStateKeepsOldReferenceWhenStateCommitFails(t *testing.T) {
+func TestForceReplaceStagedDesiredStateKeepsOldAuthorityWhenStateCommitFails(t *testing.T) {
 	dir, operation, store, _, state := currentBuildFixture(t, true)
 	oldDocument, _ := testSelectedPlatformDocumentV1(t)
 	oldDocument.Environment.ID = "demo"
@@ -144,7 +144,7 @@ func TestForceReplaceStagedDesiredStateKeepsOldReferenceWhenStateCommitFails(t *
 			return deploy.DesiredStateUpdateResult{}, nil
 		},
 	})
-	if !errors.Is(err, wantCommit) || removed {
+	if !errors.Is(err, wantCommit) || !removed {
 		t.Fatalf("commit error = %v, removed reference = %t", err, removed)
 	}
 	locked, lockErr := deploy.AcquireOperationLock(t.Context(), dir)
