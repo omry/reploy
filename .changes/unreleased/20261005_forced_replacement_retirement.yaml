@@ -1,0 +1,2 @@
+kind: Fixed
+body: Retire all former staged image owners before forced blueprint replacement, preserving old ownership authority for interrupted cleanup retries. Ordinary staging waits for outstanding image publication to finish.
