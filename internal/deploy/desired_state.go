@@ -102,6 +102,16 @@ func setDesiredStateV1(
 		}
 	}()
 
+	if _, pending, err := lock.ReadPendingBuild(); err != nil {
+		return DesiredStateUpdateResult{}, fmt.Errorf("read current publication before staging: %w", err)
+	} else if pending {
+		return DesiredStateUpdateResult{}, fmt.Errorf("staging requires completed current publication; recover the interrupted build first")
+	}
+	if _, pending, err := lock.ReadPendingValidatedBuildV1(); err != nil {
+		return DesiredStateUpdateResult{}, fmt.Errorf("read validated publication before staging: %w", err)
+	} else if pending {
+		return DesiredStateUpdateResult{}, fmt.Errorf("staging requires completed validated publication; recover the interrupted validation first")
+	}
 	current, found, err := lock.ReadStateV1()
 	if err != nil {
 		return DesiredStateUpdateResult{}, fmt.Errorf("read deployment state: %w", err)
@@ -239,6 +249,16 @@ func SelectDesiredPlatformV1(
 		}
 	}()
 
+	if _, pending, err := lock.ReadPendingBuild(); err != nil {
+		return DesiredStateUpdateResult{}, fmt.Errorf("read current publication before restaging: %w", err)
+	} else if pending {
+		return DesiredStateUpdateResult{}, fmt.Errorf("restaging requires completed current publication; recover the interrupted build first")
+	}
+	if _, pending, err := lock.ReadPendingValidatedBuildV1(); err != nil {
+		return DesiredStateUpdateResult{}, fmt.Errorf("read validated publication before restaging: %w", err)
+	} else if pending {
+		return DesiredStateUpdateResult{}, fmt.Errorf("restaging requires completed validated publication; recover the interrupted validation first")
+	}
 	current, found, err := lock.ReadStateV1()
 	if err != nil {
 		return DesiredStateUpdateResult{}, fmt.Errorf("read deployment state: %w", err)
