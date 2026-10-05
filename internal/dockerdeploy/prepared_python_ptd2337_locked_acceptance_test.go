@@ -30,8 +30,19 @@ import (
 // because this test must run in the ordinary package test suite; the provider
 // registry transaction and alias claims remain production code.
 func TestPreparedPythonGraphPTD2337LockedReplayAcceptance(t *testing.T) {
+	testPreparedPythonGraphLockedAcceptance(t, nil)
+}
+
+// Additional callers reuse the Docker seams while exercising their own real
+// graph entrypoint. The existing replay assertions remain below.
+func testPreparedPythonGraphLockedAcceptance(t *testing.T, continuation func(preparedPythonGraphReuseFixture, portableToolPythonLockedTestFixtureV1)) {
 	reuse := newPreparedPythonGraphReuseFixture(t)
-	locked := newPortableToolPythonLockedTestFixture(t)
+	var locked portableToolPythonLockedTestFixtureV1
+	if continuation == nil {
+		locked = newPortableToolPythonLockedTestFixture(t)
+	} else {
+		locked = applicationPortablePayloadFixtureForTest(t)
+	}
 	packedProbe := packedProbeExecutable(t)
 	previousLocateProbeArchive := locateProbeArchiveExecutable
 	locateProbeArchiveExecutable = func() (string, error) { return packedProbe, nil }
@@ -184,7 +195,11 @@ func TestPreparedPythonGraphPTD2337LockedReplayAcceptance(t *testing.T) {
 		return providers.ExecuteProviderGraph(ctx, request)
 	}
 
-	stubPTD2337LockedReplayResolver(t, &resolverInputDir, &resolverOutputDir, locked.component.TestedTags)
+	stubPTD2337LockedReplayResolver(t, &resolverInputDir, &resolverOutputDir, locked.component.TestedTags, continuation != nil)
+	if continuation != nil {
+		continuation(reuse, locked)
+		return
+	}
 	base := reuse.lock.Base
 	domains, err := applicationPortableProviderDomainsV1(locked.fresh.Plan, reuse.request.Plan)
 	if err != nil {
@@ -489,7 +504,7 @@ func ptd2337RealizedOutputs(bundle providers.ResolvedBundle) []providers.Realize
 	return result
 }
 
-func stubPTD2337LockedReplayResolver(t *testing.T, inputDir, outputDir *string, testedTags []string) {
+func stubPTD2337LockedReplayResolver(t *testing.T, inputDir, outputDir *string, testedTags []string, completeBindingDependencies ...bool) {
 	t.Helper()
 	previous := bindPythonResolverCommandRunner
 	t.Cleanup(func() { bindPythonResolverCommandRunner = previous })
@@ -526,6 +541,10 @@ func stubPTD2337LockedReplayResolver(t *testing.T, inputDir, outputDir *string, 
 				if spec.Args[index] == "-m" && (spec.Args[index+1] == "uv" || spec.Args[index+1] == "pip") {
 					if err := writeLockedReplayOutput(t, *inputDir, *outputDir); err != nil {
 						return err
+					}
+					if len(completeBindingDependencies) != 0 && completeBindingDependencies[0] {
+						writeReuseTestWheel(t, filepath.Join(*outputDir, "greenlet-3.1.1-py3-none-any.whl"), "greenlet", "3.1.1")
+						writeReuseTestWheel(t, filepath.Join(*outputDir, "pyee-13.0.0-py3-none-any.whl"), "pyee", "13.0.0")
 					}
 					return nil
 				}

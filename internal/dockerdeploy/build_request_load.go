@@ -63,8 +63,17 @@ func loadBuildRequestWithInputsV1(
 	state deploy.StateV1,
 	document blueprint.Document,
 ) (LoadedBuildRequestV1, error) {
+	if _, _, err := applicationPortableRequirementGroupsV1(document); err != nil {
+		return LoadedBuildRequestV1{}, err
+	}
+	// Preparation must select and seal the complete application plan before
+	// acquisition. Loading derives only the ordinary provider portion.
+	ordinary, err := providerDocumentWithoutApplicationToolsV1(document)
+	if err != nil {
+		return LoadedBuildRequestV1{}, err
+	}
 	request, err := BuildResolvedRequestWithOverridesV1(
-		document, state.Overlay, packageOverrides, baseImage, state.Platform,
+		ordinary, state.Overlay, packageOverrides, baseImage, state.Platform,
 		append([]providers.ResolvedSourceInput{}, sources...),
 	)
 	if err != nil {

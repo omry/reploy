@@ -43,6 +43,7 @@ type LockedProviderBuildPreparationV1 struct {
 	SelectedBase     SelectedProviderBase
 	PreparedBase     *PreparedProviderBase
 	FinalImageConfig providers.ImageConfigPolicy
+	ApplicationTools *ApplicationPortableToolPlanV1
 	StartupVerifier  deploy.ApplicationStartupVerifierV1
 	// Current is the verified previously published generation, including when
 	// it is stale. ReusableLock is the only cache input for later provider work
@@ -235,6 +236,11 @@ func prepareLockedProviderBuildV1(
 	if err != nil {
 		return LockedProviderBuildPreparationV1{}, err
 	}
+	applicationGroups, _, err := applicationPortableRequirementGroupsV1(loaded.Document)
+	if err != nil {
+		return LockedProviderBuildPreparationV1{}, err
+	}
+	hasApplicationTools := len(applicationGroups) != 0
 	if _, err := RuntimePlansV1(loaded.Document, input.DockerPlan); err != nil {
 		return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build runtime plan: %w", err)
 	}
@@ -283,6 +289,8 @@ func prepareLockedProviderBuildV1(
 			if available {
 				lock := current.Lock
 				result.ReusableLock = &lock
+			}
+			if available && !hasApplicationTools {
 				lockedSources, err := backend.lockedSources(current.Lock)
 				if err != nil {
 					return LockedProviderBuildPreparationV1{}, err
@@ -356,7 +364,6 @@ func prepareLockedProviderBuildV1(
 			}
 		}
 	}
-
 	selectCtx, endSelect := buildprofile.Start(ctx, "Select base image")
 	selected, err := backend.selectBase(selectCtx, loaded.Request)
 	endSelect(err)
@@ -380,6 +387,8 @@ func prepareLockedProviderBuildV1(
 		}
 		if available {
 			result.ReusableLock = &candidate.Lock
+		}
+		if available && !hasApplicationTools {
 			lockedSources, err := backend.lockedSources(candidate.Lock)
 			if err != nil {
 				return LockedProviderBuildPreparationV1{}, err
@@ -409,6 +418,27 @@ func prepareLockedProviderBuildV1(
 	// provider execution, local sources must re-enter through fresh wheel
 	// construction rather than through the prior lock.
 	result.Loaded.Request.Sources = []providers.ResolvedSourceInput{}
+	if hasApplicationTools {
+		config, err := ProviderFinalImageConfigV1(selected.Config)
+		if err != nil {
+			return LockedProviderBuildPreparationV1{}, err
+		}
+		applicationTools, err := PlanApplicationPortableToolsV1(ctx, PlanApplicationPortableToolsInputV1{
+			Document: loaded.Document, Components: loaded.Request.Components,
+			Platform: loaded.Request.Platform, Store: input.Store, Base: selected.Descriptor,
+			FinalImageConfig: config, ReployVersion: input.ReployVersion,
+		})
+		if err != nil {
+			return LockedProviderBuildPreparationV1{}, err
+		}
+		if applicationTools == nil || applicationTools.sealed == nil {
+			return LockedProviderBuildPreparationV1{}, fmt.Errorf("application requests were not completely selected")
+		}
+		selected.Plan = applicationTools.sealed.providerPlan
+		result.SelectedBase = selected
+		result.ApplicationTools = applicationTools
+		result.Loaded.Request.Components = applicationTools.ProjectedComponents
+	}
 	realizeCtx, endRealize := buildprofile.Start(ctx, "Inspect and realize base image")
 	prepared, err := backend.realizeBase(realizeCtx, input.Store, selected)
 	endRealize(err)

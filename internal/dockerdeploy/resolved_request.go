@@ -25,13 +25,22 @@ func finalizeResolvedRequestV1(
 	packageOverrides deploy.PackageOverrideIntentV1,
 	candidateRequest providers.ResolvedRequestV1,
 	graph providers.GraphExecutionResult,
+	applicationTools ...*ApplicationPortableToolPlanV1,
 ) (providers.ResolvedRequestV1, deploy.PackageOverrideIntentV1, error) {
+	if len(applicationTools) > 1 {
+		return providers.ResolvedRequestV1{}, deploy.PackageOverrideIntentV1{}, fmt.Errorf("finalize resolved request accepts one application selection")
+	}
+	var selected *ApplicationPortableToolPlanV1
+	if len(applicationTools) == 1 {
+		selected = applicationTools[0]
+	}
 	if graph.SelectedSources == nil {
 		return providers.ResolvedRequestV1{}, deploy.PackageOverrideIntentV1{}, fmt.Errorf("finalize resolved request selected sources must use an array")
 	}
-	expectedCandidates, err := BuildResolvedRequestWithPackageOverridesV1(
+	expectedCandidates, err := resolvedRequestWithApplicationToolsV1(
 		document, overlay, packageOverrides, candidateRequest.Platform,
 		append([]providers.ResolvedSourceInput{}, candidateRequest.Sources...),
+		selected,
 	)
 	if err != nil {
 		return providers.ResolvedRequestV1{}, deploy.PackageOverrideIntentV1{}, err
@@ -76,6 +85,82 @@ func finalizeResolvedRequestV1(
 		return providers.ResolvedRequestV1{}, deploy.PackageOverrideIntentV1{}, fmt.Errorf("final provider graph plan does not match its resolved component requests")
 	}
 	return result, relevant, nil
+}
+
+// providerDocumentWithoutApplicationToolsV1 creates only the ordinary provider
+// view. The original document remains the blueprint and selection authority;
+// this view alone never authorizes consumption or publication.
+func providerDocumentWithoutApplicationToolsV1(document blueprint.Document) (blueprint.Document, error) {
+	applications := make(map[string]blueprint.Application, len(document.Environment.Applications))
+	implicitPython := false
+	for name, application := range document.Environment.Applications {
+		// A binding-only application uses the same default base interpreter as
+		// an ordinary Python package request. Preserve an explicit supplier.
+		if application.Packages.Python == nil {
+			for _, group := range application.Packages.Tools {
+				implicitPython = implicitPython || group.Binding.Infer || group.Binding.All
+				for _, binding := range group.Binding.Explicit {
+					implicitPython = implicitPython || binding == blueprint.ContributionProviderPython
+				}
+			}
+		}
+		application.Packages.Tools = nil
+		applications[name] = application
+	}
+	document.Environment.Applications = applications
+	if _, explicit := document.Environment.Base.Exports["python"]; implicitPython && !explicit {
+		exports := make(map[string]blueprint.BaseExecutableExport, len(document.Environment.Base.Exports)+1)
+		for name, export := range document.Environment.Base.Exports {
+			exports[name] = export
+		}
+		exports["python"] = blueprint.BaseExecutableExport{Executable: "/usr/local/bin/python"}
+		document.Environment.Base.Exports = exports
+		if err := document.Environment.RebuildProviderContributions(); err != nil {
+			return blueprint.Document{}, err
+		}
+	}
+	return document, nil
+}
+
+func resolvedRequestWithApplicationToolsV1(
+	document blueprint.Document, overlay deploy.RequestOverlayV1,
+	packageOverrides deploy.PackageOverrideIntentV1, platform blueprint.Platform,
+	sources []providers.ResolvedSourceInput, selected *ApplicationPortableToolPlanV1,
+) (providers.ResolvedRequestV1, error) {
+	if selected == nil {
+		return BuildResolvedRequestWithPackageOverridesV1(document, overlay, packageOverrides, platform, sources)
+	}
+	if selected.sealed == nil {
+		return providers.ResolvedRequestV1{}, fmt.Errorf("application request requires sealed selection")
+	}
+	digest, err := blueprint.DocumentDigestV1(document)
+	if err != nil || digest != selected.sealed.documentDigest {
+		return providers.ResolvedRequestV1{}, fmt.Errorf("application selection does not consume this exact blueprint")
+	}
+	ordinary, err := providerDocumentWithoutApplicationToolsV1(document)
+	if err != nil {
+		return providers.ResolvedRequestV1{}, err
+	}
+	request, err := BuildResolvedRequestWithPackageOverridesV1(ordinary, overlay, packageOverrides, platform, sources)
+	if err != nil {
+		return providers.ResolvedRequestV1{}, err
+	}
+	plan, err := selected.sealed.selection.Plan()
+	if err != nil {
+		return providers.ResolvedRequestV1{}, err
+	}
+	components, err := apt.ProjectPortableToolAPTRootsV1(plan, request.Components)
+	if err != nil {
+		return providers.ResolvedRequestV1{}, err
+	}
+	request.Components, _, err = pythonprovider.ProjectPortableToolPythonBindingsV1(plan, components)
+	if err != nil {
+		return providers.ResolvedRequestV1{}, err
+	}
+	if err := providers.ValidateResolvedRequestV1(request, registry.ValidateResolvedRequestOwnersV1); err != nil {
+		return providers.ResolvedRequestV1{}, err
+	}
+	return request, nil
 }
 
 func relevantPackageOverrideIntentV1(

@@ -15,24 +15,26 @@ import (
 )
 
 type ProviderBuildCompletionInput struct {
-	Environment      string
-	DeploymentDir    string
-	Document         blueprint.Document
-	DockerPlan       DockerExecutionPlan
-	ResolvedRequest  providers.ResolvedRequestV1
-	Overlay          deploy.RequestOverlayV1
-	PackageOverrides deploy.PackageOverrideIntentV1
-	Base             deploy.ImageDescriptor
-	BaseCatalog      []providers.RealizedOutput
-	Graph            providers.GraphExecutionResult
-	PortableTools    *providers.PortableToolLockV1
-	Validation       ProviderGraphValidationPlan
-	StartupVerifier  deploy.ApplicationStartupVerifierV1
-	RunValidation    FullImageValidationRunner
-	RunOptions       RunOptions
-	ValidateChoices  bool
-	ValidatedInputs  ValidatedBuildInputsV1
-	NoCache          bool
+	Environment          string
+	DeploymentDir        string
+	Document             blueprint.Document
+	DockerPlan           DockerExecutionPlan
+	ResolvedRequest      providers.ResolvedRequestV1
+	Overlay              deploy.RequestOverlayV1
+	PackageOverrides     deploy.PackageOverrideIntentV1
+	Base                 deploy.ImageDescriptor
+	BaseCatalog          []providers.RealizedOutput
+	Graph                providers.GraphExecutionResult
+	PortableTools        *providers.PortableToolLockV1
+	ApplicationTools     *ApplicationPortableToolPlanV1
+	PortableRuntimeLayer *deploy.PortableRuntimeLayerV1
+	Validation           ProviderGraphValidationPlan
+	StartupVerifier      deploy.ApplicationStartupVerifierV1
+	RunValidation        FullImageValidationRunner
+	RunOptions           RunOptions
+	ValidateChoices      bool
+	ValidatedInputs      ValidatedBuildInputsV1
+	NoCache              bool
 }
 
 type ProviderBuildCompletionResult struct {
@@ -140,7 +142,7 @@ func completeProviderBuild(
 		if cleanupErr := backend.removeFinalized(
 			context.WithoutCancel(ctx), finalized.Candidate,
 		); cleanupErr != nil {
-			if published {
+			if published && input.ApplicationTools == nil {
 				outcome := "build"
 				if input.ValidateChoices {
 					outcome = "validation"
@@ -165,13 +167,19 @@ func completeProviderBuild(
 		BlueprintDigest: blueprintDigest, ResolvedRequest: input.ResolvedRequest,
 		Overlay: input.Overlay, PackageOverrides: input.PackageOverrides,
 		Base: input.Base, Graph: input.Graph, PortableTools: input.PortableTools,
-		RuntimePolicy:    policy,
-		RuntimeLayer:     finalized.RuntimeLayer,
-		ValidationRecord: finalized.Validation.Final.Reference, FinalImage: finalized.Image.Image,
+		PortableRuntimeLayer: input.PortableRuntimeLayer,
+		RuntimePolicy:        policy,
+		RuntimeLayer:         finalized.RuntimeLayer,
+		ValidationRecord:     finalized.Validation.Final.Reference, FinalImage: finalized.Image.Image,
 	})
 	endAssemble(err)
 	if err != nil {
 		return ProviderBuildCompletionResult{}, err
+	}
+	if input.ApplicationTools != nil {
+		if err := validateApplicationPortableBuildLockV1(input.Document, input.ApplicationTools, lock, finalized.Image); err != nil {
+			return ProviderBuildCompletionResult{}, err
+		}
 	}
 	if input.ValidateChoices {
 		record, err := backend.publishValidated(
@@ -214,21 +222,25 @@ func providerBuildRuntimePolicyV1(input ProviderBuildCompletionInput) (deploy.Ru
 }
 
 func validateProviderBuildCompletionInput(input ProviderBuildCompletionInput, policy deploy.RuntimePolicyV1) error {
+	if (input.ApplicationTools == nil) != (input.PortableRuntimeLayer == nil) {
+		return fmt.Errorf("application selection requires its exact materialized portable layer")
+	}
 	if err := deploy.ValidateApplicationStartupVerifierV1(input.StartupVerifier, true); err != nil {
 		return fmt.Errorf("provider build startup verifier: %w", err)
 	}
 	if err := providers.ValidateResolvedRequestV1(input.ResolvedRequest, registry.ValidateResolvedRequestOwnersV1); err != nil {
 		return err
 	}
-	candidateRequest, err := BuildResolvedRequestWithPackageOverridesV1(
+	candidateRequest, err := resolvedRequestWithApplicationToolsV1(
 		input.Document, input.Overlay, input.PackageOverrides, input.ResolvedRequest.Platform,
 		append([]providers.ResolvedSourceInput{}, input.ResolvedRequest.Sources...),
+		input.ApplicationTools,
 	)
 	if err != nil {
 		return fmt.Errorf("provider build derive resolved request: %w", err)
 	}
 	expectedRequest, expectedOverrides, err := finalizeResolvedRequestV1(
-		input.Document, input.Overlay, input.PackageOverrides, candidateRequest, input.Graph,
+		input.Document, input.Overlay, input.PackageOverrides, candidateRequest, input.Graph, input.ApplicationTools,
 	)
 	if err != nil {
 		return fmt.Errorf("provider build resolved request does not match the completed graph: %w", err)
@@ -278,6 +290,18 @@ func validateProviderBuildCompletionInput(input ProviderBuildCompletionInput, po
 		if err := validateFullImageValidationInput(layer, registry.ValidateRequirementProfileV1); err != nil {
 			return err
 		}
+	}
+	if input.PortableRuntimeLayer != nil {
+		layer := input.PortableRuntimeLayer
+		upstream := input.Graph.PrefixImages[len(input.Graph.PrefixImages)-1]
+		if layer.Schema != deploy.PortableRuntimeLayerSchemaV1 || layer.Upstream != upstream ||
+			layer.Result == upstream || input.Validation.Final.Image.Image != layer.Result ||
+			!reflect.DeepEqual(input.Validation.Final.Profiles, profiles) ||
+			!reflect.DeepEqual(input.Validation.Final.Outputs, outputs) ||
+			!reflect.DeepEqual(input.Validation.Final.RuntimePolicy, policy) {
+			return fmt.Errorf("provider build final validation does not match its exact portable source")
+		}
+		return validateFullImageValidationInput(input.Validation.Final, registry.ValidateRequirementProfileV1)
 	}
 	if len(input.Graph.Materializations) != 0 {
 		last := input.Graph.Materializations[len(input.Graph.Materializations)-1]

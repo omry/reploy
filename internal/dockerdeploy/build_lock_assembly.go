@@ -14,17 +14,18 @@ import (
 )
 
 type BuildLockAssemblyInput struct {
-	BlueprintDigest  canonical.Digest
-	ResolvedRequest  providers.ResolvedRequestV1
-	Overlay          deploy.RequestOverlayV1
-	PackageOverrides deploy.PackageOverrideIntentV1
-	Base             deploy.ImageDescriptor
-	Graph            providers.GraphExecutionResult
-	PortableTools    *providers.PortableToolLockV1
-	RuntimePolicy    deploy.RuntimePolicyV1
-	RuntimeLayer     deploy.ApplicationRuntimeLayerV1
-	ValidationRecord providerstore.StoreObjectRef
-	FinalImage       providers.RealizedImageV1
+	BlueprintDigest      canonical.Digest
+	ResolvedRequest      providers.ResolvedRequestV1
+	Overlay              deploy.RequestOverlayV1
+	PackageOverrides     deploy.PackageOverrideIntentV1
+	Base                 deploy.ImageDescriptor
+	Graph                providers.GraphExecutionResult
+	PortableTools        *providers.PortableToolLockV1
+	PortableRuntimeLayer *deploy.PortableRuntimeLayerV1
+	RuntimePolicy        deploy.RuntimePolicyV1
+	RuntimeLayer         deploy.ApplicationRuntimeLayerV1
+	ValidationRecord     providerstore.StoreObjectRef
+	FinalImage           providers.RealizedImageV1
 }
 
 // AssembleBuildLock publishes the graph's canonical bundle manifests and
@@ -161,9 +162,21 @@ func AssembleBuildLock(
 			Nodes: graphNodes, Edges: append([]providers.ProviderEdgeV1{}, input.Graph.SelectedEdges...),
 		},
 		Nodes: locks, Catalog: append([]providers.RealizedOutput{}, input.Graph.Catalog...),
-		PortableTools: portableTools,
-		RuntimePolicy: input.RuntimePolicy, RuntimeLayer: input.RuntimeLayer,
+		PortableTools:        portableTools,
+		PortableRuntimeLayer: input.PortableRuntimeLayer,
+		RuntimePolicy:        input.RuntimePolicy, RuntimeLayer: input.RuntimeLayer,
 		ValidationRecord: input.ValidationRecord, FinalImage: input.FinalImage,
+	}
+	if input.PortableRuntimeLayer != nil {
+		if portableTools == nil {
+			return deploy.BuildLockV1{}, fmt.Errorf("portable runtime layer requires the complete portable lock")
+		}
+		layer := *input.PortableRuntimeLayer
+		layer.TransactionDigest, err = deploy.PortableRuntimeLayerTransactionDigestV1(*portableTools, layer.Upstream, layer.Result)
+		if err != nil {
+			return deploy.BuildLockV1{}, err
+		}
+		lock.PortableRuntimeLayer = &layer
 	}
 	if err := deploy.ValidateBuildLockV1(lock, registry.ValidateRequirementProfileV1); err != nil {
 		return deploy.BuildLockV1{}, fmt.Errorf("assemble build lock: %w", err)
@@ -224,6 +237,12 @@ func validateGraphLockAssemblyShape(input BuildLockAssemblyInput) error {
 		return fmt.Errorf("assemble build lock final image: %w", err)
 	}
 	last := input.Graph.PrefixImages[len(input.Graph.PrefixImages)-1]
+	if input.PortableRuntimeLayer != nil {
+		if input.PortableRuntimeLayer.Upstream != last || input.PortableRuntimeLayer.Schema != deploy.PortableRuntimeLayerSchemaV1 {
+			return fmt.Errorf("assemble build lock portable runtime layer does not connect the graph result")
+		}
+		last = input.PortableRuntimeLayer.Result
+	}
 	if input.RuntimeLayer.Upstream != last || input.FinalImage.RootFSSubject != input.RuntimeLayer.Result.RootFSSubject {
 		return fmt.Errorf("assemble build lock application runtime layer does not connect the graph result to the final image")
 	}
