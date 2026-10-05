@@ -171,7 +171,7 @@ func TestRemoveStagedDeploymentRetainsTombstoneAfterDirectoryCleanupFailure(t *t
 	}
 }
 
-func TestRemoveStagedDeploymentRestoresDirectoryAfterImageReferenceFailure(t *testing.T) {
+func TestRemoveStagedDeploymentRetainsOriginalDirectoryAfterImageReferenceFailure(t *testing.T) {
 	dir, operation, store, _, state := currentBuildFixture(t, true)
 	state.Staging = &deploy.StagingStateV1{Schema: deploy.StagingStateSchemaV1}
 	state.BlueprintSource = "retained source"
@@ -230,7 +230,7 @@ func TestStopStagedWorkloadForRemovalAllowsUnmaterializedRuntime(t *testing.T) {
 
 func testStagedRemovalBackendV1(store providerstore.Store) stagedDeploymentRemoveBackendV1 {
 	return stagedDeploymentRemoveBackendV1{
-		acquire:  deploy.AcquireOperationLock,
+		acquire:  deploy.AcquireExistingOperationLock,
 		newStore: func(string) (providerstore.Store, error) { return store, nil },
 		recoverPending: func(
 			context.Context,
@@ -259,12 +259,18 @@ func testStagedRemovalBackendV1(store providerstore.Store) stagedDeploymentRemov
 			}
 			return err
 		},
-		releaseLease:    func(lease *deploy.ControlLeaseV1) error { return lease.Release() },
-		reserve:         reserveStagedDeploymentTombstoneV1,
-		rename:          os.Rename,
+		releaseLease: func(lease *deploy.ControlLeaseV1) error { return lease.Release() },
+		reserve:      reserveStagedDeploymentTombstoneV1,
+		guard:        guardStagedRemovalV1,
+		isolate: func(operation *deploy.OperationLock, destination string) (bool, error) {
+			return operation.IsolateOriginalDirectory(destination)
+		},
 		unlock:          func(operation *deploy.OperationLock) error { return operation.Unlock() },
 		removeReference: func(context.Context, providers.RealizedImageV1, string, string, string) error { return nil },
-		removeAll:       os.RemoveAll,
-		complete:        CompleteControlAdmissionV1,
+		removeCompanion: func(context.Context, *deploy.OperationLock, OwnedImageReferenceV1, deploy.EnvironmentGenerationState, string, string) error {
+			return nil
+		},
+		removeAll: os.RemoveAll,
+		complete:  CompleteControlAdmissionV1,
 	}
 }

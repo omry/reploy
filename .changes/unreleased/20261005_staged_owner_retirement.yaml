@@ -1,0 +1,2 @@
+kind: Fixed
+body: Retire staged build image references before removing their guarded deployment directory, and preserve ownership for explicit removal retries.
