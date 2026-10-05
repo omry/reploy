@@ -431,6 +431,7 @@ func applicationPortableBuildAcceptanceForTest(t *testing.T, reuse preparedPytho
 	images := &pendingPublicationImagesV1{images: map[string]providers.RealizedImageV1{}, operation: operation, t: t, sequence: 230}
 	var graph providers.GraphExecutionResult
 	var finalizedImage InspectedImageCandidate
+	observedFinalImage := false
 	backend := providerBuildExecutionBackend{
 		executeGraph: func(context.Context, PreparedPythonGraphExecutionInput) (providers.GraphExecutionResult, error) {
 			t.Fatal("application execution bypassed sealed graph entrypoint")
@@ -477,6 +478,16 @@ func applicationPortableBuildAcceptanceForTest(t *testing.T, reuse preparedPytho
 	}
 	result, err := executeLockedProviderBuildV1(t.Context(), LockedProviderBuildExecutionInputV1{
 		Preparation: preparation, SourceWheels: reuse.sourceWheels, LocalOverrides: []PythonLocalOverrideV1{},
+		observeFinalImage: func(_ context.Context, image InspectedImageCandidate, lock deploy.BuildLockV1) error {
+			if image.Image != finalizedImage.Image || image.Image != lock.FinalImage || lock.PortableRuntimeLayer == nil {
+				t.Fatal("ordinary execution did not hand off its exact finalized application materialization")
+			}
+			if _, err := PortableToolApplicationValidationInputFromBuildLockV1(image, lock, "application:application"); err != nil {
+				return err
+			}
+			observedFinalImage = true
+			return nil
+		},
 		RunValidation: func(_ context.Context, value FullImageValidationInput) ([]providers.ValidationEvidence, []providers.ExecutableEvidence, error) {
 			profiles := append([]providers.ValidationEvidence{}, graph.ValidationEvidence...)
 			for index := range profiles {
@@ -489,6 +500,9 @@ func applicationPortableBuildAcceptanceForTest(t *testing.T, reuse preparedPytho
 			return profiles, outputs, nil
 		},
 	}, backend)
+	if fault == "" && !observedFinalImage {
+		t.Fatal("ordinary execution omitted the application image callback")
+	}
 	if fault != "" {
 		if err == nil || !reflect.DeepEqual(result, LockedProviderBuildExecutionResultV1{}) {
 			t.Fatalf("fault %q returned successful build: %v", fault, err)
