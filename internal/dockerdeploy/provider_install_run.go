@@ -179,16 +179,26 @@ func runProviderInstallV1(
 	if built.State.Current == nil {
 		return deploy.StateV1{}, fmt.Errorf("provider install source build did not publish a current generation")
 	}
-	if built.Lock.PortableRuntimeLayer != nil {
-		return deploy.StateV1{}, fmt.Errorf("portable installed publication is not yet supported by this version")
-	}
-	if err := requireValidatedConsumerBoundaryV1(sourceOperation, "completed installed ownership transfer"); err != nil {
+	if built.Lock.PortableRuntimeLayer == nil {
+		if err := requireValidatedConsumerBoundaryV1(sourceOperation, "completed installed ownership transfer"); err != nil {
+			return deploy.StateV1{}, err
+		}
+	} else if err := requireNoPendingValidatedBuildV1(sourceOperation); err != nil {
 		return deploy.StateV1{}, err
 	}
 	sourceBuild := CurrentBuild{State: built.State, Generation: *built.State.Current, Lock: built.Lock}
 	document, err := blueprint.DecodeResolvedDocumentV1(sourceBuild.State.Blueprint)
 	if err != nil {
 		return deploy.StateV1{}, fmt.Errorf("provider install source blueprint: %w", err)
+	}
+	if built.Lock.PortableRuntimeLayer != nil {
+		groups, _, err := applicationPortableRequirementGroupsV1(document)
+		if err != nil {
+			return deploy.StateV1{}, err
+		}
+		if len(groups) == 0 {
+			return deploy.StateV1{}, fmt.Errorf("portable installed publication is not yet supported for an unconsumed application request")
+		}
 	}
 	if destinationDir == "" {
 		destinationDir, err = resolveProviderInstallDestinationV1(document, input)

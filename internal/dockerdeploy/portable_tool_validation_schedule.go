@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 
 	"github.com/omry/reploy/internal/buildprofile"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
+	"github.com/omry/reploy/internal/providers/registry"
 	"github.com/omry/reploy/internal/providerstore"
 	"github.com/omry/reploy/internal/toolcatalog"
 )
@@ -30,6 +32,40 @@ var preparePortableToolValidationWorkspace = PrepareProbeWorkspace
 type PortableToolMaterializationValidationInputV1 struct {
 	Image    InspectedImageCandidate
 	selected []scheduledPortableToolProfile
+}
+
+// PortableToolApplicationValidationInputFromBuildLockV1 derives one scoped
+// schedule from the complete validated lock and exact final image. It performs
+// no profile execution and retains no schedule alongside persisted authority.
+func PortableToolApplicationValidationInputFromBuildLockV1(
+	image InspectedImageCandidate, lock deploy.BuildLockV1, scope string,
+) (PortableToolMaterializationValidationInputV1, error) {
+	if err := deploy.ValidateBuildLockV1(lock, registry.ValidateRequirementProfileV1); err != nil {
+		return PortableToolMaterializationValidationInputV1{}, err
+	}
+	if err := ValidateInspectedImageCandidateIdentity(image); err != nil {
+		return PortableToolMaterializationValidationInputV1{}, err
+	}
+	if lock.PortableTools == nil || lock.PortableRuntimeLayer == nil || image.Image != lock.FinalImage || image.Descriptor.Platform != lock.Platform ||
+		!strings.HasPrefix(scope, "application:") || strings.TrimPrefix(scope, "application:") == "" {
+		return PortableToolMaterializationValidationInputV1{}, fmt.Errorf("application schedule requires its exact final image and application scope")
+	}
+	schedule, err := providers.PortableToolValidationScheduleFromLockV1(*lock.PortableTools)
+	if err != nil {
+		return PortableToolMaterializationValidationInputV1{}, err
+	}
+	scoped, err := providers.PortableToolValidationScheduleForScopeV1(schedule, scope)
+	if err != nil {
+		return PortableToolMaterializationValidationInputV1{}, err
+	}
+	if len(scoped.Entries) == 0 {
+		return PortableToolMaterializationValidationInputV1{}, fmt.Errorf("application scope %q has no selected validation profiles", scope)
+	}
+	selected, err := constructScheduledPortableToolProfiles(scoped)
+	if err != nil {
+		return PortableToolMaterializationValidationInputV1{}, err
+	}
+	return PortableToolMaterializationValidationInputV1{Image: image, selected: selected}, nil
 }
 
 func PortableToolMaterializationValidationInputFromLockV1(
