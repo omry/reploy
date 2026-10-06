@@ -145,6 +145,37 @@ func TestPortableToolRepresentativeDockerIntegration(t *testing.T) {
 	runPortableToolIntegrationCasesV1(t, selected)
 }
 
+// Exhaustive suites select every advertised case for the requested tool. The
+// authenticated catalog owns the tuples, profiles and commands.
+func portableToolIntegrationCasesForToolV1(cases []toolcatalog.IntegrationCaseV1, tool string) ([]toolcatalog.IntegrationCaseV1, error) {
+	selected := []toolcatalog.IntegrationCaseV1{}
+	for _, caseV1 := range cases {
+		if caseV1.Manifest.Tool == tool {
+			selected = append(selected, caseV1)
+		}
+	}
+	if _, err := portableToolIntegrationRequestsV1(selected); err != nil {
+		return nil, err
+	}
+	sort.Slice(selected, func(i, j int) bool { return selected[i].ID < selected[j].ID })
+	return selected, nil
+}
+
+func TestPortableToolJavaMatrixDockerIntegration(t *testing.T) {
+	if os.Getenv("REPLOY_DOCKER_INTEGRATION") != "1" {
+		t.Skip("set REPLOY_DOCKER_INTEGRATION=1 to exercise the complete Java matrix")
+	}
+	cases, err := toolcatalog.EmbeddedIntegrationCasesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := portableToolIntegrationCasesForToolV1(cases, "java")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runPortableToolIntegrationCasesV1(t, selected)
+}
+
 // The same runner and exact exercised-set gate are used for representative and
 // exhaustive suites. No executor, artifact identity or target probe is replaced.
 func runPortableToolIntegrationCasesV1(t *testing.T, cases []toolcatalog.IntegrationCaseV1) {
@@ -202,6 +233,20 @@ func runPortableToolIntegrationCasesV1(t *testing.T, cases []toolcatalog.Integra
 	delete(incomplete, requests[0].Case.ID)
 	if err := RequireCurrentPortableToolCaseEvidenceV1(evidenceStore, requests, incomplete); err == nil {
 		t.Fatal("missing exercised case passed the evidence gate")
+	}
+	changed := append([]PortableToolCaseEvidenceRequestV1(nil), requests...)
+	changed[0].Case.Fixture.BaseImageDigest = rendererDigest("f")
+	if err := RequireCurrentPortableToolCaseEvidenceV1(evidenceStore, changed, refs); err == nil {
+		t.Fatal("stale fixture passed the evidence gate")
+	}
+	substituted := map[canonical.Digest]providerstore.StoreObjectRef{}
+	for id := range refs {
+		substituted[id] = refs[requests[0].Case.ID]
+	}
+	if len(requests) > 1 {
+		if err := RequireCurrentPortableToolCaseEvidenceV1(evidenceStore, requests, substituted); err == nil {
+			t.Fatal("another case's record passed the evidence gate")
+		}
 	}
 	// Keep a workflow index next to the immutable records, outside definitions.
 	index, err := json.MarshalIndent(refs, "", "  ")

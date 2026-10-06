@@ -62,6 +62,25 @@ jobs:
           NO_UPDATE_NOTIFIER: "1"
         run: nox -s ci
 
+      - name: Prove the complete Java matrix and current evidence
+        env:
+          REPLOY_DOCKER_INTEGRATION: "1"
+          REPLOY_PORTABLE_TOOL_EVIDENCE_DIR: ${{ runner.temp }}/portable-tool-evidence
+        run: >-
+          go test -v -count=1 -timeout 30m ./internal/dockerdeploy
+          -run '^TestPortableToolJavaMatrixDockerIntegration$'
+
+      - name: Retain external portable-tool observations
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-tool-evidence-ci-${{ github.sha }}
+          include-hidden-files: true
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/portable-tool-evidence/*.json
+            ${{ runner.temp }}/portable-tool-evidence/.reploy/provider-store/validation/
+
   target-smoke:
     name: ${{ matrix.job_name }} (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
