@@ -109,6 +109,26 @@ jobs:
           go test -count=1 -timeout 30m ./internal/dockerdeploy
           -run '^TestPortableChromiumUbuntu2604DockerIntegration$'
 
+      - name: Prove representative portable-tool cases and current evidence
+        if: matrix.name == 'Linux amd64'
+        env:
+          REPLOY_DOCKER_INTEGRATION: "1"
+          REPLOY_PORTABLE_TOOL_EVIDENCE_DIR: ${{ runner.temp }}/portable-tool-evidence
+        run: >-
+          go test -v -count=1 -timeout 30m ./internal/dockerdeploy
+          -run '^TestPortableToolRepresentativeDockerIntegration$'
+
+      - name: Retain external portable-tool observations
+        if: always() && matrix.name == 'Linux amd64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-tool-evidence-${{ github.sha }}
+          include-hidden-files: true
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/portable-tool-evidence/*.json
+            ${{ runner.temp }}/portable-tool-evidence/.reploy/provider-store/validation/
+
       - name: Run private workload isolation integration tests
         env:
           REPLOY_DOCKER_INTEGRATION: "1"

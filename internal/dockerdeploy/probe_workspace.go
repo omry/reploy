@@ -68,6 +68,12 @@ func PrepareProbeWorkspace(ctx context.Context, store providerstore.Store, platf
 	if filepath.Dir(extracted.Path) != workspace || filepath.Base(extracted.Path) != probearchive.ExtractedFileName {
 		return PreparedProbeWorkspace{}, noCleanup, errors.Join(fmt.Errorf("extracted probe escaped its workspace"), cleanup())
 	}
+	// Only this directory is mounted into the container. Its sole executable
+	// must be reachable by the fixed non-root validator; store ancestors stay
+	// private and the mount remains read-only.
+	if err := os.Chmod(workspace, 0o755); err != nil {
+		return PreparedProbeWorkspace{}, noCleanup, errors.Join(fmt.Errorf("make mounted probe reachable: %w", err), cleanup())
+	}
 	prepared := PreparedProbeWorkspace{
 		HostDir: workspace, HostExecutable: extracted.Path,
 		ContainerDir: ProbeContainerRoot, ContainerExecutable: ProbeContainerExecutable,
