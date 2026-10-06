@@ -548,6 +548,15 @@ func ValidateSourceBuilderBuildCaseV1(
 	caseV1 toolcatalog.IntegrationCaseV1,
 	scope string,
 ) ([]providers.ValidationEvidence, error) {
+	return validateSourceBuilderBuildCaseV1(ctx, store, tools, upstream, options, caseV1, scope, nil)
+}
+
+func validateSourceBuilderBuildCaseV1(
+	ctx context.Context, store providerstore.Store, tools *SourceBuilderPortableToolsV1,
+	upstream deploy.ImageDescriptor, options RunOptions,
+	caseV1 toolcatalog.IntegrationCaseV1, scope string,
+	capture func(*PortableToolMaterializationValidationInputV1),
+) ([]providers.ValidationEvidence, error) {
 	if tools == nil || tools.Plan == nil {
 		return nil, fmt.Errorf("portable-tool build case requires a materialized builder plan")
 	}
@@ -563,7 +572,11 @@ func ValidateSourceBuilderBuildCaseV1(
 	}
 	environment, err := prepareSourceBuilderEnvironmentV1(ctx, store, tools, upstream, options,
 		func(image InspectedImageCandidate, lock providers.PortableToolLockV1) (PortableToolMaterializationValidationInputV1, error) {
-			return PortableToolBuildCaseValidationInputFromLockV1(image, lock, tools.Plan.Closures, caseV1, scope)
+			input, err := PortableToolBuildCaseValidationInputFromLockV1(image, lock, tools.Plan.Closures, caseV1, scope)
+			if err == nil && capture != nil {
+				capture(&input)
+			}
+			return input, err
 		})
 	if err != nil {
 		return nil, err
