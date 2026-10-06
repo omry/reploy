@@ -1,26 +1,27 @@
 ---
 artifact: swe-design-review-attestation
-schema_version: 2
-scope_key: 16e191a7ede15143477ca2a507f714e456bcccc305e84b6116d2ee5b14f4a3e7
-scope: {"kind": "path", "primary_target": "docs/CONTROLLED_SESSION_DESIGN.md", "repository": "/home/omry/dev/reploy", "selector": "docs/CONTROLLED_SESSION_DESIGN.md"}
-review_content_identity_sha256: c00b115c79770c1f26e549f1c813e43cbc8e859e70fc0a5061ed8ee8be338673
-target_content_identity_sha256: 4fdb715abf0b2c47ee39fced8ba144d2366faed068c404a4a6597b77acbec4b1
-baseline_content_identity_sha256: 9f98a355bf1d27e1c417bb5080a2f86eda476110f89ccf264d5ba02f7ee8d13b
-target_documents: [{"path": "docs/CONTROLLED_SESSION_DESIGN.md", "repository": "/home/omry/dev/reploy", "sha256": "1b9a9ae24cd20f4b67de404041d90eb59b1b405d62566e6b546fc68777d66d92"}]
-baseline_documents: [{"path": "docs/BLUEPRINT_ENVIRONMENT_MODEL.md", "repository": "/home/omry/dev/reploy", "sha256": "8969ffde4d2f20d2e02fb530d0e9688ed63d9dd8962a9a700473d4a6a54e7ef4"}]
-document_repository: "/home/omry/dev/reploy"
+schema_version: 4
+scope_key: 4f0db8790acf485a85c1675eecc91d3e4ccd55a3f0db05a9a2eb77ff863f7177
+scope: {"kind": "path", "primary_target": "docs/CONTROLLED_SESSION_DESIGN.md", "repository": ".", "selector": "docs/CONTROLLED_SESSION_DESIGN.md"}
+review_content_identity_sha256: f4f36bfb0ec728854ee6afa0f0b5465b83babfaeb41e668c11d79209992e6ef7
+target_content_identity_sha256: 717834591cfe2fb685d2c346066fcde356e2a464b8c68b36a52daa180200e42f
+baseline_content_identity_sha256: 50addc73004abffe6afdbd5817fc170eaf59b5e0e52f6a4f0628ea5e3cf1f7c5
+target_documents: [{"path": "docs/CONTROLLED_SESSION_DESIGN.md", "repository": ".", "sha256": "7169001fa0bf5ef825b1e52ca98314ebbe002fcbe25824b956c9e935cf54bbed"}]
+baseline_documents: [{"path": "docs/BLUEPRINT_ENVIRONMENT_MODEL.md", "repository": ".", "sha256": "9d3a797e0cc8930ef0465a3d2abd01d0ac5a77d4697cbe588c5645f6b031384d"}]
+design_dependency_documents: [{"path": "docs/BLUEPRINT_ENVIRONMENT_MODEL.md", "repository": ".", "sha256": "9d3a797e0cc8930ef0465a3d2abd01d0ac5a77d4697cbe588c5645f6b031384d"}]
+document_repository: "."
 document_path: "docs/CONTROLLED_SESSION_DESIGN.md"
-document_revision_provenance: "c68e86950815a95fb257f216d3a5183eaf017461"
-document_sha256: 1b9a9ae24cd20f4b67de404041d90eb59b1b405d62566e6b546fc68777d66d92
+document_revision_provenance: "72e3b1cda81f1b8d09d6335a53b5a319ac13b67b"
+document_sha256: 7169001fa0bf5ef825b1e52ca98314ebbe002fcbe25824b956c9e935cf54bbed
 verdict: clean
-attested_at: 2026-08-22T13:28:04Z
+attested_at: 2026-10-06T10:41:13Z
 ---
-<!-- swe-design-review-attestation:v2 -->
+<!-- swe-design-review-attestation:v4 -->
 
 # SWE design-review attestation
 
 Review freshness is determined by the target and baseline document bytes
-listed in the version-2 header. Revisions are provenance only.
+listed in the version-4 header. Revisions are provenance only.
 
 ## Durable review state
 

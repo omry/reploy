@@ -1,7 +1,7 @@
 ---
 status: Active
-updated: 2026-10-05
-summary: Reviewable delivery plan for portable-tool authoring, definitions, and the embedded Java and Playwright implementations.
+updated: 2026-10-06
+summary: Reviewable delivery plan for portable-tool authoring, Java, Playwright, native Bash, and independent terminal proof.
 implements: docs/PORTABLE_TOOL_DEFINITION_DESIGN.md
 ---
 
@@ -23,7 +23,8 @@ global:swe:deliver-design-stack(docs/PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLA
 ```
 
 The active milestone IDs are `PTD-01` through `PTD-14`, `PTD-16` through
-`PTD-27`, and `PTD-29`; `PTD-15` and `PTD-28` are retired. `PTD-21`, `PTD-22`,
+`PTD-27`, `PTD-29`, and `PTD-30` through `PTD-33`; `PTD-15` and
+`PTD-28` remain retired. `PTD-21`, `PTD-22`,
 `PTD-23`, `PTD-24`, and `PTD-25` are milestone containers, and `PTD-23.1`,
 `PTD-23.2`, `PTD-23.3`, `PTD-25.3`, `PTD-25.3.3`, and `PTD-25.3.3.2`
 are nested delivery containers. Their first-class delivery IDs are `PTD-21.1` through
@@ -38,6 +39,31 @@ preparation gates are prerequisites, not
 implementation tasks, commits, or pull requests. `deliver-design-stack` may
 read this plan before preparation is complete, but must pause on an unmet
 preparation gate.
+
+Plan successor note (2026-10-06): after the approved `PTD-25.6` head,
+this reviewed design/plan successor adds native Bash on Debian 12, Debian 13,
+and Ubuntu 26.04, each on Linux AMD64 and ARM64, and removes obsolete Reploy
+asciinema dependencies with independent terminal proof. New first-class IDs
+`PTD-30` through `PTD-33` are inserted after `PTD-27` and before `PTD-29`;
+existing IDs and completed approvals are retained. `PTD-15` and `PTD-28` are
+not revived. This design-only predecessor must be stamped and approved in exact
+ancestry before `PTD-26` resumes. Apply the approved successor through guarded
+campaign replan, preserving the campaign ID, cumulative counters, immutable
+reviewability/growth history, mappings and approved heads. No direct retained-
+state edit or retrospective re-enrollment is authorized.
+
+The terminal replacement acceptance follows the
+[Controlled Execution Session Design](CONTROLLED_SESSION_DESIGN.md), especially
+the direct attachment, broker survival, ordered output-finalization and
+controller artifact contracts. Reploy owns its primitive proof, not OmegaFlow
+adapter qualification or Envoy implementation. The consumer's existing host
+recorder remains outside this cleanup. Bash target support and recorder removal
+are required future delivery, not claims that this design-only successor has
+implemented them.
+
+Native Bash acquisition, package ownership, lock provenance and offline replay
+follow the existing [APT provider detail design](APT_PROVIDER_DETAIL_DESIGN.md);
+this successor introduces no provider exception or alternate evidence format.
 
 Plan revision note (2026-08-26): localized portable-tool authoring was inserted
 as PTD-12 after PTD-11 completed. No former PTD-12-or-later delivery slice had
@@ -360,6 +386,9 @@ Complete the accepted embedded portable-tool bridge for:
 - Playwright 1.61.0 with the Python binding and explicit Chromium selection;
 - Debian 12 and the accepted Ubuntu targets on Linux AMD64, plus Debian 13 for
   Java;
+- distro-native Bash `5.2.15` on Debian 12, `5.2.37` on Debian 13, and `5.3.9`
+  on Ubuntu 26.04, each on Linux AMD64 and ARM64 with explicit build and runtime
+  cases;
 - strict records, bounded catalog loading, deterministic resolution, verified
   acquisition, offline materialization, provider and lock integration, and
   manifest-derived validation evidence.
@@ -372,8 +401,9 @@ introducing the flat one, and no compatibility reader is needed.
 
 Repository publication, TUF metadata, publisher authorization, and additional
 Playwright bindings or browsers remain outside this campaign. Asciinema is not
-provided through the portable-tool catalog; the independently pinned recorder
-used by controlled sessions remains outside this campaign.
+provided through the portable-tool catalog. `PTD-33` removes the obsolete
+Reploy recorder dependencies while preserving the direct controlled-session
+contract; consumer-owned host recording remains outside this campaign.
 
 ## Current Stack Prerequisites
 
@@ -554,6 +584,10 @@ Before constructing a given delivery item:
 
 - the task's dependencies are constructed, locally reviewed, passing their
   checks, and present in the stack in exact order;
+- before `PTD-26`, the stamped 2026-10-06 Bash/terminal design-only successor
+  after unchanged approved `PTD-25.6` has current-head approval and all seven
+  required `.github/workflows/ci.yml` jobs passed on that exact successor head,
+  and the guarded campaign replan has been applied;
 - the worktree is clean and the checkout is at the stack tip;
 - the task has durable scope authority and a unique commit/PR mapping, or is
   ready to be built and mapped by delivery itself;
@@ -575,13 +609,20 @@ flowchart TD
     FOUNDATION --> CATALOG["PTD-07..14\nCatalog authoring and definitions"]
     CATALOG --> ACQUIRE["PTD-16..20\nRequests, acquisition, and probes"]
     ACQUIRE --> PROVIDERS["PTD-21..27\nProvider integration and validation"]
-    PROVIDERS --> FINAL["PTD-29\nFinal cutover"]
+    PROVIDERS --> BASH["PTD-30..32\nNative Bash and exact tuple proof"]
+    BASH --> TERMINAL["PTD-33\nDirect terminal proof and recorder cleanup"]
+    TERMINAL --> FINAL["PTD-29\nFinal cutover"]
 ```
 
 ## Review Phasing
 
 Remote review capacity is a shared, exhaustible resource, so construction does
-not generally wait for it. The explicit exception is the dependent
+not generally wait for it. Before `PTD-26`, however, the stamped 2026-10-06
+Bash/terminal design-only successor after unchanged approved `PTD-25.6` must
+have current-head approval and all seven required `.github/workflows/ci.yml`
+jobs passed on that exact successor head; the guarded campaign replan must
+also be applied. A changed successor head invalidates approval and CI evidence
+for this gate. Another explicit exception is the dependent
 `PTD-25.3.3.2.1` through `PTD-25.3.3.2.11` series: construct each child only
 after its immediate predecessor has current-head approval and all seven
 required CI jobs from `.github/workflows/ci.yml` have passed on that exact
@@ -604,8 +645,10 @@ Construction phase, per delivery item, without remote review:
 
 1. Verify all dependencies are constructed, locally reviewed, and passing their
    checks. Remote approval is not a construction prerequisite except for
-   `PTD-25.3.3.2.1` through `PTD-25.3.3.2.11` and `PTD-25.3.3.3`, which follow
-   the exact-head predecessor gates above.
+   `PTD-25.3.3.2.1` through `PTD-25.3.3.2.11`, `PTD-25.3.3.3`, and the
+   2026-10-06 Bash/terminal design-only successor required before `PTD-26`,
+   which follow the exact-head predecessor gates above. Apply the guarded
+   campaign replan before resuming `PTD-26` construction.
 2. Establish intent, owned scope, acceptance criteria, and non-goals from this
    plan and the normative design. A milestone container supplies shared scope
    but does not own an implementation commit or PR.
@@ -723,9 +766,13 @@ the campaign until durable authority is updated.
 | PTD-25.4 | Validate the Exact Application Image | PTD-25.3.3.3 | New work |
 | PTD-25.5 | Persist and Match External Validation Evidence | PTD-25.4 | New work |
 | PTD-25.6 | Prove the Generic Integration Harness End to End | PTD-25.5 | New work; completes PTD-25 |
-| PTD-26 | Validate Every Advertised Java Tuple Through Reploy | PTD-25.6 | New work |
+| PTD-26 | Validate Every Advertised Java Tuple Through Reploy | PTD-25.6, then approved 2026-10-06 Bash/terminal design-only successor | New work; guarded campaign replan required before construction |
 | PTD-27 | Validate Every Advertised Playwright Tuple Through Reploy | PTD-26 | New work |
-| PTD-29 | Remove the Flat WIP and Finalize Portable Tool Documentation | PTD-27 | New work |
+| PTD-30 | Embed Exact Native Bash Releases and Executable Contract | PTD-27 | New work |
+| PTD-31 | Validate Every Advertised Bash AMD64 Case | PTD-30 | New work |
+| PTD-32 | Validate Every Advertised Bash ARM64 Case | PTD-31 | New work |
+| PTD-33 | Replace Reploy Recorder Dependencies with Direct Terminal Proof | PTD-32 | New work |
+| PTD-29 | Remove the Flat WIP and Finalize Portable Tool Documentation | PTD-33 | New work |
 
 ## Task Specifications
 
@@ -1173,8 +1220,8 @@ the environment, working directory, time/output/resource bounds, forced network
 disablement, and canonical observed evidence.
 
 Acceptance: Java and Playwright profiles declare their probes once
-and variants reference those profiles; probes use no shell; declarations cannot
-enable networking or relax executor bounds; timeout, output, and exit failures
+and variants reference those profiles; probes use no shell command driver;
+declarations cannot enable networking or relax executor bounds; timeout, output, and exit failures
 are deterministic.
 
 Non-goals: treating a probe result as support without matching fixture and
@@ -3066,6 +3113,92 @@ AMD64-only claim establishes other support.
 
 Non-goals: other bindings, browsers, targets, or architectures.
 
+### PTD-30: Embed Exact Native Bash Releases and Executable Contract
+
+Scope: author and deterministically generate the three exact Bash releases
+`5.2.15`, `5.2.37`, and `5.3.9` under the governing design, with their six explicit
+Debian 12, Debian 13, and Ubuntu 26.04 AMD64/ARM64 target leaves. Each target
+lists build and runtime cases, exact APT package-version requirements and
+platform-specific immutable fixtures. Use existing records and provider
+primitives; complete the restricted direct `--version` profile and the handoff
+of package-owned export evidence plus same-image native `/bin/bash` file
+observation needed by subsequent proof, using existing evidence encodings.
+
+Acceptance: generated canonical records and references are reproducible;
+unsupported tuples, unavailable exact package versions and conflicting
+base/provider claims fail closed. Focused tests verify direct selected-tool
+argv, target-specific package-owned export and equivalent regular `/bin/bash`
+file identity, and ordinary APT predecessor
+and offline replay semantics. Existing base Bash is not accepted merely by
+path or exit status. Candidate definitions do not establish support before
+`PTD-31`/`PTD-32` exact execution proof. Any production change is limited to a
+small generic missing boundary exposed by these requirements, with its own
+pre-work growth assessment; no Bash-specific acquisition or runtime branch.
+
+Non-goals: other OS generations or releases, new providers, source builds,
+script execution, exhaustive execution proof, or adapter qualification.
+
+### PTD-31: Validate Every Advertised Bash AMD64 Case
+
+Scope: execute the six manifest-derived AMD64 cases (build and runtime on each
+of the three selected OS generations) through the ordinary generic runner.
+Retain original external evidence plus the runtime executable-provenance
+handoff from the same exact image and lock.
+
+Acceptance: every case actually resolves, acquires or verifies locked base
+provenance, materializes offline, and runs the fixed selected-tool profile on
+the exact callback image. Original output identifies the selected upstream
+release and agrees with executable/file provenance. The complete current AMD64
+case set matches evidence; missing, stale, substituted, interrupted or failed
+observations cannot establish support. Tests prove wrong package/executable,
+missing callbacks and incomplete sets fail; no handwritten evidence metadata.
+
+Non-goals: ARM64 support claims, new targets, alternate acquisition, or
+OmegaFlow qualification.
+
+### PTD-32: Validate Every Advertised Bash ARM64 Case
+
+Scope: execute the six corresponding ARM64 cases through the same generic
+runner on actual ARM64 or an explicitly approved equivalent execution
+runner, recording that runner context and original output. Combine only exact
+current records from both architectures into the complete Bash evidence gate.
+
+Acceptance: all twelve cases pass and bind exact manifests, selected closures,
+context, tuple, platform-specific immutable fixture/image, profile and output.
+Runtime provenance resolves a regular `/bin/bash` with measured executable/file
+identity for every tuple. An AMD64 record, cross-compiled binary, changed runner
+or incomplete subset cannot stand in for ARM64 execution. The portable handoff
+is ready for OmegaFlow to qualify independently; it asserts no adapter result.
+
+Non-goals: expanding the matrix, weakening isolation or timing/resource bounds,
+new evidence identity formats, or implementing an OmegaFlow compatibility table.
+
+### PTD-33: Replace Reploy Recorder Dependencies with Direct Terminal Proof
+
+Scope: replace the actual session-client/PTY recorder fixture and the
+OmegaFlow-shaped Docker fixture with independent direct Reploy
+terminal/attachment proof under `CONTROLLED_SESSION_DESIGN.md`. Preserve raw
+and canonical input behavior, no double echo, binary byte ordering, large output,
+resize, Ctrl-C, drained and failed output finalization, broker survival through
+`complete` and acknowledgement, retained artifacts, and exact owned cleanup.
+The actual executable/PTY and Docker paths must run; existing unit tests alone
+cannot replace them. Then remove obsolete asciinema fixture assets, CI downloads,
+checksum/env setup and runtime invocation. Classify parser/rejection examples
+and preserve their generic invariants while replacing obsolete names. Update
+current controller examples, placement/recording rules and maintainer docs.
+
+Acceptance: equivalent direct tests pass before old proof is removed. No live
+Reploy asciinema acquisition, `REPLOY_ASCIINEMA_FIXTURE`, recorder runtime call,
+or current documentation prerequisite remains. Historical retirement notes are
+explicit history. The fixture claims Reploy contract proof, not Envoy/adapter
+conformance; workload failure and partial finalization remain observable despite
+controller completion. Focused terminal, full Go/Docker/release/docs and every
+exact-head `ci.yml` job pass. No terminal attachment or broker API is removed.
+
+Non-goals: changing OmegaFlow files or its host recorder, implementing Envoy,
+adding `tool:asciinema`, removing generic shell/attachment capabilities, or
+reducing proof by deleting tests alone.
+
 ### PTD-29: Remove the Flat WIP and Finalize Portable Tool Documentation
 
 Scope: verify no flat definition, aggregate digest behavior, or compatibility
@@ -3074,13 +3207,16 @@ and obsolete tests; update ADR 0001, environment examples, maintaining docs,
 support presentation, and release notes; run final scope and security review.
 
 Acceptance: only the accepted hierarchy remains; examples match exact behavior;
-support derives from current evidence; full Go, Docker integration, release,
-documentation, and hygiene checks pass; every design goal, non-goal, migration
+support derives from current exact Java, Playwright and twelve-case Bash
+evidence; runtime Bash provenance is handed off independently of adapter
+qualification; no live Reploy asciinema acquisition/env/runtime prerequisite
+remains and direct terminal/lifecycle proof is retained; full Go, Docker
+integration, release, documentation, and hygiene checks pass; every design goal, non-goal, migration
 step, and deferral has an evidence-backed disposition.
 
-Non-goals: repository transport, TUF, additional tools beyond Java and
-Playwright, additional versions, bindings, selections, distributions, or
-architectures.
+Non-goals: repository transport, TUF, additional tools beyond Java, Playwright
+and the specified native Bash releases, or versions, bindings, selections,
+distributions or architectures outside their exact accepted matrices.
 
 ## Campaign Completion Gate
 
@@ -3094,7 +3230,8 @@ The campaign is complete only when:
   `PTD-25.1`, `PTD-25.2`, `PTD-25.3.1`, `PTD-25.3.2`,
   `PTD-25.3.3.1`, `PTD-25.3.3.2.1` through `PTD-25.3.3.2.11`,
   `PTD-25.3.3.3`,
-  `PTD-25.4` through `PTD-25.6`, `PTD-26`, `PTD-27`, and `PTD-29`; the
+  `PTD-25.4` through `PTD-25.6`, `PTD-26`, `PTD-27`, `PTD-30` through
+  `PTD-33`, and `PTD-29`; the
   `PTD-21`, `PTD-22`, `PTD-23`, `PTD-24`, and `PTD-25` milestone containers
   and nested `PTD-23.1`, `PTD-23.2`, `PTD-23.3`, `PTD-25.3`, and
   `PTD-25.3.3` and `PTD-25.3.3.2` containers own no PR and close only
@@ -3124,8 +3261,15 @@ The campaign is complete only when:
 - the retired WIP pull requests remain closed and their parked sources are
   fully accounted for by delivered slices, recorded truth fixes, and recorded
   exclusions;
+- the stamped 2026-10-06 Bash/terminal design-only successor remains approved
+  in exact ancestry after `PTD-25.6` and before `PTD-26`;
 - every selected and acquired byte is pinned, verified, and locked;
-- every advertised support tuple has matching current external evidence;
+- every advertised support tuple has matching current external evidence,
+  including all twelve Bash cases across six OS/architecture tuples;
+- each Bash runtime tuple has the exact regular `/bin/bash` executable/file
+  provenance handoff, without an OmegaFlow qualification claim;
+- no live Reploy asciinema acquisition/env/runtime dependency remains and
+  equivalent direct executable/PTY, Docker, terminal and lifecycle proof passes;
 - the flat WIP and hard-coded Java path are absent;
 - focused, repository, Docker integration, release, and documentation checks
   pass at the final tip;
