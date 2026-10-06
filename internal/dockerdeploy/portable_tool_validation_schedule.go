@@ -32,6 +32,7 @@ var preparePortableToolValidationWorkspace = PrepareProbeWorkspace
 type PortableToolMaterializationValidationInputV1 struct {
 	Image    InspectedImageCandidate
 	selected []scheduledPortableToolProfile
+	observe  func(PortableToolProbeEvidenceV1)
 }
 
 // PortableToolApplicationValidationInputFromBuildLockV1 derives one scoped
@@ -274,7 +275,7 @@ func ValidatePortableToolMaterializationV1(
 			evidence, resultErr = nil, errors.Join(resultErr, cleanupErr)
 		}
 	}()
-	return runScheduledPortableToolProfiles(ctx, input.Image.Descriptor, workspace, input.selected)
+	return runScheduledPortableToolProfilesWithObservations(ctx, input.Image.Descriptor, workspace, input.selected, input.observe)
 }
 
 // RunPortableToolValidationScheduleV1 is the direct scheduling entry point for
@@ -315,6 +316,16 @@ func runScheduledPortableToolProfiles(
 	workspace PreparedProbeWorkspace,
 	selected []scheduledPortableToolProfile,
 ) ([]providers.ValidationEvidence, error) {
+	return runScheduledPortableToolProfilesWithObservations(ctx, descriptor, workspace, selected, nil)
+}
+
+func runScheduledPortableToolProfilesWithObservations(
+	ctx context.Context,
+	descriptor deploy.ImageDescriptor,
+	workspace PreparedProbeWorkspace,
+	selected []scheduledPortableToolProfile,
+	observe func(PortableToolProbeEvidenceV1),
+) ([]providers.ValidationEvidence, error) {
 	subject, err := deploy.RootFSSubject(descriptor.RootFSDiffIDs)
 	if err != nil {
 		return nil, err
@@ -331,6 +342,9 @@ func runScheduledPortableToolProfiles(
 		}
 		if err := requireAttributedPortableToolObservationsV1(entry, descriptor, observed); err != nil {
 			return nil, err
+		}
+		if observe != nil {
+			observe(observed)
 		}
 		value, err := providers.NewPortableToolValidationEvidence(subject, entry.Profile.Reference, entry.Runtime)
 		if err != nil {
