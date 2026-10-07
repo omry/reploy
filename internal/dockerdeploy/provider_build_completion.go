@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/buildprofile"
+	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providers/registry"
@@ -278,7 +280,18 @@ func validateProviderBuildCompletionInput(input ProviderBuildCompletionInput, po
 	if err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(planned, input.Graph.Plan) {
+	// Frozen selections are copied through canonical JSON. Provider-owned
+	// envelope values may have different Go container types after decoding;
+	// compare their exact serialized identity, as request finalization does.
+	plannedBytes, err := canonical.Marshal(planned)
+	if err != nil {
+		return err
+	}
+	graphBytes, err := canonical.Marshal(input.Graph.Plan)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(plannedBytes, graphBytes) {
 		return fmt.Errorf("provider build graph plan does not match the resolved request")
 	}
 	if input.Base.Platform != input.ResolvedRequest.Platform {
