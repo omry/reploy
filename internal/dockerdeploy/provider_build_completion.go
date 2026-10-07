@@ -35,6 +35,7 @@ type ProviderBuildCompletionInput struct {
 	ValidateChoices      bool
 	ValidatedInputs      ValidatedBuildInputsV1
 	NoCache              bool
+	observeFinalImage    func(context.Context, InspectedImageCandidate, deploy.BuildLockV1) error
 }
 
 type ProviderBuildCompletionResult struct {
@@ -178,6 +179,17 @@ func completeProviderBuild(
 	}
 	if input.ApplicationTools != nil {
 		if err := validateApplicationPortableBuildLockV1(input.Document, input.ApplicationTools, lock, finalized.Image); err != nil {
+			return ProviderBuildCompletionResult{}, err
+		}
+	}
+	if input.observeFinalImage != nil {
+		if err := ctx.Err(); err != nil {
+			return ProviderBuildCompletionResult{}, err
+		}
+		if err := input.observeFinalImage(ctx, finalized.Image, lock); err != nil {
+			return ProviderBuildCompletionResult{}, fmt.Errorf("observe finalized application image: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
 			return ProviderBuildCompletionResult{}, err
 		}
 	}
