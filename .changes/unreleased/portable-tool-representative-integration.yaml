@@ -1,0 +1,2 @@
+kind: Fixed
+body: Make the mounted validation helper reachable by the non-root portable-tool executor and preserve canonical frozen provider-plan identity at publication. Exercise representative definition-derived build and application cases with complete external evidence matching in the integration workflow.

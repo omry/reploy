@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"sort"
@@ -19,6 +20,40 @@ import (
 
 func ignoreFinalizedCandidateRemoval(context.Context, BuiltImageCandidate) error {
 	return nil
+}
+
+func TestProviderBuildCompletionPreservesCanonicalFrozenGraphIdentity(t *testing.T) {
+	input, operation, _ := providerBuildCompletionFixture(t)
+	defer operation.Unlock()
+	encoded, err := canonical.Marshal(input.Graph.Plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var frozen providers.ProviderPlanV1
+	if err := json.Unmarshal(encoded, &frozen); err != nil {
+		t.Fatal(err)
+	}
+	if reflect.DeepEqual(input.Graph.Plan, frozen) {
+		t.Fatal("fixture does not exercise provider envelope Go type normalization")
+	}
+	input.Graph.Plan = frozen
+	input.ResolvedRequest, input.PackageOverrides, err = finalizeResolvedRequestV1(
+		input.Document, input.Overlay, input.PackageOverrides, input.ResolvedRequest, input.Graph,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := providerBuildRuntimePolicyV1(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateProviderBuildCompletionInput(input, policy); err != nil {
+		t.Fatalf("identical frozen graph rejected: %v", err)
+	}
+	input.Graph.Plan.Nodes[0].ID += "-substituted"
+	if err := validateProviderBuildCompletionInput(input, policy); err == nil {
+		t.Fatal("changed graph identity accepted")
+	}
 }
 
 func TestCompleteProviderBuildOrdersValidationAssemblyAndPublication(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -43,6 +44,13 @@ func TestPrepareProbeWorkspaceUsesDeploymentStoreAndExactMount(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].Name() != probearchive.ExtractedFileName {
 		t.Fatalf("probe workspace entries = %#v", entries)
+	}
+	info, err := os.Stat(prepared.HostDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o755 {
+		t.Fatalf("mounted workspace is inaccessible to the non-root validator: %s", info.Mode())
 	}
 	if err := cleanup(); err != nil {
 		t.Fatal(err)
