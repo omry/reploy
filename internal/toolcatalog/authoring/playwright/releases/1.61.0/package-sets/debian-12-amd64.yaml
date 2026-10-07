@@ -33,7 +33,6 @@ fields:
     - libxfixes3
     - libxkbcommon0
     - libxrandr2
-    - xfonts-cyrillic
     - xfonts-scalable
     - xvfb
   repositories: []

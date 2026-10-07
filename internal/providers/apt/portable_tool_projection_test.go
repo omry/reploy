@@ -95,7 +95,7 @@ func TestProjectPortableToolAPTRootsV1MergesOrdinaryRootsWithoutMutatingInput(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsAPTRoot(roots, "curl") || !containsAPTRoot(roots, "xvfb") || len(roots) != 34 {
+	if !containsAPTRoot(roots, "curl") || !containsAPTRoot(roots, "xvfb") || containsAPTRoot(roots, "xfonts-cyrillic") || len(roots) != 33 {
 		t.Fatalf("merged APT roots = %v", roots)
 	}
 	merged, err := decodeCanonicalProviderRequestV1(projected[0].Request)
