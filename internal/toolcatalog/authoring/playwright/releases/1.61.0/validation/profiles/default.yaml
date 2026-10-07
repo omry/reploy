@@ -5,4 +5,4 @@ fields:
   version: 1.61.0
   probes:
     - path: /opt/reploy/tools/playwright/bin/playwright
-      args: [screenshot, --browser, chromium, "about:blank", /tmp/reploy-playwright-validation.png]
+      args: [screenshot, --browser, chromium, --wait-for-selector, "#reploy-validation", "data:text/html,%3Cmain%20id%3D%22reploy-validation%22%3EReploy%20Playwright%20validation%3C%2Fmain%3E", /tmp/reploy-playwright-validation.png]

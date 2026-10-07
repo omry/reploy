@@ -176,6 +176,21 @@ func TestPortableToolJavaMatrixDockerIntegration(t *testing.T) {
 	runPortableToolIntegrationCasesV1(t, selected)
 }
 
+func TestPortableToolPlaywrightMatrixDockerIntegration(t *testing.T) {
+	if os.Getenv("REPLOY_DOCKER_INTEGRATION") != "1" {
+		t.Skip("set REPLOY_DOCKER_INTEGRATION=1 to exercise the complete Playwright matrix")
+	}
+	cases, err := toolcatalog.EmbeddedIntegrationCasesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := portableToolIntegrationCasesForToolV1(cases, "playwright")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runPortableToolIntegrationCasesV1(t, selected)
+}
+
 // The same runner and exact exercised-set gate are used for representative and
 // exhaustive suites. No executor, artifact identity or target probe is replaced.
 func runPortableToolIntegrationCasesV1(t *testing.T, cases []toolcatalog.IntegrationCaseV1) {

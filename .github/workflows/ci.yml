@@ -62,13 +62,13 @@ jobs:
           NO_UPDATE_NOTIFIER: "1"
         run: nox -s ci
 
-      - name: Prove the complete Java matrix and current evidence
+      - name: Prove the complete Java and Playwright matrices and current evidence
         env:
           REPLOY_DOCKER_INTEGRATION: "1"
           REPLOY_PORTABLE_TOOL_EVIDENCE_DIR: ${{ runner.temp }}/portable-tool-evidence
         run: >-
           go test -v -count=1 -timeout 30m ./internal/dockerdeploy
-          -run '^TestPortableToolJavaMatrixDockerIntegration$'
+          -run '^(TestPortableToolJavaMatrixDockerIntegration|TestPortableToolPlaywrightMatrixDockerIntegration)$'
 
       - name: Retain external portable-tool observations
         if: always()

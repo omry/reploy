@@ -1,0 +1,3 @@
+kind: Changed
+body: Validate all three advertised Python and Chromium Playwright runtime targets through Reploy in required Linux CI, loading a local HTML page with probe networking disabled and retaining complete current external evidence. Correct Debian 12 native dependencies by removing an unavailable legacy font package.
+time: 2026-10-07T03:20:00+08:00

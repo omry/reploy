@@ -166,7 +166,7 @@ func TestEmbeddedPlaywrightCatalogPinsArtifactInventoryV1(t *testing.T) {
 		"libasound2", "libatk-bridge2.0-0", "libatk1.0-0", "libatspi2.0-0", "libcairo2", "libcups2",
 		"libdbus-1-3", "libdrm2", "libfontconfig1", "libfreetype6", "libgbm1", "libglib2.0-0", "libnspr4",
 		"libnss3", "libpango-1.0-0", "libx11-6", "libxcb1", "libxcomposite1", "libxdamage1", "libxext6",
-		"libxfixes3", "libxkbcommon0", "libxrandr2", "xfonts-cyrillic", "xfonts-scalable", "xvfb")
+		"libxfixes3", "libxkbcommon0", "libxrandr2", "xfonts-scalable", "xvfb")
 	ubuntuRequirements := append(append([]string{}, commonRequirements...),
 		"libasound2t64", "libatk-bridge2.0-0t64", "libatk1.0-0t64", "libatspi2.0-0t64", "libcairo2",
 		"libcups2t64", "libdbus-1-3", "libdrm2", "libfontconfig1", "libfreetype6", "libgbm1", "libglib2.0-0t64",
@@ -181,7 +181,9 @@ func TestEmbeddedPlaywrightCatalogPinsArtifactInventoryV1(t *testing.T) {
 	}
 	profile := embeddedRecordV1[*ValidationProfileRecordV1](t, "tool:playwright/releases/1.61.0/validation/profiles/default")
 	if !reflect.DeepEqual(profile.Probes, []RecordProbeV1{{Path: "/opt/reploy/tools/playwright/bin/playwright", Args: []string{
-		"screenshot", "--browser", "chromium", "about:blank", "/tmp/reploy-playwright-validation.png",
+		"screenshot", "--browser", "chromium", "--wait-for-selector", "#reploy-validation",
+		"data:text/html,%3Cmain%20id%3D%22reploy-validation%22%3EReploy%20Playwright%20validation%3C%2Fmain%3E",
+		"/tmp/reploy-playwright-validation.png",
 	}}}) {
 		t.Fatalf("embedded Playwright validation profile = %#v", profile)
 	}
