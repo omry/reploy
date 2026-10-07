@@ -94,10 +94,20 @@ func PortableToolBuildCaseValidationInputFromLockV1(
 	caseV1 toolcatalog.IntegrationCaseV1,
 	scope string,
 ) (PortableToolMaterializationValidationInputV1, error) {
+	return portableToolCaseValidationInputFromLockV1(image, lock, closures, caseV1, scope, "build")
+}
+
+func portableToolCaseValidationInputFromLockV1(
+	image InspectedImageCandidate,
+	lock providers.PortableToolLockV1,
+	closures []toolcatalog.SelectedClosureV1,
+	caseV1 toolcatalog.IntegrationCaseV1,
+	scope, contextV1 string,
+) (PortableToolMaterializationValidationInputV1, error) {
 	if err := requireCatalogDerivedBuildCaseV1(caseV1); err != nil {
 		return PortableToolMaterializationValidationInputV1{}, err
 	}
-	if caseV1.Support.Context != "build" || caseV1.Fixture.Context != "build" ||
+	if caseV1.Support.Context != contextV1 || caseV1.Fixture.Context != contextV1 ||
 		caseV1.Manifest.Tool == "" || caseV1.ManifestReference.Digest == "" {
 		return PortableToolMaterializationValidationInputV1{}, fmt.Errorf("portable-tool build case requires a derived build-context case")
 	}

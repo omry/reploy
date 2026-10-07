@@ -29,6 +29,7 @@ type LockedProviderBuildExecutionInputV1 struct {
 	Progress                io.Writer
 	BuildProgress           buildprogress.Reporter
 	RunOptions              RunOptions
+	observeFinalImage       func(context.Context, InspectedImageCandidate, deploy.BuildLockV1) error
 }
 
 type LockedProviderBuildExecutionResultV1 struct {
@@ -414,6 +415,7 @@ func executeLockedProviderBuildV1(
 		ValidateChoices: input.ValidateChoices, ValidatedInputs: preparation.ValidatedInputs,
 		NoCache:       preparation.NoCache,
 		RunValidation: input.RunValidation, RunOptions: completeOptions,
+		observeFinalImage: input.observeFinalImage,
 	})
 	endComplete(err)
 	if err != nil {

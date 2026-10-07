@@ -1,0 +1,2 @@
+kind: Changed
+body: Validate application portable-tool integration cases against the exact finalized image before publication and return observations only after build cleanup succeeds.
