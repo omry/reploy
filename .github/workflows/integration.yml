@@ -109,14 +109,14 @@ jobs:
           go test -count=1 -timeout 30m ./internal/dockerdeploy
           -run '^TestPortableChromiumUbuntu2604DockerIntegration$'
 
-      - name: Prove representative portable-tool cases and current evidence
+      - name: Prove representative cases and the complete Java matrix with current evidence
         if: matrix.name == 'Linux amd64'
         env:
           REPLOY_DOCKER_INTEGRATION: "1"
           REPLOY_PORTABLE_TOOL_EVIDENCE_DIR: ${{ runner.temp }}/portable-tool-evidence
         run: >-
           go test -v -count=1 -timeout 30m ./internal/dockerdeploy
-          -run '^TestPortableToolRepresentativeDockerIntegration$'
+          -run '^(TestPortableToolRepresentativeDockerIntegration|TestPortableToolJavaMatrixDockerIntegration)$'
 
       - name: Retain external portable-tool observations
         if: always() && matrix.name == 'Linux amd64'
