@@ -114,6 +114,19 @@ func decodeValidationEvidenceV1(filename string, payload []byte) (ValidationEvid
 	return evidence, nil
 }
 
+// DecodePortableToolValidationEvidenceV1 decodes and validates an external
+// evidence record. A valid record alone does not establish current support.
+func DecodePortableToolValidationEvidenceV1(payload []byte) (ValidationEvidenceV1, error) {
+	evidence, err := decodeValidationEvidenceV1("external validation evidence", payload)
+	if err != nil {
+		return ValidationEvidenceV1{}, err
+	}
+	if err := validateValidationEvidenceV1(evidence); err != nil {
+		return ValidationEvidenceV1{}, err
+	}
+	return evidence, nil
+}
+
 func decodeExactJSONV1(payload []byte, target any) error {
 	targetType := reflect.TypeOf(target)
 	for targetType.Kind() == reflect.Pointer {
