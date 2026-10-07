@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-09-04
+updated: 2026-10-07
 summary: Active planning surface for Reploy design and implementation gaps.
 ---
 
@@ -30,6 +30,18 @@ This file is the day-to-day queue for design and implementation gaps.
   user action.
 
 ## Pre-release
+
+- [ ] `P2` Move the exhaustive portable-tool build matrix to the release gate.
+      PR CI currently requires the complete Java matrix added in #222; its
+      roughly 1m42s cost is acceptable for now but will grow with tools and
+      targets. Keep unit tests, catalog integrity checks, and existing host
+      smoke checks on PRs; run the complete advertised tool/target build matrix
+      on the exact release commit and block publication on missing or failing
+      cases. Derive coverage from the catalog as tools are added, retain exact
+      external validation evidence, and keep manual matrix execution available.
+      Accept that build regressions may merge and be discovered at release
+      preparation. Update workflow and approval documentation together; leave
+      current CI and approval requirements in force until this follow-up lands.
 
 - [ ] `P1` Accept APT install transaction records with the optional trailing
       empty marker. Current APT versions may emit valid `Inst` records ending
