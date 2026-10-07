@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-09-22
+updated: 2026-10-06
 summary: Active composition, targeting, acquisition, identity, and validation model for proposed embedded portable-tool definitions.
 refines: docs/REPOSITORY_DESIGN.md
 ---
@@ -21,7 +21,9 @@ and per-slice acceptance evidence are defined by the
 That plan implements this document but does not override its normative design
 decisions.
 
-The immediate implementation scope is `tool:java` and `tool:playwright`.
+The immediate implementation scope is `tool:java`, `tool:playwright`, and
+`tool:bash`. Bash is the additive six-target native-package delivery specified
+below; it does not expand the Java or Playwright support matrices.
 Repository publication, TUF metadata, publisher authorization, and lifecycle
 policy remain owned by `REPOSITORY_DESIGN.md`. The embedded catalog will be an
 implementation bridge, but its definition boundaries are intended to carry
@@ -84,10 +86,12 @@ compatibility reader for that format.
   architecture.
 - General-purpose or runtime inheritance, templating, conditional expressions,
   or value overrides inside definition files.
-- Designing every future tool category before the initial Java and Playwright
-  definitions are complete.
-- Providing asciinema through the portable-tool catalog. The independently
-  pinned recorder used by controlled sessions remains outside this design.
+- Designing every future tool category beyond the initial Java, Playwright,
+  and Bash definitions.
+- Providing asciinema through the portable-tool catalog or implementing an
+  OmegaFlow adapter or recorder in Reploy. Consumer-owned recording remains
+  outside this design; obsolete Reploy recorder dependencies are removed with
+  replacement terminal proof under the implementation plan.
 
 ## Decision Summary
 
@@ -137,7 +141,7 @@ compatibility reader for that format.
 
 ### Tool
 
-A stable user-facing capability such as `java` or `playwright`. The tool record
+A stable user-facing capability such as `java`, `playwright`, or `bash`. The tool record
 owns durable naming, summary, provenance, and documentation metadata. It does
 not own an OS package list.
 
@@ -297,8 +301,11 @@ Validation profiles are definition records. A profile owns the
 executable reference and argument vector for its probes, while Reploy owns the
 constrained executor, environment, working directory, time/output/resource
 bounds, and forced network disablement. Targets and fixtures reference a shared
-profile rather than replicating the same probe in every variant record. Probe
-definitions cannot invoke a shell, relax executor bounds, or enable networking.
+profile rather than replicating the same probe in every variant record. Probes
+execute the selected executable directly with a fixed argument vector. They
+cannot use a shell to drive another command, evaluate shell-command text,
+relax executor bounds, or enable networking. A selected Bash executable may
+be tested directly under the restricted Bash profile contract below.
 
 ### Target Leaf
 
@@ -501,9 +508,12 @@ embedding an inline probe. Release manifests and target leaves reference
 profile records by canonical digest. Placeholder or unresolved validation
 references are not valid catalog data.
 
-Reploy owns the probe executor, not the command. The executor prohibits shells,
-disables networking, fixes the environment and working directory, and enforces
-time, output, and resource bounds. Catalog data cannot relax those constraints.
+Reploy owns the probe executor, not the command. The executor uses direct
+exec-form argv, disables networking, fixes the environment and working
+directory, and enforces time, output, and resource bounds. A probe cannot use
+a shell as a command driver or evaluate shell-command text. Testing the
+selected Bash executable directly is permitted only by the restricted Bash
+profile contract below. Catalog data cannot relax any executor constraint.
 
 These records describe required validation work. The resulting pass/fail
 evidence remains external to definition identity as described below, avoiding
@@ -1300,7 +1310,9 @@ gate.
 On a compatible integration runner, Java's definition-supplied profile probe
 checks the executable and confirms the requested Java version. Playwright's
 definition-supplied profile probes import every selected binding, launch each
-selected browser, load a local page, and exit cleanly. The Reploy-owned probe
+selected browser, load a local page, and exit cleanly. Bash profiles directly
+execute the selected regular executable and report its release as specified
+below. The Reploy-owned probe
 executor disables networking and enforces the fixed execution bounds. A probe
 failure fails that integration-validation job and produces no
 successful support record; it does not make cross-platform build
@@ -1486,6 +1498,88 @@ binding, and explicit Chromium selection on the existing validated AMD64
 targets. ARM64 is not advertised for Java or Playwright until every artifact,
 native dependency, materialization rule, and definition-supplied
 validation-profile probe for the exact target succeeds.
+
+### Initial Bash Native-Package Contract
+
+Bash uses the existing tool, release, target, native-package-set, export,
+validation-profile, and integration-fixture records. Its initial upstream
+releases and exact target matrix are:
+
+| Upstream release | OS generation | OCI architecture | APT architecture |
+| --- | --- | --- | --- |
+| `5.2.15` | Debian `12` | `linux/amd64` | `amd64` |
+| `5.2.15` | Debian `12` | `linux/arm64` | `arm64` |
+| `5.2.37` | Debian `13` | `linux/amd64` | `amd64` |
+| `5.2.37` | Debian `13` | `linux/arm64` | `arm64` |
+| `5.3.9` | Ubuntu `26.04` | `linux/amd64` | `amd64` |
+| `5.3.9` | Ubuntu `26.04` | `linux/arm64` | `arm64` |
+
+Each release has its own manifest and definition revision. Each target
+explicitly lists `build` and `runtime` support cases, with no binding or
+selection. There are twelve cases across the six tuples; Reploy derives them
+from the manifest rather than inferring a product. No Bash support for another
+OS generation, architecture, release, or context is implied.
+
+Acquisition is distro-native APT through the existing provider. Each target
+package set declares `bash=exact-package-version`; authoring must verify that
+package revision against the target's pinned immutable fixture and the stated
+upstream release. The package revision is not the tool's upstream version.
+APT locks bind exact package tuples, verified package bytes when acquired,
+base-package predecessors, and immutable base-image identity under the
+[APT provider detail design](APT_PROVIDER_DETAIL_DESIGN.md). The provider's
+ordinary no-downgrade/no-removal, acquisition barrier, and offline replay
+rules remain in force. A selected package unavailable for that fixture fails;
+there is no unversioned fallback, source build, unofficial binary distribution,
+or acquisition-time installer script.
+
+The `bash` export uses the target's package-owned invocation path: `/bin/bash`
+on Debian 12 and `/usr/bin/bash` on Debian 13 and Ubuntu 26.04. It must resolve
+to a regular executable in the actual materialized image. The consumer-required
+`/bin/bash` must also resolve to that same regular executable, including on
+merged-`/usr` layouts; final-image file observations must agree on byte digest.
+Do not invent package ownership for an alias absent from dpkg's file list.
+Identical tool-contributed `{name, path}` exports deduplicate within their
+owning scope; a conflicting path or package requirement fails before acquisition.
+Base exports retain their separate supplier-qualified identities. A matching
+base path neither replaces a tool export nor establishes the pinned package
+claim; sharing that file still requires the ordinary locked provenance below.
+A base image already containing Bash is not proof of the selected release.
+Reuse requires exact locked native-package/base provenance and current
+final-image executable/file evidence. A package-owned replacement must follow
+ordinary APT predecessor and materialization rules; no overwrite exception or
+new filesystem ownership mechanism is introduced.
+
+The initial Bash profile executes only the selected `bash` export directly with
+`--version` as its fixed argument vector. Bash is the subject under test,
+not the executor of another command. The profile cannot use `-c`, a script
+operand, `eval`, command substitution, or another shell to run the probe.
+Profiles remain reviewed definition data; there is no arbitrary script field
+or shell-execution interface. Reploy retains the fixed environment and working
+directory, network disablement, time/output/resource limits, actual image/scope
+binding, and ownership-safe cleanup. The successful original output must
+identify the selected upstream release; exact executable and package provenance
+must independently agree, so a base executable's successful exit alone cannot
+establish support.
+
+Every case executes the ordinary resolution, merge, acquisition, lock, offline
+materialization, and exact image callback through the generic integration
+harness. ARM64 requires actual execution on that architecture or an explicitly
+approved equivalent execution environment, with that environment retained in
+proof. Cross-compilation, schema coverage, or AMD64 output cannot establish it.
+Candidate catalog entries may precede execution in the delivery stack, but are
+not supported entries until current exact successful evidence exists.
+
+For each runtime tuple, the portable executable-provenance handoff consists of
+the exact lock and selected-closure identities, immutable image identity,
+existing provider executable/file evidence for the selected package-owned
+`bash` export, an existing native filesystem observation of the consumer's
+`/bin/bash`, and original current passing integration output. Both executable
+paths must resolve to the same regular terminal and agree on its byte digest;
+the consumer-path observation does not invent APT ownership for an alias.
+These facts use existing evidence encodings, remain external to definition
+identity, and must all describe the same final image. Reploy owns acquisition
+and target support. OmegaFlow owns adapter qualification and its digest-keyed compatibility
+table; Reploy's tuple proof makes no adapter or Envoy qualification claim.
 
 Validation evidence is external to definition identity. Schema v1 records the
 tool, upstream version, definition revision, manifest digest, selected-closure

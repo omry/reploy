@@ -1,6 +1,6 @@
 ---
 status: Proposed
-updated: 2026-09-22
+updated: 2026-10-06
 summary: Five reviewable corrections between PTD-23.3.7 and PTD-24 that reduce portable-tool bootstrap complexity without weakening external repository boundaries.
 implements: docs/PORTABLE_TOOL_DEFINITION_DESIGN.md
 ---
@@ -13,13 +13,17 @@ This plan implements the [Portable Tool Definition Design](PORTABLE_TOOL_DEFINIT
 under the repository trust and consumption contract in
 [Repository Design](REPOSITORY_DESIGN.md). It is a corrective prerequisite to
 PTD-24 in the [PTD implementation plan](PORTABLE_TOOL_DEFINITION_IMPLEMENTATION_PLAN.md),
-not a replacement for that campaign. The next delivery call is:
+not a replacement for that campaign. Its original delivery invocation was:
 
 ```text
 global:swe:deliver-design-stack(docs/PORTABLE_TOOL_SIMPLIFICATION_STACK.md, all)
 ```
 
-Start from the approved PTD-23.3.7 head. Deliver the five slices below in
+The following execution contract records that corrective stack; completed IDs
+are not reenrolled by this successor. Remaining delivery follows the current
+PTD implementation plan.
+
+Original execution contract: start from the approved PTD-23.3.7 head. Deliver the five slices below in
 order. Each owns one focused change, one commit and PR, a local independent
 review stamp, all required checks, and its own remote PR cycle at the exact PR
 head. Do not begin PTD-24 until this stack retains current-head approval.
@@ -30,7 +34,11 @@ attestation, lifecycle, target support claim, artifact content, or arbitrary
 installer-code policy. Existing records and locks may change identity before
 Reploy's first release; no reader for unreleased intermediate schemas is
 required. Persisted lock entry points still validate untrusted or retained
-bytes fully. Keep the initial Java and Playwright matrices fixed.
+bytes fully. Keep the initial Java and Playwright matrices fixed. The later
+2026-10-06 Bash successor in the PTD implementation plan uses these delivered
+primitives; it adds no task to this five-slice corrective stack and does not
+reopen its completed IDs. Bash follows the native-package and direct selected-
+executable validation contract in the governing design.
 
 ## Delivery queue
 
@@ -124,4 +132,6 @@ Every slice has its own current-head approved PR and all jobs produced by
 CI and every target smoke job. The assembled stack passes focused fresh-build
 and offline-replay checks. Any lock schema or identity changes are recorded in
 the relevant PR, and the final design and implementation plan describe the
-delivered behavior. The next ordinary PTD delivery item is PTD-24.
+delivered behavior. The original next ordinary PTD delivery item was PTD-24;
+the current successor continues from the retained completed heads under the
+PTD implementation plan.
