@@ -938,10 +938,13 @@ responsibility; no OmegaFlow Envoy implementation or compatibility table is
 introduced into Reploy. Reploy terminal proof does not establish adapter
 qualification.
 
-The 2026-10-06 PTD successor requires independent executable/PTY and Docker
+The 2026-10-06 PTD successor required independent executable/PTY and Docker
 proof of this direct boundary before removing Reploy's legacy recorder fixture.
-That removal is pending `PTD-33`; changing this design does not claim the new
-proof is already implemented.
+`PTD-33` implements both proofs, including drained and failed finalization,
+artifact closure before `complete`, acknowledgement, and owned cleanup. The
+legacy recorder fixture and its downloads were retired after both replacements
+passed. This establishes Reploy's direct contract; consumer recorder and adapter
+qualification remain the consumer's responsibility.
 
 ### Controller-Side Public Stream
 
@@ -1432,12 +1435,13 @@ The actual executable/PTY integration proves attachment completion precedes
 controller artifact finalization while the broker remains available for
 `complete` and acknowledgement, without requiring an external recorder.
 
-Implementation status: the Linux attachment implementation is complete. The
-historical acceptance test ran beneath checksum-pinned asciinema 3.2.1.
-Replacement of that fixture and its downloads with the independent direct
-executable/PTY proof is pending `PTD-33`; the old dependency is not a current
-public integration requirement or a new supported tool. Replacement retains
-all terminal/lifecycle facts above before removing the historical test.
+Implementation status: complete. `PTD-33` replaces the historical
+checksum-pinned asciinema 3.2.1 test with a direct executable/PTY proof. The
+replacement runs the actual attachment with a test-owned Linux PTY, verifies
+raw mode and restoration, exact binary input and large ordered output, resize,
+Ctrl-C bytes, drained/failed exits, closed artifacts, broker survival through
+`complete` and acknowledgement, and removal of the owned channel. The historical
+recorder test and its downloads are retired after the replacement passes.
 
 #### Slice 5D: Controller Packaging
 
@@ -1573,16 +1577,24 @@ qualify OmegaFlow's adapter, implement Envoy, or own command completion, cwd,
 action markers, recording formats, browser orchestration or media rendering.
 The consumer continues to own those behaviors.
 
-Implementation status: the historical Linux AMD64 fixture is implemented and
-uses an OmegaFlow-shaped controller with checksum-pinned asciinema 3.2.1.
-`PTD-33` replaces it with direct attachment and controller-owned artifact proof,
-then removes its recorder download/env/runtime dependencies. The retained
-historical test also covers a host-side PTY-observation timeout: after
-`terminating`, the public host is suspended across the output-finalization
-deadline while the controller and channel remain live. Its replacement must
-prove the same failed-finalization event, retained partial artifacts, successful
-controller completion/acknowledgement, truthful host failure and complete
-owned cleanup. This design-only update does not claim replacement is delivered.
+Implementation status: complete. `PTD-33` replaces the historical
+OmegaFlow-shaped asciinema fixture with a direct Reploy contract controller on
+Linux AMD64. The fixture uses util-linux `script` only to allocate the
+attachment's PTY and captures stdout into a controller-owned raw artifact.
+Waiting for the attachment joins its output-copy work and closes the artifact
+before `complete`. Playwright and Chromium remain checksum/digest-pinned.
+
+Both success and failed-finalization paths run through the public host command.
+The success path verifies canonical/raw input, binary and large ordered output,
+Ctrl-C, resize, a persistent shell, endpoint/browser handoff, and retained closed
+artifacts. The failure path suspends the public host across its output deadline
+while the controller remains live, then verifies the failed event, attachment
+exit 1, retained closed partial output, controller completion, result delivery
+and acknowledgement, and truthful host failure. Exact live-run container and
+network labels plus the observed private channel are checked after teardown;
+an unrelated session directory survives. CI runs the direct proof without a
+recorder dependency. This proof qualifies Reploy's contract, not a consumer
+adapter.
 
 ### Slice 6: User-Facing Documentation (implemented)
 
@@ -1591,15 +1603,15 @@ publish user-facing documentation before public release. Explain the
 controller/workload model and trust boundary, how to create and run a
 controlled session, the capability, endpoint, output, lifecycle, and failure
 contracts, and the security defaults and limitations. Include focused examples
-for OmegaFlow recording, sandboxed agents, and security inspection without
+for terminal capture/browser handoff, sandboxed agents, and security inspection without
 presenting any one profile as the controlled-session abstraction itself.
 
 Implementation status: complete. The public controlled-session guide now
 covers separate controller and workload staging, exact host invocation,
 controller client and attachment use, the strict JSON Lines stream, endpoint
 and output grants, lifecycle and failure handling, result and exit semantics,
-security defaults, and the initial Linux/Docker limitations. Focused OmegaFlow
-recording, sandboxed-agent, and security-inspection examples demonstrate the
+security defaults, and the initial Linux/Docker limitations. Focused terminal
+capture/browser handoff, sandboxed-agent, and security-inspection examples demonstrate the
 same generic boundary without adding integration-specific Reploy authority.
 The sandboxed-agent example places the agent and project in the workload while
 leaving only a small trusted session driver in the controller. The site

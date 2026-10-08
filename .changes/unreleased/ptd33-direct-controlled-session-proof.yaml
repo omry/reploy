@@ -1,0 +1,2 @@
+kind: Changed
+body: Replace recorder-dependent controlled-session fixtures with direct terminal and browser contract proofs, and document controller-owned byte capture and artifact finalization.
