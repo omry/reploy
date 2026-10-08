@@ -2,10 +2,12 @@ package dockerdeploy
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strings"
@@ -280,6 +282,138 @@ func TestPortableToolPlaywrightMatrixDockerIntegration(t *testing.T) {
 	runPortableToolIntegrationCasesV1(t, selected)
 }
 
+func portableToolIntegrationCasesForPlatformV1(cases []toolcatalog.IntegrationCaseV1, tool, platform string) ([]toolcatalog.IntegrationCaseV1, error) {
+	all, err := portableToolIntegrationCasesForToolV1(cases, tool)
+	if err != nil {
+		return nil, err
+	}
+	selected := []toolcatalog.IntegrationCaseV1{}
+	for _, c := range all {
+		if c.Fixture.Target.Platform == platform {
+			selected = append(selected, c)
+		}
+	}
+	if _, err := portableToolIntegrationRequestsV1(selected); err != nil {
+		return nil, err
+	}
+	return selected, nil
+}
+
+func TestPortableToolBashAMD64MatrixDockerIntegration(t *testing.T) {
+	if os.Getenv("REPLOY_DOCKER_INTEGRATION") != "1" {
+		t.Skip("set REPLOY_DOCKER_INTEGRATION=1 to exercise the complete Bash amd64 matrix")
+	}
+	if runtime.GOARCH != "amd64" {
+		t.Fatal("Bash amd64 proof requires an actual amd64 runner")
+	}
+	cases, err := toolcatalog.EmbeddedIntegrationCasesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := portableToolIntegrationCasesForPlatformV1(cases, "bash", "linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runPortableToolIntegrationCasesV1(t, selected)
+}
+
+// This fixture expectation identifies the subject's release in original
+// output; it adds no command or tool branch to the production executor.
+func requirePortableToolIntegrationBashOutputV1(caseV1 toolcatalog.IntegrationCaseV1, observation PortableToolCaseObservationV1) error {
+	var bundle portableToolCaseEvidenceBundleV1
+	if err := json.Unmarshal(observation.payload, &bundle); err != nil {
+		return err
+	}
+	if len(bundle.Observations) == 0 {
+		return fmt.Errorf("Bash case lacks original executor output")
+	}
+	for _, observed := range bundle.Observations {
+		if len(observed.Results) == 0 {
+			return fmt.Errorf("Bash profile lacks original results")
+		}
+		for _, result := range observed.Results {
+			output, err := base64.StdEncoding.DecodeString(result.Stdout.Content)
+			if err != nil || result.Stdout.Truncated || !strings.HasPrefix(string(output), "GNU bash, version "+caseV1.Manifest.Version+"(") {
+				return fmt.Errorf("original Bash output does not identify selected release %s", caseV1.Manifest.Version)
+			}
+		}
+	}
+	return nil
+}
+
+// Workflow artifact packaging only: every value uses its existing encoding.
+// The original case record and lock retain their existing digest domains.
+type portableToolIntegrationNativeEvidenceV1 struct {
+	Image      deploy.ImageDescriptor         `json:"image"`
+	Lock       deploy.BuildLockV1             `json:"lock"`
+	LockDigest canonical.Digest               `json:"lock_digest"`
+	Exports    []providers.ExecutableEvidence `json:"exports"`
+	Consumers  []providers.ExecutableEvidence `json:"consumers"`
+}
+
+func requirePortableToolIntegrationNativeEvidenceV1(caseV1 toolcatalog.IntegrationCaseV1, scope string, observation PortableToolCaseObservationV1, handoff *portableToolIntegrationNativeEvidenceV1) error {
+	if handoff == nil {
+		return fmt.Errorf("runtime native case lacks its observed executable handoff")
+	}
+	var bundle portableToolCaseEvidenceBundleV1
+	if err := json.Unmarshal(observation.payload, &bundle); err != nil {
+		return err
+	}
+	if err := requireCurrentPortableToolCaseBundleV1(bundle, caseV1, scope); err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(bundle.Image, handoff.Image) {
+		return fmt.Errorf("native handoff and original output describe different images")
+	}
+	digest, err := deploy.BuildLockDigestV1(handoff.Lock, registry.ValidateRequirementProfileV1)
+	if err != nil || digest != handoff.LockDigest {
+		return fmt.Errorf("native handoff differs from its exact lock: %v", err)
+	}
+	closure, err := toolcatalog.EmbeddedSelectedClosureForIntegrationCaseV1(caseV1, scope)
+	if err != nil {
+		return err
+	}
+	if _, err := PortableToolApplicationCaseValidationInputFromBuildLockV1(
+		InspectedImageCandidate{Descriptor: handoff.Image, Image: handoff.Lock.FinalImage},
+		handoff.Lock, []toolcatalog.SelectedClosureV1{closure}, caseV1, scope); err != nil {
+		return err
+	}
+	if len(handoff.Exports) != len(caseV1.Target.Exports) || len(handoff.Consumers) != len(handoff.Exports) {
+		return fmt.Errorf("native handoff lacks the complete selected export and consumer set")
+	}
+	for i, export := range handoff.Exports {
+		consumer := handoff.Consumers[i]
+		if err := providers.ValidateFinalExecutableEvidence(export); err != nil {
+			return err
+		}
+		if err := providers.ValidateFinalExecutableEvidence(consumer); err != nil {
+			return err
+		}
+		if export.Output != consumer.Output || export.InvocationPath != caseV1.Target.Exports[i].Path ||
+			consumer.InvocationPath != portableToolNativeConsumerPathV1(caseV1.Manifest.Tool, export.InvocationPath) ||
+			export.Terminal.Owner == nil || export.Terminal.Kind != "regular" || consumer.Terminal.Kind != "regular" ||
+			export.Terminal.SHA256 != consumer.Terminal.SHA256 ||
+			export.Terminal.Size != consumer.Terminal.Size {
+			return fmt.Errorf("native export and consumer do not identify the same selected regular executable")
+		}
+		matched := false
+		for _, output := range handoff.Lock.Catalog {
+			if output.Evidence.Output == export.Output && output.SupplierNode == "apt" &&
+				output.Name == caseV1.Target.Exports[i].Name && output.Evidence.InvocationPath == export.InvocationPath &&
+				reflect.DeepEqual(output.Evidence.Terminal, export.Terminal) && reflect.DeepEqual(output.Evidence.Facts, export.Facts) {
+				if matched {
+					return fmt.Errorf("native handoff has ambiguous locked package ownership")
+				}
+				matched = true
+			}
+		}
+		if !matched {
+			return fmt.Errorf("native handoff executable differs from its locked package-owned output")
+		}
+	}
+	return nil
+}
+
 // The same runner and exact exercised-set gate are used for representative and
 // exhaustive suites. No executor, artifact identity or target probe is replaced.
 func runPortableToolIntegrationCasesV1(t *testing.T, cases []toolcatalog.IntegrationCaseV1) {
@@ -305,11 +439,26 @@ func runPortableToolIntegrationCasesV1(t *testing.T, cases []toolcatalog.Integra
 		t.Fatal(err)
 	}
 	refs := map[canonical.Digest]providerstore.StoreObjectRef{}
+	nativeHandoffs := map[canonical.Digest]portableToolIntegrationNativeEvidenceV1{}
 	for _, request := range requests {
 		caseV1, scope := request.Case, request.Scope
 		var observation PortableToolCaseObservationV1
+		var handoff *portableToolIntegrationNativeEvidenceV1
 		passed := t.Run(caseV1.Manifest.Tool+"/"+caseV1.Fixture.ID, func(t *testing.T) {
-			observation = executePortableToolIntegrationCaseV1(t, caseV1, scope)
+			observation, handoff = executePortableToolIntegrationCaseV1(t, caseV1, scope)
+			if caseV1.Manifest.Tool == "bash" {
+				if err := requirePortableToolIntegrationBashOutputV1(caseV1, observation); err != nil {
+					t.Fatal(err)
+				}
+				if caseV1.Support.Context == "runtime" && handoff == nil {
+					t.Fatal("runtime Bash case lost its observed native provenance")
+				}
+			}
+			if handoff != nil {
+				if err := requirePortableToolIntegrationNativeEvidenceV1(caseV1, scope, observation, handoff); err != nil {
+					t.Fatal(err)
+				}
+			}
 		})
 		// Subtest cleanup retires all image owners before external publication.
 		// A failed callback, profile or cleanup leaves this requested case absent.
@@ -324,6 +473,54 @@ func runPortableToolIntegrationCasesV1(t *testing.T, cases []toolcatalog.Integra
 			t.Fatal(err)
 		}
 		refs[caseV1.ID] = ref
+		if caseV1.Manifest.Tool == "bash" {
+			var changed portableToolCaseEvidenceBundleV1
+			if err := json.Unmarshal(observation.payload, &changed); err != nil {
+				t.Fatal(err)
+			}
+			output := newBoundedPortableToolProbeOutput(portableToolProbeOutputLimit, nil)
+			_, _ = output.Write([]byte("GNU bash, version 0.0.0(1)-release\n"))
+			changed.Observations[0].Results[0].Stdout = output.Evidence()
+			encoded, err := canonical.Marshal(changed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := requirePortableToolIntegrationBashOutputV1(caseV1, PortableToolCaseObservationV1{payload: encoded}); err == nil {
+				t.Fatal("wrong original Bash version passed")
+			}
+		}
+		if handoff != nil {
+			nativeHandoffs[caseV1.ID] = *handoff
+			// Tamper the actual successful evidence, never invent a passing record.
+			for _, fault := range []string{"missing", "image", "lock", "package", "executable", "consumer"} {
+				encoded, err := json.Marshal(handoff)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var changed portableToolIntegrationNativeEvidenceV1
+				if err := json.Unmarshal(encoded, &changed); err != nil {
+					t.Fatal(err)
+				}
+				candidate := &changed
+				switch fault {
+				case "missing":
+					candidate = nil
+				case "image":
+					changed.Image.ConfigDigest = rendererDigest("f")
+				case "lock":
+					changed.LockDigest = rendererDigest("f")
+				case "package":
+					changed.Exports[0].Terminal.Owner = nil
+				case "executable":
+					changed.Exports[0].Terminal.SHA256 = rendererDigest("f")
+				case "consumer":
+					changed.Consumers[0].InvocationPath = "/wrong/bash"
+				}
+				if err := requirePortableToolIntegrationNativeEvidenceV1(caseV1, scope, observation, candidate); err == nil {
+					t.Fatalf("%s native handoff substitution passed", fault)
+				}
+			}
+		}
 		t.Logf("current external evidence: case=%s scope=%s ref=%s", caseV1.ID, scope, ref.Digest)
 	}
 	if err := RequireCurrentPortableToolCaseEvidenceV1(evidenceStore, requests, refs); err != nil {
@@ -360,9 +557,39 @@ func runPortableToolIntegrationCasesV1(t *testing.T, cases []toolcatalog.Integra
 	if err := os.WriteFile(filepath.Join(root, strings.ReplaceAll(t.Name(), "/", "-")+".json"), append(index, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if len(nativeHandoffs) != 0 {
+		encoded, err := canonical.Marshal(nativeHandoffs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Only complete, cleaned-up cases reach this external workflow artifact.
+		path := filepath.Join(root, strings.ReplaceAll(t.Name(), "/", "-")+"-native.json")
+		if err := os.WriteFile(path, encoded, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := os.ReadFile(path)
+		if err != nil || string(loaded) != string(encoded) {
+			t.Fatalf("retained native artifact differs from observed bytes: %v", err)
+		}
+		var retained map[canonical.Digest]portableToolIntegrationNativeEvidenceV1
+		if err := json.Unmarshal(loaded, &retained); err != nil {
+			t.Fatal(err)
+		}
+		for _, request := range requests {
+			if handoff, ok := retained[request.Case.ID]; ok {
+				payload, err := evidenceStore.LoadValidationRecord(refs[request.Case.ID])
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := requirePortableToolIntegrationNativeEvidenceV1(request.Case, request.Scope, PortableToolCaseObservationV1{payload: payload}, &handoff); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
 }
 
-func executePortableToolIntegrationCaseV1(t *testing.T, caseV1 toolcatalog.IntegrationCaseV1, scope string) PortableToolCaseObservationV1 {
+func executePortableToolIntegrationCaseV1(t *testing.T, caseV1 toolcatalog.IntegrationCaseV1, scope string) (PortableToolCaseObservationV1, *portableToolIntegrationNativeEvidenceV1) {
 	t.Helper()
 	ctx := t.Context()
 	platform, err := blueprint.ParsePlatform(caseV1.Fixture.Target.Platform)
@@ -453,7 +680,7 @@ func executePortableToolIntegrationCaseV1(t *testing.T, caseV1 toolcatalog.Integ
 		if err != nil {
 			t.Fatal(err)
 		}
-		return observation
+		return observation, nil
 	}
 	if _, err := StageDesiredStateV1(ctx, DesiredStateStageInputV1{DeploymentDir: dir, Document: document, ExplicitPlatform: platform.Canonical, BlueprintSource: "catalog-case", Create: true}); err != nil {
 		t.Fatal(err)
@@ -497,6 +724,7 @@ func executePortableToolIntegrationCaseV1(t *testing.T, caseV1 toolcatalog.Integ
 			t.Error(err)
 		}
 	}()
+	var handoff *portableToolIntegrationNativeEvidenceV1
 	observation, err := observeApplicationBuildCaseV1(ctx, LockedProviderBuildExecutionInputV1{
 		Preparation: preparation, SourceWheels: []providerstore.ArtifactDescriptor{}, LocalOverrides: []PythonLocalOverrideV1{},
 		RunOptions: options, Progress: os.Stdout,
@@ -527,6 +755,11 @@ func executePortableToolIntegrationCaseV1(t *testing.T, caseV1 toolcatalog.Integ
 						return fmt.Errorf("finalized native export lacks package ownership")
 					}
 				}
+				digest, err := deploy.BuildLockDigestV1(lock, registry.ValidateRequirementProfileV1)
+				if err != nil {
+					return err
+				}
+				handoff = &portableToolIntegrationNativeEvidenceV1{Image: image.Descriptor, Lock: lock, LockDigest: digest, Exports: exports, Consumers: consumers}
 			}
 			return nil
 		}
@@ -535,5 +768,5 @@ func executePortableToolIntegrationCaseV1(t *testing.T, caseV1 toolcatalog.Integ
 	if err != nil {
 		t.Fatal(err)
 	}
-	return observation
+	return observation, handoff
 }

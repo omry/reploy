@@ -1,0 +1,2 @@
+kind: Added
+body: Validate all six native Bash amd64 build and runtime cases through Reploy and retain their original output and runtime executable provenance as external workflow evidence, including equivalent consumer paths on merged-/usr images.

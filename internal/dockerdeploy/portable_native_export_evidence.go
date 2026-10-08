@@ -152,13 +152,22 @@ func CollectPortableNativeExportEvidenceV1(
 			resultErr = errors.Join(resultErr, err)
 		}
 	}()
-	response, err := session.Probe(ctx, request)
-	if err != nil {
-		return nil, nil, err
-	}
 	observations := map[string]probe.ExecutableObservationV1{}
-	for _, observation := range response.Observations {
-		observations[observation.ID] = observation
+	inspections := map[string]probe.ExecutableInspectionV1{}
+	for _, inspection := range request.Inspections {
+		inspections[inspection.ID] = inspection
+	}
+	for i := range ordered {
+		pair := probe.RequestV1{Schema: probe.RequestSchemaV1, Inspections: []probe.ExecutableInspectionV1{
+			inspections[fmt.Sprintf("consumer_%03d", i)], inspections[fmt.Sprintf("export_%03d", i)],
+		}}
+		response, err := session.ProbeSameFile(ctx, pair)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, observation := range response.Observations {
+			observations[observation.ID] = observation
+		}
 	}
 	fresh := []providers.ExecutableEvidence{}
 	for i, owned := range ordered {
@@ -171,9 +180,9 @@ func CollectPortableNativeExportEvidenceV1(
 		if err != nil {
 			return nil, nil, err
 		}
-		if current.Terminal.Path != consumer.Terminal.Path {
-			return nil, nil, fmt.Errorf("native export and consumer resolve to different terminal paths: export %q, consumer %q", current.Terminal.Path, consumer.Terminal.Path)
-		}
+		// The fixed native operation above proves same-file identity even for
+		// directory aliases with different lexical paths. Check locked bytes
+		// independently; neither consumer alias claims package ownership.
 		if current.Terminal.SHA256 != owned.Terminal.SHA256 || current.Terminal.Size != owned.Terminal.Size ||
 			current.Terminal.SHA256 != consumer.Terminal.SHA256 || current.Terminal.Size != consumer.Terminal.Size {
 			return nil, nil, fmt.Errorf("native export and consumer regular file differ from locked bytes")

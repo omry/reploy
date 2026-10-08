@@ -34,6 +34,62 @@ func Inspect(request RequestV1) (ResponseV1, error) {
 	return response, nil
 }
 
+// InspectSameFile emits ordinary observations only when both opened regular
+// files have the same filesystem identity. Byte equality alone is insufficient.
+func InspectSameFile(request RequestV1) (ResponseV1, error) {
+	if err := ValidateRequestV1(request); err != nil {
+		return ResponseV1{}, err
+	}
+	if len(request.Inspections) != 2 {
+		return ResponseV1{}, fmt.Errorf("same-file inspection requires exactly two paths")
+	}
+	response := ResponseV1{Schema: ResponseSchemaV1, Observations: make([]ExecutableObservationV1, 2)}
+	var files [2]*os.File
+	var stats [2]os.FileInfo
+	for i, inspection := range request.Inspections {
+		terminalPath, links, err := resolveExecutableLinks(inspection.InvocationPath)
+		if err != nil {
+			return ResponseV1{}, err
+		}
+		file, err := os.Open(terminalPath)
+		if err != nil {
+			return ResponseV1{}, fmt.Errorf("open terminal %s: %w", terminalPath, err)
+		}
+		defer file.Close()
+		info, err := file.Stat()
+		if err != nil {
+			return ResponseV1{}, err
+		}
+		if !info.Mode().IsRegular() {
+			return ResponseV1{}, fmt.Errorf("terminal %s is not a regular file", terminalPath)
+		}
+		files[i], stats[i] = file, info
+		response.Observations[i] = ExecutableObservationV1{
+			ID: inspection.ID, InvocationPath: inspection.InvocationPath, Links: links,
+			Terminal: FileObservationV1{Path: terminalPath},
+		}
+	}
+	if !os.SameFile(stats[0], stats[1]) {
+		return ResponseV1{}, fmt.Errorf("inspected paths do not resolve to the same regular file")
+	}
+	for i := range response.Observations {
+		observation := &response.Observations[i]
+		terminal, err := observeOpenRegularFile(files[i], observation.Terminal.Path, stats[i])
+		if err != nil {
+			return ResponseV1{}, err
+		}
+		access, err := observeAccessPaths(observation.InvocationPath, observation.Links, terminal.Path)
+		if err != nil {
+			return ResponseV1{}, err
+		}
+		observation.Terminal, observation.Access = terminal, access
+	}
+	if err := ValidateResponseV1(request, response); err != nil {
+		return ResponseV1{}, fmt.Errorf("validate same-file probe response: %w", err)
+	}
+	return response, nil
+}
+
 func inspectExecutable(inspection ExecutableInspectionV1) (ExecutableObservationV1, error) {
 	terminalPath, links, err := resolveExecutableLinks(inspection.InvocationPath)
 	if err != nil {
@@ -103,12 +159,23 @@ func observeRegularFile(filePath string) (FileObservationV1, error) {
 	if err != nil {
 		return FileObservationV1{}, fmt.Errorf("inspect terminal %s: %w", filePath, err)
 	}
+	return observeOpenRegularFile(file, filePath, info)
+}
+
+func observeOpenRegularFile(file *os.File, filePath string, info os.FileInfo) (FileObservationV1, error) {
 	if !info.Mode().IsRegular() {
 		return FileObservationV1{}, fmt.Errorf("terminal %s is not a regular file", filePath)
 	}
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
 		return FileObservationV1{}, fmt.Errorf("hash terminal %s: %w", filePath, err)
+	}
+	after, err := file.Stat()
+	if err != nil {
+		return FileObservationV1{}, fmt.Errorf("reinspect terminal %s: %w", filePath, err)
+	}
+	if !os.SameFile(info, after) || info.Size() != after.Size() || info.Mode() != after.Mode() || !info.ModTime().Equal(after.ModTime()) {
+		return FileObservationV1{}, fmt.Errorf("terminal %s changed while hashing", filePath)
 	}
 	uid, gid, err := numericOwnership(info)
 	if err != nil {

@@ -14,6 +14,53 @@ import (
 	"github.com/omry/reploy/internal/toolcatalog"
 )
 
+func TestPortableToolBashAMD64CasesDeriveCompleteCurrentInventory(t *testing.T) {
+	cases, err := toolcatalog.EmbeddedIntegrationCasesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := portableToolIntegrationCasesForPlatformV1(cases, "bash", "linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[canonical.Digest]bool{}
+	for _, c := range cases {
+		if c.Manifest.Tool == "bash" && c.Target.Target.OCIArchitecture == "amd64" {
+			want[c.ID] = true
+		}
+	}
+	contexts := map[string]map[string]bool{}
+	for _, c := range selected {
+		if !want[c.ID] || c.Fixture.Target.Platform != "linux/amd64" {
+			t.Fatal("unadvertised or other-architecture case selected")
+		}
+		delete(want, c.ID)
+		key := c.Target.Target.OSReleaseID + "/" + c.Target.Target.VersionID
+		if contexts[key] == nil {
+			contexts[key] = map[string]bool{}
+		}
+		contexts[key][c.Support.Context] = true
+	}
+	if len(selected) != 6 || len(want) != 0 || len(contexts) != 3 {
+		t.Fatalf("incomplete current Bash amd64 inventory: cases=%d missing=%d targets=%d", len(selected), len(want), len(contexts))
+	}
+	for target, contexts := range contexts {
+		if !contexts["build"] || !contexts["runtime"] || len(contexts) != 2 {
+			t.Fatalf("target %s lacks both exact contexts", target)
+		}
+	}
+	for i, j := 0, len(cases)-1; i < j; i, j = i+1, j-1 {
+		cases[i], cases[j] = cases[j], cases[i]
+	}
+	again, err := portableToolIntegrationCasesForPlatformV1(cases, "bash", "linux/amd64")
+	if err != nil || !reflect.DeepEqual(selected, again) {
+		t.Fatalf("inventory order changed the exhaustive set: %v", err)
+	}
+	if _, err := portableToolIntegrationCasesForPlatformV1(cases, "bash", "linux/unsupported"); err == nil {
+		t.Fatal("empty or unsupported architecture set accepted")
+	}
+}
+
 func TestPortableToolRepresentativesDeriveFromCurrentInventory(t *testing.T) {
 	cases, err := toolcatalog.EmbeddedIntegrationCasesV1()
 	if err != nil {
