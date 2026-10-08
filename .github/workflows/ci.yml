@@ -75,6 +75,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: portable-tool-evidence-ci-${{ github.sha }}
+          overwrite: true
           include-hidden-files: true
           if-no-files-found: ignore
           path: |
@@ -146,3 +147,58 @@ jobs:
         env:
           NO_UPDATE_NOTIFIER: "1"
         run: nox -s cli-smoke -- ${{ matrix.smoke_args }}
+
+      - name: Prove complete native Bash ARM64 cases and current evidence
+        if: matrix.target == 'linux-arm64'
+        env:
+          REPLOY_DOCKER_INTEGRATION: "1"
+          REPLOY_PORTABLE_TOOL_EVIDENCE_DIR: ${{ runner.temp }}/portable-tool-evidence
+        run: >-
+          go test -v -count=1 -timeout 30m ./internal/dockerdeploy
+          -run '^TestPortableToolBashARM64MatrixDockerIntegration$'
+
+      - name: Retain external native Bash ARM64 observations
+        if: always() && matrix.target == 'linux-arm64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-tool-evidence-arm64-${{ github.sha }}
+          overwrite: true
+          include-hidden-files: true
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/portable-tool-evidence/*.json
+            ${{ runner.temp }}/portable-tool-evidence/.reploy/provider-store/validation/
+
+  bash-native-evidence:
+    name: Bash native evidence checks
+    needs: [ci, target-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: Download original AMD64 observations
+        uses: actions/download-artifact@v4
+        with:
+          name: portable-tool-evidence-ci-${{ github.sha }}
+          path: ${{ runner.temp }}/bash-amd64-evidence
+
+      - name: Download original ARM64 observations
+        uses: actions/download-artifact@v4
+        with:
+          name: portable-tool-evidence-arm64-${{ github.sha }}
+          path: ${{ runner.temp }}/bash-arm64-evidence
+
+      - name: Require all twelve current Bash cases and both native runner contexts
+        env:
+          REPLOY_BASH_AMD64_EVIDENCE_DIR: ${{ runner.temp }}/bash-amd64-evidence
+          REPLOY_BASH_ARM64_EVIDENCE_DIR: ${{ runner.temp }}/bash-arm64-evidence
+        run: >-
+          go test -v -count=1 -timeout 3m ./internal/dockerdeploy
+          -run '^TestPortableToolBashCompleteRetainedEvidenceIntegration$'
