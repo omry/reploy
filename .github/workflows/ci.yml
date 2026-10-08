@@ -47,15 +47,19 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install nox
 
-      - name: Install pinned asciinema integration fixture
+      - name: Install pinned controlled-session browser fixtures
         run: |
-          fixture=testdata/controlled-session/asciinema-v3-linux-amd64.json
-          url=$(jq -r .url "$fixture")
-          sha256=$(jq -r .sha256 "$fixture")
-          curl --fail --location --silent --show-error "$url" --output "$RUNNER_TEMP/asciinema"
-          echo "$sha256  $RUNNER_TEMP/asciinema" | sha256sum --check --strict
-          chmod 0755 "$RUNNER_TEMP/asciinema"
-          echo "REPLOY_ASCIINEMA_FIXTURE=$RUNNER_TEMP/asciinema" >> "$GITHUB_ENV"
+          fixture=testdata/controlled-session/controlled-session-contract-v1.json
+          playwright_url=$(jq -r '.packages[] | select(.name == "playwright") | .url' "$fixture")
+          playwright_sha256=$(jq -r '.packages[] | select(.name == "playwright") | .sha256' "$fixture")
+          playwright_core_url=$(jq -r '.packages[] | select(.name == "playwright-core") | .url' "$fixture")
+          playwright_core_sha256=$(jq -r '.packages[] | select(.name == "playwright-core") | .sha256' "$fixture")
+          curl --fail --location --silent --show-error "$playwright_url" --output "$RUNNER_TEMP/playwright.tgz"
+          curl --fail --location --silent --show-error "$playwright_core_url" --output "$RUNNER_TEMP/playwright-core.tgz"
+          echo "$playwright_sha256  $RUNNER_TEMP/playwright.tgz" | sha256sum --check --strict
+          echo "$playwright_core_sha256  $RUNNER_TEMP/playwright-core.tgz" | sha256sum --check --strict
+          echo "REPLOY_PLAYWRIGHT_FIXTURE=$RUNNER_TEMP/playwright.tgz" >> "$GITHUB_ENV"
+          echo "REPLOY_PLAYWRIGHT_CORE_FIXTURE=$RUNNER_TEMP/playwright-core.tgz" >> "$GITHUB_ENV"
 
       - name: Run CI checks
         env:
@@ -69,6 +73,13 @@ jobs:
         run: >-
           go test -v -count=1 -timeout 30m ./internal/dockerdeploy
           -run '^(TestPortableToolJavaMatrixDockerIntegration|TestPortableToolPlaywrightMatrixDockerIntegration|TestPortableToolBashAMD64MatrixDockerIntegration)$'
+
+      - name: Prove the direct controlled-session terminal and browser contract
+        env:
+          REPLOY_DOCKER_INTEGRATION: "1"
+        run: >-
+          go test -v -count=1 -timeout 15m ./internal/dockerdeploy
+          -run '^TestReployControlledSessionContractDockerIntegration$'
 
       - name: Retain external portable-tool observations
         if: always()
