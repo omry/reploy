@@ -47,9 +47,16 @@ func PortableToolApplicationValidationInputFromBuildLockV1(
 	if err := ValidateInspectedImageCandidateIdentity(image); err != nil {
 		return PortableToolMaterializationValidationInputV1{}, err
 	}
-	if lock.PortableTools == nil || lock.PortableRuntimeLayer == nil || image.Image != lock.FinalImage || image.Descriptor.Platform != lock.Platform ||
+	if lock.PortableTools == nil || image.Image != lock.FinalImage || image.Descriptor.Platform != lock.Platform ||
 		!strings.HasPrefix(scope, "application:") || strings.TrimPrefix(scope, "application:") == "" {
 		return PortableToolMaterializationValidationInputV1{}, fmt.Errorf("application schedule requires its exact final image and application scope")
+	}
+	if lock.PortableRuntimeLayer == nil {
+		for _, entry := range lock.PortableTools.Plan.PortableToolPlan.Tools {
+			if entry.Scope == scope && portableToolEntryRequiresRuntimeLayerV1(entry) {
+				return PortableToolMaterializationValidationInputV1{}, fmt.Errorf("application schedule requires its selected portable runtime layer")
+			}
+		}
 	}
 	schedule, err := providers.PortableToolValidationScheduleFromLockV1(*lock.PortableTools)
 	if err != nil {
@@ -67,6 +74,13 @@ func PortableToolApplicationValidationInputFromBuildLockV1(
 		return PortableToolMaterializationValidationInputV1{}, err
 	}
 	return PortableToolMaterializationValidationInputV1{Image: image, selected: selected}, nil
+}
+
+// Native-only selections are consumed by the ordinary APT predecessor. All
+// other selections retain the materialized portable-layer requirement.
+func portableToolEntryRequiresRuntimeLayerV1(entry providers.PortableToolPlanEntryV1) bool {
+	return len(entry.Responsibilities.NativePackageSets) == 0 || len(entry.Responsibilities.Payloads) != 0 ||
+		len(entry.Responsibilities.BindingContracts) != 0 || entry.Runtime != nil
 }
 
 func PortableToolMaterializationValidationInputFromLockV1(

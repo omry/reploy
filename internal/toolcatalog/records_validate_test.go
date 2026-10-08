@@ -888,7 +888,7 @@ func TestValidateRuntimeV1RejectsInconsistentContracts(t *testing.T) {
 	valid := RecordRuntimeV1{
 		InstallRoot: "/opt/demo", Environment: []RecordEnvironmentVariableV1{{Name: "DEMO_HOME", Value: "/opt/demo"}},
 	}
-	if err := validateRuntimeV1([]string{"build", "runtime"}, &valid); err != nil {
+	if err := validateRuntimeV1([]string{"build", "runtime"}, &valid, false); err != nil {
 		t.Fatal(err)
 	}
 	for _, test := range []struct {
@@ -909,13 +909,13 @@ func TestValidateRuntimeV1RejectsInconsistentContracts(t *testing.T) {
 			if test.mutate != nil {
 				test.mutate(&value)
 			}
-			err := validateRuntimeV1(test.contexts, &value)
+			err := validateRuntimeV1(test.contexts, &value, false)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want substring %q", err, test.want)
 			}
 		})
 	}
-	if err := validateRuntimeV1([]string{"runtime"}, nil); err == nil || !strings.Contains(err.Error(), "requires a runtime contract") {
+	if err := validateRuntimeV1([]string{"runtime"}, nil, false); err == nil || !strings.Contains(err.Error(), "requires a runtime contract") {
 		t.Fatalf("missing runtime error = %v", err)
 	}
 }

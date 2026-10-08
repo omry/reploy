@@ -355,16 +355,20 @@ func executeLockedProviderBuildV1(
 				resultErr = errors.Join(resultErr, cleanupErr)
 			}
 		}()
-		image, err := PreparePortableRuntimePayloadLayerV1(ctx, preparation.Store, payloads, validation.Final.Image.Descriptor, options)
-		if err != nil {
-			return LockedProviderBuildExecutionResultV1{}, err
-		}
-		defer func() {
-			if cleanupErr := image.Cleanup(context.WithoutCancel(ctx)); cleanupErr != nil {
-				result = LockedProviderBuildExecutionResultV1{}
-				resultErr = errors.Join(resultErr, cleanupErr)
+		if len(payloads.copies) != 0 || len(payloads.authorityEnvironment) != 0 {
+			image, err := PreparePortableRuntimePayloadLayerV1(ctx, preparation.Store, payloads, validation.Final.Image.Descriptor, options)
+			if err != nil {
+				return LockedProviderBuildExecutionResultV1{}, err
 			}
-		}()
+			defer func() {
+				if cleanupErr := image.Cleanup(context.WithoutCancel(ctx)); cleanupErr != nil {
+					result = LockedProviderBuildExecutionResultV1{}
+					resultErr = errors.Join(resultErr, cleanupErr)
+				}
+			}()
+			portableLayer = &deploy.PortableRuntimeLayerV1{Schema: deploy.PortableRuntimeLayerSchemaV1, Upstream: validation.Final.Image.Image, Result: image.Image.Image}
+			validation.Final.Image = image.Image
+		}
 		applicationLock, err := rebindPortableToolLockProviderPlanV1(&payloads.authorityLock, graph.Plan)
 		if err != nil {
 			return LockedProviderBuildExecutionResultV1{}, err
@@ -382,8 +386,6 @@ func executeLockedProviderBuildV1(
 		} else {
 			portableTools = applicationLock
 		}
-		portableLayer = &deploy.PortableRuntimeLayerV1{Schema: deploy.PortableRuntimeLayerSchemaV1, Upstream: validation.Final.Image.Image, Result: image.Image.Image}
-		validation.Final.Image = image.Image
 		if err := payloads.Cleanup(); err != nil {
 			return LockedProviderBuildExecutionResultV1{}, err
 		}

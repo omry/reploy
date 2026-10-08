@@ -13,8 +13,8 @@ func TestDeriveIntegrationCasesV1UsesExactAdvertisedTuples(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cases) != 7 { // Four Java build leaves and three Playwright runtime leaves.
-		t.Fatalf("derived %d cases, want 7", len(cases))
+	if len(cases) != 19 { // Four Java, three Playwright, twelve candidate Bash cases.
+		t.Fatalf("derived %d cases, want 19", len(cases))
 	}
 	seen := make(map[string]bool)
 	for _, item := range cases {

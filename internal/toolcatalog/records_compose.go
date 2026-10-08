@@ -483,6 +483,13 @@ func validateTupleContributionsV1(records map[string]loadedRecordV1, contract *R
 	if err != nil {
 		return err
 	}
+	// A native-only runtime is installed and owned by its package manager;
+	// it must not manufacture an archive install root for system paths.
+	if tuple.Context == "runtime" && contract.Runtime == nil {
+		if len(packages) == 0 || len(payloads) != 0 || len(artifacts) != 0 || len(tuple.Bindings) != 0 {
+			return fmt.Errorf("runtime without an install-root contract requires native-only package contributions")
+		}
+	}
 	packagesByName := make(map[string]string)
 	for _, reference := range packages {
 		record, err := resolvedRecordV1(records, reference)
