@@ -70,7 +70,11 @@ func TestPortableToolHarnessUnsupportedRequestsFailBeforeAcquisition(t *testing.
 	}
 	for _, caseV1 := range cases {
 		faults := []string{"target", "architecture", "binding", "selection"}
-		if caseV1.Support.Context == "build" {
+		canRuntime := false
+		for _, other := range cases {
+			canRuntime = canRuntime || (other.ManifestReference == caseV1.ManifestReference && other.Target.Target == caseV1.Target.Target && other.Support.Context == "runtime")
+		}
+		if caseV1.Support.Context == "build" && !canRuntime {
 			faults = []string{"context"}
 		}
 		for _, fault := range faults {
@@ -98,7 +102,11 @@ func TestPortableToolHarnessUnsupportedRequestsFailBeforeAcquisition(t *testing.
 				case "target":
 					target.VersionID = "unknown"
 				case "architecture":
-					target.Platform, target.OCIArchitecture, target.NativeArchitecture = "linux/arm64", "arm64", "arm64"
+					if target.OCIArchitecture == "arm64" {
+						target.Platform, target.OCIArchitecture, target.NativeArchitecture = "linux/amd64", "amd64", "amd64"
+					} else {
+						target.Platform, target.OCIArchitecture, target.NativeArchitecture = "linux/arm64", "arm64", "arm64"
+					}
 				case "binding":
 					app.Packages.Tools[0].Binding.Explicit = []string{"unknown"}
 				case "selection":

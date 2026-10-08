@@ -734,7 +734,7 @@ func buildIntegrationCaseForSourceBuilderTest(t *testing.T) toolcatalog.Integrat
 		t.Fatal(err)
 	}
 	for _, caseV1 := range cases {
-		if caseV1.Support.Context == "build" && caseV1.Fixture.Target == sourceBuilderJavaTarget("debian", "12") {
+		if caseV1.Manifest.Tool == "java" && caseV1.Support.Context == "build" && caseV1.Fixture.Target == sourceBuilderJavaTarget("debian", "12") {
 			return caseV1
 		}
 	}

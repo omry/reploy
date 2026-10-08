@@ -1,0 +1,16 @@
+kind: portable-tool-release-manifest-v1
+fields:
+  id: tool:bash/releases/5.2.37/revisions/1/manifest
+  tool: bash
+  version: "5.2.37"
+  aliases: []
+  revision: "1"
+  contract: {id: tool:bash/releases/5.2.37/contract, digest: ""}
+  targets:
+    - {id: tool:bash/releases/5.2.37/targets/debian/13/amd64, digest: ""}
+    - {id: tool:bash/releases/5.2.37/targets/debian/13/arm64, digest: ""}
+  artifact_sources: []
+  provenance:
+    - https://www.gnu.org/software/bash/
+  validation_profiles:
+    - {id: tool:bash/releases/5.2.37/validation/profiles/default, digest: ""}

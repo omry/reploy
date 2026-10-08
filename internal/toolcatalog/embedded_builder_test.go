@@ -22,7 +22,7 @@ func TestClientReployVersionV1MapsBuildsToTheirReleaseCoordinate(t *testing.T) {
 		}
 	}
 	capabilities, err := EmbeddedClientCapabilitiesV1("0.7.0.dev1")
-	if err != nil || capabilities.ReployVersion != "0.7.0" || len(capabilities.ResolverPrimitives) != 1 || capabilities.ResolverPrimitives[0] != "https-sha256" {
+	if err != nil || capabilities.ReployVersion != "0.7.0" || len(capabilities.ResolverPrimitives) != 2 || capabilities.ResolverPrimitives[0] != "apt" || capabilities.ResolverPrimitives[1] != "https-sha256" {
 		t.Fatalf("capabilities = %#v, %v", capabilities, err)
 	}
 }

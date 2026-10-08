@@ -1,0 +1,19 @@
+kind: portable-tool-target-v1
+fields:
+  id: tool:bash/releases/5.2.37/targets/debian/13/arm64
+  target: {platform: linux/arm64, os_release_id: debian, version_id: "13", oci_architecture: arm64, native_architecture: arm64, package_manager: apt}
+  support_cases:
+    - {context: build, bindings: [], selections: {}}
+    - {context: runtime, bindings: [], selections: {}}
+  package_sets:
+    - {id: tool:bash/releases/5.2.37/package-sets/debian-13-arm64, digest: ""}
+  bindings: []
+  payloads: []
+  selections: []
+  exports:
+    - {name: bash, path: /usr/bin/bash}
+  integration_fixtures:
+    - {id: tool:bash/releases/5.2.37/validation/fixtures/debian-13-arm64-build, digest: ""}
+    - {id: tool:bash/releases/5.2.37/validation/fixtures/debian-13-arm64-runtime, digest: ""}
+  validation_profiles:
+    - {id: tool:bash/releases/5.2.37/validation/profiles/default, digest: ""}

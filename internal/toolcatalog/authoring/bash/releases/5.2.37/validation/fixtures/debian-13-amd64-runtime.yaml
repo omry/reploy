@@ -1,0 +1,12 @@
+kind: portable-tool-integration-fixture-v1
+fields:
+  id: tool:bash/releases/5.2.37/validation/fixtures/debian-13-amd64-runtime
+  name: debian-13-amd64-runtime
+  target: {platform: linux/amd64, os_release_id: debian, version_id: "13", oci_architecture: amd64, native_architecture: amd64, package_manager: apt}
+  base_image: docker.io/library/debian:13-slim
+  base_image_digest: sha256:918311b7b6c4c6f68b232ba516584925f6c78ad82b6fd534b98979df6438e483
+  context: runtime
+  bindings: []
+  selections: {}
+  validation_profiles:
+    - {id: tool:bash/releases/5.2.37/validation/profiles/default, digest: ""}

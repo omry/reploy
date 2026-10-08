@@ -1,0 +1,8 @@
+kind: portable-tool-validation-profile-v1
+fields:
+  id: tool:bash/releases/5.2.37/validation/profiles/default
+  tool: bash
+  version: "5.2.37"
+  probes:
+    - path: /usr/bin/bash
+      args: [--version]
