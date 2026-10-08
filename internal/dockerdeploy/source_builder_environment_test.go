@@ -1163,7 +1163,7 @@ func TestSourceBuilderArchiveFormatV1AcceptsOnlyPortableArchives(t *testing.T) {
 			t.Fatalf("format(%q) = %q, %v; want %q", logicalPath, got, err, want)
 		}
 	}
-	if _, err := sourceBuilderArchiveFormatV1("tools/asciinema/asciinema-x86_64"); err == nil {
+	if _, err := sourceBuilderArchiveFormatV1("tools/example/example-x86_64"); err == nil {
 		t.Fatal("raw executable accepted as a portable archive")
 	}
 }

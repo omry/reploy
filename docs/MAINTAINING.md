@@ -140,6 +140,29 @@ For host CLI checks that must avoid executing Docker entirely, use:
 nox -s cli-smoke -- --no-docker
 ```
 
+## Controlled-session Contract Proof
+
+The default Go suite runs the Linux executable/PTY proof with a test-owned
+terminal. It requires no recorder download. For the direct Docker terminal and
+browser proof, acquire the two package URLs from
+`testdata/controlled-session/controlled-session-contract-v1.json` and verify
+their recorded SHA-256 digests before setting the fixture paths:
+
+```bash
+REPLOY_DOCKER_INTEGRATION=1 \
+REPLOY_PLAYWRIGHT_FIXTURE=/path/to/playwright.tgz \
+REPLOY_PLAYWRIGHT_CORE_FIXTURE=/path/to/playwright-core.tgz \
+go test -v -count=1 -timeout 15m ./internal/dockerdeploy \
+  -run '^TestReployControlledSessionContractDockerIntegration$'
+```
+
+Linux CI and the Linux AMD64 Integration job acquire and verify these fixtures
+and run the proof. Missing fixture paths fail an enabled Docker proof. The
+controller image pins Playwright/Chromium; util-linux supplies the PTY allocator.
+The fixture proves Reploy's terminal, browser endpoint, lifecycle, retained
+artifact, and owned cleanup contracts. Consumer recording formats, adapters,
+redaction, and media rendering remain outside this proof.
+
 ## Changelog Fragments
 
 Reploy uses [Changie](https://github.com/miniscruff/changie) for release-note
