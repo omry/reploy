@@ -300,21 +300,11 @@ func portableToolIntegrationCasesForPlatformV1(cases []toolcatalog.IntegrationCa
 }
 
 func TestPortableToolBashAMD64MatrixDockerIntegration(t *testing.T) {
-	if os.Getenv("REPLOY_DOCKER_INTEGRATION") != "1" {
-		t.Skip("set REPLOY_DOCKER_INTEGRATION=1 to exercise the complete Bash amd64 matrix")
-	}
-	if runtime.GOARCH != "amd64" {
-		t.Fatal("Bash amd64 proof requires an actual amd64 runner")
-	}
-	cases, err := toolcatalog.EmbeddedIntegrationCasesV1()
-	if err != nil {
-		t.Fatal(err)
-	}
-	selected, err := portableToolIntegrationCasesForPlatformV1(cases, "bash", "linux/amd64")
-	if err != nil {
-		t.Fatal(err)
-	}
-	runPortableToolIntegrationCasesV1(t, selected)
+	runPortableToolBashNativeMatrixV1(t, "amd64")
+}
+
+func TestPortableToolBashARM64MatrixDockerIntegration(t *testing.T) {
+	runPortableToolBashNativeMatrixV1(t, "arm64")
 }
 
 // This fixture expectation identifies the subject's release in original
