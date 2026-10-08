@@ -384,7 +384,8 @@ These are example ways to build controllers on the same generic boundary, not
 named Reploy resources, configuration profiles, or selectable session modes.
 They do not change the session abstraction or grant integration-specific host
 authority. The agent and inspection examples illustrate uses of the generic
-boundary; the OmegaFlow example is backed by Reploy's conformance fixture.
+boundary. Reploy directly tests the terminal and browser contract with a
+repository-owned controller; consumers qualify their own adapters.
 
 ### Sandboxed agent
 
@@ -416,38 +417,39 @@ it is not a network IDS, HTTP policy engine, malware containment guarantee, or
 content-sanitization layer. The controller/workload private-network limitation
 still applies.
 
-### OmegaFlow recording
+### Terminal capture and browser handoff
 
-OmegaFlow runs in the controller and starts the broker. After
-`broker-ready(terminal_socket)`, it must start the byte-only attachment within
-the 10-second attachment deadline. The controller container itself has no TTY,
-so OmegaFlow allocates one for unmodified asciinema 3.x. This equivalent Bash
-example quotes the generated commands and uses util-linux `script` as the PTY
-wrapper:
+The controller starts the broker. After `broker-ready(terminal_socket)`, it
+must start the byte-only attachment within the 10-second attachment deadline.
+The controller container itself has no TTY. This Bash example uses util-linux
+`script` to allocate one and retains the attachment's bytes directly:
 
 ```bash
 printf -v attach_command '%q ' \
   reploy-session-client attach --socket "$terminal_socket"
-printf -v record_command '%q ' \
-  asciinema record --quiet --window-size 120x40 --return \
-  --command "$attach_command" "$REPLOY_OUTPUT_DIR/session.cast"
+printf -v tty_command 'stty rows 40 cols 120; exec %s' "$attach_command"
+attachment_status=0
 script --quiet --return --echo never \
-  --command "$record_command" /dev/null
+  --command "$tty_command" /dev/null > "$REPLOY_OUTPUT_DIR/terminal.raw" || attachment_status=$?
 ```
 
 Use a safely quoted socket value obtained from the decoded event; do not parse
 it from terminal output. A controller with its own PTY process API can allocate
-the terminal directly instead of using `script`; no asciinema modification or
-control-socket support is required. OmegaFlow can use the granted endpoint
-coordinates for Playwright or Chromium while the same workload shell stays
-alive. After the attachment exits, it finalizes the cast, screenshots,
-diagnostics, and rendered media, sends `complete`, reads and stores
-`terminated`, then acknowledges it.
+the terminal directly. The example captures raw bytes and does not define a
+recording format. Keep the broker alive while waiting for attachment exit. If
+using a separate output-copy process, join it and close its artifacts before
+sending `complete`. An attachment failure must remain visible even when partial
+artifacts are retained and the controller completes successfully.
+
+The controller can use the granted endpoint coordinates for Playwright or
+Chromium while the same workload shell stays alive. After finalizing terminal
+artifacts, screenshots, diagnostics, and any rendered media, it sends
+`complete`, reads and stores `terminated`, then acknowledges it.
 
 Reploy owns PTY bytes, endpoint coordinates, lifecycle truth, and bounded
-artifact retention. OmegaFlow continues to own command-completion detection,
-cwd reporting, action markers, terminal-to-browser handoff, browser actions,
-recording policy, redaction, and media rendering.
+artifact retention. Consumers such as OmegaFlow own command-completion
+detection, cwd reporting, action markers, terminal-to-browser handoff, browser
+actions, recording dependencies and policy, redaction, and media rendering.
 
 ## Compatibility fixtures
 

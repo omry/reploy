@@ -445,7 +445,7 @@ environment:
   base: {image: docker.io/library/debian:13-slim}
   applications:
     z-tools:
-      packages: {tools: [tool:asciinema==3.2.1]}
+      packages: {tools: [tool:unsupported-example==1.0.0]}
     a-tools:
       packages: {tools: [tool:playwright==1.61.0, tool:java==21]}
 docker: {}
