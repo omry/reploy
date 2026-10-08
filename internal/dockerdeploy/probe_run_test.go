@@ -479,3 +479,53 @@ func TestImageValidationSessionPathAbsenceCheckIsFixed(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestImageValidationSessionSameFileProbeUsesFixedMode(t *testing.T) {
+	descriptor := testProbeImageDescriptor(t, "linux/amd64")
+	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
+	request := probe.RequestV1{Schema: probe.RequestSchemaV1, Inspections: []probe.ExecutableInspectionV1{
+		{ID: "consumer", InvocationPath: "/bin/bash"}, {ID: "export", InvocationPath: "/usr/bin/bash"},
+	}}
+	response := probe.ResponseV1{Schema: probe.ResponseSchemaV1, Observations: []probe.ExecutableObservationV1{
+		directExecutableObservation("consumer", "/bin/bash"), directExecutableObservation("export", "/usr/bin/bash"),
+	}}
+	restore := stubImageValidationCommands(t, mustCanonicalProbeResponse(t, response), nil)
+	defer restore()
+	session, err := OpenImageValidationSession(context.Background(), descriptor, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.ProbeSameFile(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"exec", "--interactive", "--user", "0:0", "--workdir", "/", session.containerName, ProbeContainerExecutable, "inspect-same-file"}
+	if !reflect.DeepEqual(recordedImageValidationCommands[2].Args, want) || !bytes.Equal(recordedImageValidationStdin, mustCanonicalProbeRequest(t, request)) {
+		t.Fatal("same-file verification did not use its fixed canonical helper contract")
+	}
+	before := len(recordedImageValidationCommands)
+	for _, invalid := range []probe.RequestV1{
+		{Schema: probe.RequestSchemaV1, Inspections: []probe.ExecutableInspectionV1{}},
+		{Schema: probe.RequestSchemaV1, Inspections: request.Inspections[:1]},
+	} {
+		if _, err := session.ProbeSameFile(context.Background(), invalid); err == nil {
+			t.Fatal("accepted missing identity pair")
+		}
+	}
+	if _, err := session.ProbeSameFile(nil, request); err == nil {
+		t.Fatal("accepted nil context")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := session.ProbeSameFile(ctx, request); err == nil {
+		t.Fatal("accepted cancelled probe")
+	}
+	if len(recordedImageValidationCommands) != before {
+		t.Fatal("invalid same-file request executed a command")
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.ProbeSameFile(context.Background(), request); err == nil {
+		t.Fatal("accepted closed session")
+	}
+}

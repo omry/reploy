@@ -109,8 +109,9 @@ func mainWithActions(
 		}
 		return 0
 	}
-	if len(args) != 0 {
-		_, _ = fmt.Fprintln(stderr, "reploy-probe accepts no arguments for one canonical stdin request, fixed hold mode, fixed copy-volume-tree mode, fixed install-local-account mode, fixed verify-exec mode, or a sandbox-exec/restricted-exec contract")
+	sameFile := len(args) == 1 && args[0] == "inspect-same-file"
+	if len(args) != 0 && !sameFile {
+		_, _ = fmt.Fprintln(stderr, "reploy-probe accepts no arguments for one canonical stdin request, fixed inspect-same-file mode, fixed hold mode, fixed copy-volume-tree mode, fixed install-local-account mode, fixed verify-exec mode, or a sandbox-exec/restricted-exec contract")
 		return 2
 	}
 	content, err := io.ReadAll(stdin)
@@ -123,7 +124,11 @@ func mainWithActions(
 		_, _ = fmt.Fprintf(stderr, "reploy-probe: %v\n", err)
 		return 1
 	}
-	response, err := Inspect(request)
+	inspect := Inspect
+	if sameFile {
+		inspect = InspectSameFile
+	}
+	response, err := inspect(request)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "reploy-probe: %v\n", err)
 		return 1

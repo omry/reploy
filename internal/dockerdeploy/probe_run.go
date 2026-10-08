@@ -267,6 +267,19 @@ func (session *ImageValidationSession) runAPTProfileCommand(ctx context.Context,
 // Probe performs one fixed canonical filesystem-observation exchange in the
 // already-running validation container.
 func (session *ImageValidationSession) Probe(ctx context.Context, request probe.RequestV1) (probe.ResponseV1, error) {
+	return session.probe(ctx, request, false)
+}
+
+// ProbeSameFile verifies actual regular-file identity inside the held image.
+// It uses the ordinary closed request and response, with one fixed helper mode.
+func (session *ImageValidationSession) ProbeSameFile(ctx context.Context, request probe.RequestV1) (probe.ResponseV1, error) {
+	if len(request.Inspections) != 2 {
+		return probe.ResponseV1{}, fmt.Errorf("same-file probe requires exactly two paths")
+	}
+	return session.probe(ctx, request, true)
+}
+
+func (session *ImageValidationSession) probe(ctx context.Context, request probe.RequestV1, sameFile bool) (probe.ResponseV1, error) {
 	if session == nil || session.closed {
 		return probe.ResponseV1{}, fmt.Errorf("image validation session is not open")
 	}
@@ -289,6 +302,9 @@ func (session *ImageValidationSession) Probe(ctx context.Context, request probe.
 		"exec", "--interactive", "--user", "0:0", "--workdir", "/",
 		session.containerName, session.workspace.ContainerExecutable,
 	}}
+	if sameFile {
+		spec.Args = append(spec.Args, "inspect-same-file")
+	}
 	if err := session.runDockerCommand(spec, RunOptions{
 		Context: ctx, Stdin: bytes.NewReader(encoded), Stdout: &stdout, Stderr: &stderr,
 	}); err != nil {

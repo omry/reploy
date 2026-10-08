@@ -15,7 +15,7 @@ import (
 )
 
 const portableToolCaseEvidenceSchemaV1 = "portable-tool-case-evidence-v1"
-const PortableToolCaseValidatorVersionV1 = "reploy-portable-tool-case-v1"
+const PortableToolCaseValidatorVersionV1 = "reploy-portable-tool-case-v2"
 
 // PortableToolCaseObservationV1 can only be constructed by a successful case
 // lifecycle. Its bytes are owned, immutable and include the original executor
