@@ -1,0 +1,2 @@
+kind: Added
+body: Add exact native Bash candidate definitions for Debian 12, Debian 13, and Ubuntu 26.04, with pinned APT exports and isolated source-builder package transactions.

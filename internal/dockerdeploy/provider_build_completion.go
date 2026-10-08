@@ -236,8 +236,22 @@ func providerBuildRuntimePolicyV1(input ProviderBuildCompletionInput) (deploy.Ru
 }
 
 func validateProviderBuildCompletionInput(input ProviderBuildCompletionInput, policy deploy.RuntimePolicyV1) error {
-	if (input.ApplicationTools == nil) != (input.PortableRuntimeLayer == nil) {
-		return fmt.Errorf("application selection requires its exact materialized portable layer")
+	if input.ApplicationTools == nil && input.PortableRuntimeLayer != nil {
+		return fmt.Errorf("portable layer requires its exact application selection")
+	}
+	if input.ApplicationTools != nil && input.PortableRuntimeLayer == nil {
+		if input.ApplicationTools.sealed == nil {
+			return fmt.Errorf("application selection must be sealed")
+		}
+		plan, err := input.ApplicationTools.sealed.selection.Plan()
+		if err != nil {
+			return err
+		}
+		for _, entry := range plan.Tools {
+			if portableToolEntryRequiresRuntimeLayerV1(entry) {
+				return fmt.Errorf("application selection requires its exact materialized portable layer")
+			}
+		}
 	}
 	if err := deploy.ValidateApplicationStartupVerifierV1(input.StartupVerifier, true); err != nil {
 		return fmt.Errorf("provider build startup verifier: %w", err)

@@ -727,6 +727,74 @@ func TestPrepareSourceBuilderEnvironmentV1RemovesTheImageWhenValidationFails(t *
 	}
 }
 
+func TestPrepareSourceBuilderEnvironmentV1NativeConsumerAliasesAndCompleteScopes(t *testing.T) {
+	for _, fault := range []string{"", "missing alias", "substituted alias"} {
+		t.Run(fault, func(t *testing.T) {
+			tools, store, nativeImage, output := nativeEvidenceFixtureForTest(t)
+			// Exercise the orchestration boundary with two native selections in
+			// one scope, a repeated export, and another scope. The collector owns
+			// lock validation; this test stops before downstream validation.
+			entry := tools.Lock.Plan.PortableToolPlan.Tools[0]
+			entry.Scope = "source-builder:alpha"
+			second := entry
+			second.Exports = []providers.PortableToolExportV1{{Name: "sh", Path: "/usr/bin/sh"}}
+			otherScope := entry
+			otherScope.Scope = "source-builder:beta"
+			tools.Lock.Plan.PortableToolPlan.Tools = []providers.PortableToolPlanEntryV1{otherScope, entry, second, entry}
+			builder := sourceBuilderTestImageDescriptor(t, "2")
+			environmentStub := &sourceBuilderEnvironmentStub{}
+			stubSourceBuilderEnvironment(t, environmentStub, builder)
+			previousPrepare, previousCollect := prepareSourceBuilderNativePackagesV1, collectSourceBuilderNativeExportsV1
+			t.Cleanup(func() {
+				prepareSourceBuilderNativePackagesV1, collectSourceBuilderNativeExportsV1 = previousPrepare, previousCollect
+			})
+			nativeCandidate := BuiltImageCandidate{ImageID: nativeImage.Descriptor.ConfigDigest, TemporaryReference: "reploy-build:native"}
+			prepareSourceBuilderNativePackagesV1 = func(context.Context, providerstore.Store, *SourceBuilderPortableToolsV1, deploy.ImageDescriptor, RunOptions) (*sourceBuilderNativePackagesV1, error) {
+				return &sourceBuilderNativePackagesV1{Image: nativeImage, Graph: providers.GraphExecutionResult{Catalog: []providers.RealizedOutput{output}}, candidate: nativeCandidate}, nil
+			}
+			var scopes []string
+			probeFailure := errors.New(fault)
+			collectSourceBuilderNativeExportsV1 = func(_ context.Context, _ providerstore.Store, image InspectedImageCandidate, lock providers.PortableToolLockV1, scope string, outputs []providers.RealizedOutput, paths map[string]string) ([]providers.ExecutableEvidence, []providers.ExecutableEvidence, error) {
+				scopes = append(scopes, scope)
+				want := map[string]string{"bash": "/opt/reploy/exports/bash"}
+				if scope == "source-builder:alpha" {
+					want["sh"] = "/opt/reploy/exports/sh"
+				}
+				if !reflect.DeepEqual(paths, want) {
+					t.Fatalf("consumer paths for %s = %#v, want complete alias map %#v", scope, paths, want)
+				}
+				if !reflect.DeepEqual(image, environmentStub.inspected) || !reflect.DeepEqual(lock, tools.Lock) || !reflect.DeepEqual(outputs, []providers.RealizedOutput{output}) {
+					t.Fatal("native collector did not receive the final inspected image, complete lock, and accepted catalog")
+				}
+				if fault != "" {
+					return nil, nil, probeFailure
+				}
+				return []providers.ExecutableEvidence{output.Evidence}, nil, nil
+			}
+			stopAfterCollection := errors.New("stop after native collection")
+			selected := false
+			environment, err := prepareSourceBuilderEnvironmentV1(context.Background(), store, tools, nativeImage.Descriptor, RunOptions{},
+				func(InspectedImageCandidate, providers.PortableToolLockV1) (PortableToolMaterializationValidationInputV1, error) {
+					selected = true
+					return PortableToolMaterializationValidationInputV1{}, stopAfterCollection
+				})
+			wantErr, wantScopes := stopAfterCollection, []string{"source-builder:alpha", "source-builder:beta"}
+			if fault != "" {
+				wantErr, wantScopes = probeFailure, []string{"source-builder:alpha"}
+			}
+			if environment != nil || !errors.Is(err, wantErr) || !reflect.DeepEqual(scopes, wantScopes) || selected != (fault == "") {
+				t.Fatalf("environment=%#v err=%v scopes=%#v selected=%v", environment, err, scopes, selected)
+			}
+			if len(environmentStub.removed) != 2 || environmentStub.removed[0].ImageID != builder.ConfigDigest || environmentStub.removed[1] != nativeCandidate {
+				t.Fatalf("failed preparation leaked a builder image: %#v", environmentStub.removed)
+			}
+			if !reflect.DeepEqual(environmentStub.order, []string{"collision-check", "build", "inspect", "remove", "remove"}) {
+				t.Fatalf("unexpected validation or cleanup order: %#v", environmentStub.order)
+			}
+		})
+	}
+}
+
 func buildIntegrationCaseForSourceBuilderTest(t *testing.T) toolcatalog.IntegrationCaseV1 {
 	t.Helper()
 	cases, err := toolcatalog.EmbeddedIntegrationCasesV1()
@@ -734,7 +802,7 @@ func buildIntegrationCaseForSourceBuilderTest(t *testing.T) toolcatalog.Integrat
 		t.Fatal(err)
 	}
 	for _, caseV1 := range cases {
-		if caseV1.Support.Context == "build" && caseV1.Fixture.Target == sourceBuilderJavaTarget("debian", "12") {
+		if caseV1.Manifest.Tool == "java" && caseV1.Support.Context == "build" && caseV1.Fixture.Target == sourceBuilderJavaTarget("debian", "12") {
 			return caseV1
 		}
 	}

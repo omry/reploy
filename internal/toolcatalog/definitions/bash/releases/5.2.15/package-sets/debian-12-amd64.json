@@ -1,0 +1,1 @@
+{"id":"tool:bash/releases/5.2.15/package-sets/debian-12-amd64","manager":"apt","repositories":[],"requirements":["bash=5.2.15-2+b13"],"schema":"portable-tool-package-set-v1","validation_metadata":[]}

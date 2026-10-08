@@ -1,0 +1,1 @@
+{"id":"tool:bash/releases/5.2.15/validation/profiles/default","probes":[{"args":["--version"],"path":"/bin/bash"}],"schema":"portable-tool-validation-profile-v1","tool":"bash","version":"5.2.15"}

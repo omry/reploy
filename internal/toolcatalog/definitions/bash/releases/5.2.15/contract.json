@@ -1,0 +1,1 @@
+{"binding":{"options":[]},"compatibility_constraints":[],"contexts":["build","runtime"],"exports":[],"id":"tool:bash/releases/5.2.15/contract","resolver_primitives":["apt"],"schema":"portable-tool-release-contract-v1","selections":{"combinations":[],"dimensions":[]},"supported_reploy":">=0.0.0"}

@@ -1,0 +1,12 @@
+kind: portable-tool-integration-fixture-v1
+fields:
+  id: tool:bash/releases/5.3.9/validation/fixtures/ubuntu-26-04-arm64-runtime
+  name: ubuntu-26-04-arm64-runtime
+  target: {platform: linux/arm64, os_release_id: ubuntu, version_id: "26.04", oci_architecture: arm64, native_architecture: arm64, package_manager: apt}
+  base_image: docker.io/library/ubuntu:26.04
+  base_image_digest: sha256:3ad1c71aa6b7e477f7aa91445a5442fbb163742849393b511661a88081c3d7a2
+  context: runtime
+  bindings: []
+  selections: {}
+  validation_profiles:
+    - {id: tool:bash/releases/5.3.9/validation/profiles/default, digest: ""}
