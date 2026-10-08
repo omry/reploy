@@ -1,0 +1,7 @@
+kind: portable-tool-package-set-v1
+fields:
+  id: tool:bash/releases/5.2.37/package-sets/debian-13-amd64
+  manager: apt
+  requirements: ["bash=5.2.37-2+b10"]
+  repositories: []
+  validation_metadata: []

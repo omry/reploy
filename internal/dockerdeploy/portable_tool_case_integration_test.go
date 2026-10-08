@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -104,6 +105,13 @@ func portableToolIntegrationBaseV1(caseV1 toolcatalog.IntegrationCaseV1) string 
 	return base + "@" + string(caseV1.Fixture.BaseImageDigest)
 }
 
+func portableToolNativeConsumerPathV1(tool, exportPath string) string {
+	if tool == "bash" && exportPath == "/usr/bin/bash" {
+		return "/bin/bash"
+	}
+	return exportPath
+}
+
 // The incidental Python package activates an ordinary Python provider node.
 // Tool requests, bindings, selections and all probe commands remain catalog owned.
 func portableToolIntegrationDocumentV1(caseV1 toolcatalog.IntegrationCaseV1) (blueprint.Document, error) {
@@ -138,11 +146,92 @@ func TestPortableToolRepresentativeDockerIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	selected, err := representativePortableToolCasesV1(cases)
+	nativeCases := []toolcatalog.IntegrationCaseV1{}
+	for _, caseV1 := range cases {
+		if caseV1.Fixture.Target.Platform == "linux/"+runtime.GOARCH {
+			nativeCases = append(nativeCases, caseV1)
+		}
+	}
+	selected, err := representativePortableToolCasesV1(nativeCases)
 	if err != nil {
 		t.Fatal(err)
 	}
 	runPortableToolIntegrationCasesV1(t, selected)
+}
+
+// This PTD-30 smoke covers the new native APT boundary without establishing
+// exhaustive tuple support. PTD-31/PTD-32 own that proof.
+func TestPortableToolNativeBoundaryDockerIntegration(t *testing.T) {
+	if os.Getenv("REPLOY_DOCKER_INTEGRATION") != "1" {
+		t.Skip("set REPLOY_DOCKER_INTEGRATION=1 to exercise native boundaries")
+	}
+	cases, err := toolcatalog.EmbeddedIntegrationCasesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := []toolcatalog.IntegrationCaseV1{}
+	for _, caseV1 := range cases {
+		if caseV1.Manifest.Tool == "bash" && caseV1.Manifest.Version == "5.2.15" &&
+			caseV1.Fixture.Target.Platform == "linux/"+runtime.GOARCH {
+			selected = append(selected, caseV1)
+		}
+	}
+	if len(selected) != 2 {
+		t.Fatal("native boundary smoke requires both exact native contexts")
+	}
+	runPortableToolIntegrationCasesV1(t, selected)
+}
+
+func TestPortableToolNativeConsumerPathMappingV1(t *testing.T) {
+	cases, err := toolcatalog.EmbeddedIntegrationCasesV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantExports := map[string]string{
+		"debian/12":    "/bin/bash",
+		"debian/13":    "/usr/bin/bash",
+		"ubuntu/26.04": "/usr/bin/bash",
+	}
+	seen := map[string]bool{}
+	for _, caseV1 := range cases {
+		if caseV1.Manifest.Tool != "bash" || caseV1.Support.Context != "runtime" {
+			continue
+		}
+		key := caseV1.Target.Target.OSReleaseID + "/" + caseV1.Target.Target.VersionID
+		wantExport, ok := wantExports[key]
+		if !ok {
+			t.Fatalf("unexpected derived Bash target %s", key)
+		}
+		if len(caseV1.Target.Exports) != 1 || caseV1.Target.Exports[0].Name != "bash" || caseV1.Target.Exports[0].Path != wantExport {
+			t.Fatalf("derived Bash target export = %#v, want %s", caseV1.Target.Exports, wantExport)
+		}
+		scope, err := portableToolIntegrationScopeV1(caseV1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		closure, err := toolcatalog.EmbeddedSelectedClosureForIntegrationCaseV1(caseV1, scope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, err := toolcatalog.CompilePortableToolPlanV1([]toolcatalog.SelectedClosureV1{closure})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(plan.Tools) != 1 || len(plan.Tools[0].Exports) != 1 {
+			t.Fatalf("derived Bash plan = %#v", plan.Tools)
+		}
+		export := plan.Tools[0].Exports[0]
+		if export.Name != "bash" || export.Path != wantExport {
+			t.Fatalf("compiled Bash export = %#v, want %s", export, wantExport)
+		}
+		if got := portableToolNativeConsumerPathV1(caseV1.Manifest.Tool, export.Path); got != "/bin/bash" {
+			t.Fatalf("consumer path for %s export %s = %s, want /bin/bash", key, export.Path, got)
+		}
+		seen[key+"/"+caseV1.Target.Target.OCIArchitecture] = true
+	}
+	if len(seen) != 6 {
+		t.Fatalf("derived runtime Bash cases = %d, want six target/architecture cases", len(seen))
+	}
 }
 
 // Exhaustive suites select every advertised case for the requested tool. The
@@ -408,10 +497,41 @@ func executePortableToolIntegrationCaseV1(t *testing.T, caseV1 toolcatalog.Integ
 			t.Error(err)
 		}
 	}()
-	observation, err := ObserveApplicationBuildCaseV1(ctx, LockedProviderBuildExecutionInputV1{
+	observation, err := observeApplicationBuildCaseV1(ctx, LockedProviderBuildExecutionInputV1{
 		Preparation: preparation, SourceWheels: []providerstore.ArtifactDescriptor{}, LocalOverrides: []PythonLocalOverrideV1{},
 		RunOptions: options, Progress: os.Stdout,
-	}, caseV1, scope)
+	}, caseV1, scope, func(ctx context.Context, input LockedProviderBuildExecutionInputV1) (LockedProviderBuildExecutionResultV1, error) {
+		observe := input.observeFinalImage
+		input.observeFinalImage = func(ctx context.Context, image InspectedImageCandidate, lock deploy.BuildLockV1) error {
+			if err := observe(ctx, image, lock); err != nil {
+				return err
+			}
+			paths := map[string]string{}
+			for _, entry := range lock.PortableTools.Plan.PortableToolPlan.Tools {
+				if entry.Scope == scope && !portableToolEntryRequiresRuntimeLayerV1(entry) {
+					for _, export := range entry.Exports {
+						paths[export.Name] = portableToolNativeConsumerPathV1(caseV1.Manifest.Tool, export.Path)
+					}
+				}
+			}
+			if len(paths) != 0 {
+				exports, consumers, err := CollectApplicationPortableNativeExportEvidenceV1(ctx, store, image, lock, scope, paths)
+				if err != nil {
+					return err
+				}
+				if len(exports) != len(paths) || len(consumers) != len(paths) {
+					return fmt.Errorf("finalized native handoff lacks complete executable evidence")
+				}
+				for _, export := range exports {
+					if export.Terminal.Owner == nil {
+						return fmt.Errorf("finalized native export lacks package ownership")
+					}
+				}
+			}
+			return nil
+		}
+		return ExecuteLockedProviderBuildV1(ctx, input)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

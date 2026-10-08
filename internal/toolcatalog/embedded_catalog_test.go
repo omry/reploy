@@ -27,8 +27,8 @@ func TestEmbeddedCatalogMatchesCanonicalAuthoringV1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load embedded authoring: %v", err)
 	}
-	if len(result.Records) != 35 || len(result.Sources) != 35 {
-		t.Fatalf("authoring emitted %d records from %d sources, want 35 and 35", len(result.Records), len(result.Sources))
+	if len(result.Records) != 69 || len(result.Sources) != 69 {
+		t.Fatalf("authoring emitted %d records from %d sources, want 69 and 69", len(result.Records), len(result.Sources))
 	}
 	for _, record := range result.Records {
 		payload, err := fs.ReadFile(definitionFilesV1, "definitions/"+record.Path)
@@ -39,7 +39,7 @@ func TestEmbeddedCatalogMatchesCanonicalAuthoringV1(t *testing.T) {
 			t.Errorf("embedded record %q differs from canonical authoring output", record.Path)
 		}
 	}
-	if catalog, err := loadCatalogV1(definitionFilesV1, "definitions"); err != nil || !reflect.DeepEqual(catalog.Names(), []string{"java", "playwright"}) {
+	if catalog, err := loadCatalogV1(definitionFilesV1, "definitions"); err != nil || !reflect.DeepEqual(catalog.Names(), []string{"bash", "java", "playwright"}) {
 		t.Fatalf("embedded catalog = names %v, error %v", catalogNamesV1(catalog), err)
 	}
 }

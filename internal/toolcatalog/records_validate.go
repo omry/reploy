@@ -110,7 +110,7 @@ func validateLoadedRecordV1(record loadedRecordV1) error {
 			return err
 		}
 		for _, primitive := range value.ResolverPrimitives {
-			if primitive != "https-sha256" {
+			if primitive != "https-sha256" && primitive != "apt" {
 				return fmt.Errorf("resolver primitive %q is unsupported", primitive)
 			}
 		}
@@ -126,7 +126,7 @@ func validateLoadedRecordV1(record loadedRecordV1) error {
 		if err := validateExportsV1("contract exports", value.Exports); err != nil {
 			return err
 		}
-		return validateRuntimeV1(value.Contexts, value.Runtime)
+		return validateRuntimeV1(value.Contexts, value.Runtime, len(value.ResolverPrimitives) == 1 && value.ResolverPrimitives[0] == "apt")
 	case *TargetRecordV1:
 		if record.Schema != TargetRecordSchemaV1 || value.Schema != TargetRecordSchemaV1 || value.ID != record.ID {
 			return fmt.Errorf("target record identity or validation contract is incomplete")
@@ -550,10 +550,10 @@ func validateExportsV1(field string, exports []ToolExportV1) error {
 	return nil
 }
 
-func validateRuntimeV1(contexts []string, runtime *RecordRuntimeV1) error {
+func validateRuntimeV1(contexts []string, runtime *RecordRuntimeV1, packageManaged bool) error {
 	hasRuntime := containsRecordValueV1(contexts, "runtime")
 	if runtime == nil {
-		if hasRuntime {
+		if hasRuntime && !packageManaged {
 			return fmt.Errorf("runtime context requires a runtime contract")
 		}
 		return nil

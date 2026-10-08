@@ -154,7 +154,7 @@ func validateApplicationPortableBuildLockV1(
 	document blueprint.Document, selected *ApplicationPortableToolPlanV1,
 	lock deploy.BuildLockV1, image InspectedImageCandidate,
 ) error {
-	if selected == nil || selected.sealed == nil || lock.PortableTools == nil || lock.PortableRuntimeLayer == nil {
+	if selected == nil || selected.sealed == nil || lock.PortableTools == nil {
 		return fmt.Errorf("complete application build requires selected portable materialization")
 	}
 	digest, err := blueprint.DocumentDigestV1(document)

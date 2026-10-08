@@ -1,0 +1,12 @@
+kind: portable-tool-integration-fixture-v1
+fields:
+  id: tool:bash/releases/5.2.37/validation/fixtures/debian-13-arm64-runtime
+  name: debian-13-arm64-runtime
+  target: {platform: linux/arm64, os_release_id: debian, version_id: "13", oci_architecture: arm64, native_architecture: arm64, package_manager: apt}
+  base_image: docker.io/library/debian:13-slim
+  base_image_digest: sha256:a2ca65377c251208de42e1a2722cb949211236c161b634f6f3663754e2d06850
+  context: runtime
+  bindings: []
+  selections: {}
+  validation_profiles:
+    - {id: tool:bash/releases/5.2.37/validation/profiles/default, digest: ""}

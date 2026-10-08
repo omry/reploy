@@ -298,9 +298,16 @@ func ExecuteApplicationPortablePythonGraphV1(
 	if err != nil {
 		return ApplicationPortablePythonGraphResultV1{}, err
 	}
-	acquisitions, err := collector.snapshot()
-	if err != nil {
-		return ApplicationPortablePythonGraphResultV1{}, err
+	acquisitions := []providers.PortableToolArtifactAcquisitionInputV1{}
+	requiresBindings := false
+	for _, entry := range desiredPlan.Tools {
+		requiresBindings = requiresBindings || len(entry.Responsibilities.BindingContracts) != 0
+	}
+	if requiresBindings {
+		acquisitions, err = collector.snapshot()
+		if err != nil {
+			return ApplicationPortablePythonGraphResultV1{}, err
+		}
 	}
 	detachedPlan, err := sealed.selection.Plan()
 	if err != nil {

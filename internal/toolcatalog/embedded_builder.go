@@ -15,7 +15,7 @@ import (
 // embeddedResolverPrimitivesV1 lists the acquisition primitives this Reploy
 // build implements for embedded-catalog candidates. Release contracts require
 // every primitive they name to be present here before a candidate is eligible.
-var embeddedResolverPrimitivesV1 = []string{"https-sha256"}
+var embeddedResolverPrimitivesV1 = []string{"apt", "https-sha256"}
 
 var reployReleaseCoordinateV1 = regexp.MustCompile(`^([0-9]+\.[0-9]+\.[0-9]+)(?:[.-]?(?:dev|a|b|rc|post)[0-9]*)?$`)
 

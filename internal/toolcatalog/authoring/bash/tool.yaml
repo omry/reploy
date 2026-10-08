@@ -1,0 +1,14 @@
+kind: portable-tool-v1
+fields:
+  id: tool:bash
+  name: bash
+  version_scheme: semver
+  summary: Distribution-native GNU Bash
+  upstream: https://www.gnu.org/software/bash/
+  source: https://git.savannah.gnu.org/cgit/bash.git
+  license: https://www.gnu.org/licenses/gpl-3.0.html
+  documentation: https://www.gnu.org/software/bash/manual/
+  releases:
+    - {id: tool:bash/releases/5.2.15/revisions/1/manifest, digest: ""}
+    - {id: tool:bash/releases/5.2.37/revisions/1/manifest, digest: ""}
+    - {id: tool:bash/releases/5.3.9/revisions/1/manifest, digest: ""}

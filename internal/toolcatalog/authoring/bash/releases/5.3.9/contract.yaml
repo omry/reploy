@@ -1,0 +1,13 @@
+kind: portable-tool-release-contract-v1
+fields:
+  id: tool:bash/releases/5.3.9/contract
+  contexts: [build, runtime]
+  supported_reploy: ">=0.0.0"
+  binding:
+    options: []
+  selections:
+    dimensions: []
+    combinations: []
+  exports: []
+  resolver_primitives: [apt]
+  compatibility_constraints: []

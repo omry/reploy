@@ -1,0 +1,7 @@
+kind: portable-tool-package-set-v1
+fields:
+  id: tool:bash/releases/5.2.15/package-sets/debian-12-amd64
+  manager: apt
+  requirements: ["bash=5.2.15-2+b13"]
+  repositories: []
+  validation_metadata: []

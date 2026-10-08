@@ -20,6 +20,7 @@ import (
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
+	aptprovider "github.com/omry/reploy/internal/providers/apt"
 	"github.com/omry/reploy/internal/providerstore"
 	"github.com/omry/reploy/internal/toolcatalog"
 )
@@ -60,6 +61,7 @@ type SourceBuilderPortableToolsV1 struct {
 	contextDir     string
 	copies         []sourceBuilderCopyV1
 	exportsArchive string
+	nativeExports  map[string]providers.PortableToolExportV1
 }
 
 // Cleanup removes the materialized host tree. Builder images built from it
@@ -163,6 +165,19 @@ func MaterializeSourceBuilderPortableToolsV1(
 		return nil, fmt.Errorf("lock source-builder portable tools: %w", err)
 	}
 	tools.Lock = lock
+	// Validate native export attribution before creating any export links.
+	if _, err := aptprovider.ProjectSourceBuilderPortableToolAPTRootsV1(lock.Plan.PortableToolPlan); err != nil {
+		return nil, err
+	}
+	tools.nativeExports = map[string]providers.PortableToolExportV1{}
+	for _, entry := range lock.Plan.PortableToolPlan.Tools {
+		if len(entry.Responsibilities.NativePackageSets) == 0 || len(entry.Responsibilities.Payloads) != 0 || len(entry.Responsibilities.BindingContracts) != 0 {
+			continue
+		}
+		for _, export := range entry.Exports {
+			tools.nativeExports[export.Name] = export
+		}
+	}
 	exports := map[string]providers.PortableToolExportV1{}
 	destinations := map[string]canonical.Digest{}
 	for _, entry := range plan.Plan.Tools {
@@ -170,9 +185,12 @@ func MaterializeSourceBuilderPortableToolsV1(
 		if err != nil {
 			return nil, err
 		}
-		installRoot, err := sourceBuilderInstallRootV1(entry.Exports, closure.Records.Payloads)
-		if err != nil {
-			return nil, fmt.Errorf("source-builder %s/%s: %w", entry.Scope, entry.Provenance.Tool, err)
+		installRoot := ""
+		if len(closure.Records.Payloads) != 0 {
+			installRoot, err = sourceBuilderInstallRootV1(entry.Exports, closure.Records.Payloads)
+			if err != nil {
+				return nil, fmt.Errorf("source-builder %s/%s: %w", entry.Scope, entry.Provenance.Tool, err)
+			}
 		}
 		for _, payload := range closure.Records.Payloads {
 			descriptor, found := acquired[providers.PortableToolRecordReferenceV1{ID: payload.Reference.ID, Digest: payload.Reference.Digest}]
@@ -232,7 +250,7 @@ func MaterializeSourceBuilderPortableToolsV1(
 			SelectedClosureDigest: entry.SelectedClosureDigest,
 		})
 	}
-	tools.Exports, tools.exportsArchive, err = sourceBuilderExposeExportsV1(rootfs, tools.contextDir, exports)
+	tools.Exports, tools.exportsArchive, err = sourceBuilderExposeExportsWithNativeV1(rootfs, tools.contextDir, exports, tools.nativeExports)
 	if err != nil {
 		return nil, err
 	}
@@ -387,6 +405,10 @@ func sourceBuilderSymbolicLinkPolicyV1(policy string) (providerstore.ArchiveSymb
 // resulting builder image. Executability is an archive contract validated by
 // the reviewed materializer and then proved in that Linux image.
 func sourceBuilderExposeExportsV1(rootfs, contextDir string, exports map[string]providers.PortableToolExportV1) ([]providers.PortableToolExportV1, string, error) {
+	return sourceBuilderExposeExportsWithNativeV1(rootfs, contextDir, exports, nil)
+}
+
+func sourceBuilderExposeExportsWithNativeV1(rootfs, contextDir string, exports map[string]providers.PortableToolExportV1, native map[string]providers.PortableToolExportV1) ([]providers.PortableToolExportV1, string, error) {
 	names := make([]string, 0, len(exports))
 	for name := range exports {
 		names = append(names, name)
@@ -403,6 +425,12 @@ func sourceBuilderExposeExportsV1(rootfs, contextDir string, exports map[string]
 		}
 		if !path.IsAbs(export.Path) || path.Clean(export.Path) != export.Path {
 			return nil, "", fmt.Errorf("source-builder export %q path %q must be absolute and clean", name, export.Path)
+		}
+		if selected, exists := native[name]; exists && selected == export {
+			// This path is proved by the ordinary APT transaction in the
+			// disposable image, rather than copied from a host archive.
+			result = append(result, export)
+			continue
 		}
 		info, err := os.Lstat(filepath.Join(rootfs, filepath.FromSlash(export.Path)))
 		if err != nil {
@@ -445,8 +473,8 @@ func sourceBuilderExposeExportsV1(rootfs, contextDir string, exports map[string]
 // offline-materialized host tree and adds the generated Linux export-link tar
 // into a disposable builder image. It changes no image configuration.
 func sourceBuilderDockerfileV1(copies []sourceBuilderCopyV1, exportsArchive string) ([]byte, error) {
-	if len(copies) == 0 {
-		return nil, fmt.Errorf("source-builder layer requires at least one materialized tree")
+	if len(copies) == 0 && exportsArchive == "" {
+		return nil, fmt.Errorf("source-builder layer requires materialized trees or export links")
 	}
 	var output bytes.Buffer
 	fmt.Fprintf(&output, "# syntax=%s\n", MaterializationDockerfileSyntax)
@@ -498,6 +526,8 @@ type SourceBuilderEnvironmentV1 struct {
 	Selections       []SourceBuilderPortableToolSelectionV1
 	Recipes          map[string]SourceBuilderRecipeIdentityV1
 	Evidence         []providers.ValidationEvidence
+	NativePackages   *providers.GraphExecutionResult
+	NativeExports    []providers.ExecutableEvidence
 	candidate        BuiltImageCandidate
 	removed          bool
 }
@@ -507,6 +537,7 @@ var requireSourceBuilderDestinationsAbsentV1 = requireSourceBuilderDestinationsA
 var inspectSourceBuilderLayerV1 = InspectBuiltImageCandidate
 var validateSourceBuilderMaterializationV1 = ValidatePortableToolMaterializationV1
 var removeSourceBuilderLayerV1 = RemoveBuiltImageCandidate
+var collectSourceBuilderNativeExportsV1 = CollectPortableNativeExportEvidenceV1
 
 // Cleanup removes the disposable builder image. It is idempotent.
 func (environment *SourceBuilderEnvironmentV1) Cleanup(ctx context.Context) error {
@@ -594,7 +625,7 @@ func prepareSourceBuilderEnvironmentV1(
 	upstream deploy.ImageDescriptor,
 	options RunOptions,
 	selectValidationInput func(InspectedImageCandidate, providers.PortableToolLockV1) (PortableToolMaterializationValidationInputV1, error),
-) (*SourceBuilderEnvironmentV1, error) {
+) (result *SourceBuilderEnvironmentV1, resultErr error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("prepare source-builder environment requires a context")
 	}
@@ -612,6 +643,22 @@ func prepareSourceBuilderEnvironmentV1(
 		return nil, err
 	}
 	options.Context = ctx
+	native, err := prepareSourceBuilderNativePackagesV1(ctx, store, tools, upstream, options)
+	if err != nil {
+		return nil, fmt.Errorf("prepare source-builder native packages: %w", err)
+	}
+	if native != nil {
+		defer func() {
+			if err := removeSourceBuilderLayerV1(context.WithoutCancel(ctx), native.candidate); err != nil {
+				resultErr = errors.Join(resultErr, fmt.Errorf("remove native builder layer: %w", err))
+				if result != nil {
+					resultErr = errors.Join(resultErr, result.Cleanup(context.WithoutCancel(ctx)))
+					result = nil
+				}
+			}
+		}()
+		upstream = native.Image.Descriptor
+	}
 	// Design "Safe Materialization": selected destinations are collision-checked
 	// before extraction. The COPY layer must not merge over bytes the prefix
 	// image already holds at any destination.
@@ -640,6 +687,9 @@ func prepareSourceBuilderEnvironmentV1(
 		Selections: append([]SourceBuilderPortableToolSelectionV1{}, tools.Selections...),
 		Recipes:    tools.Plan.Recipes,
 	}
+	if native != nil {
+		environment.NativePackages = &native.Graph
+	}
 	fail := func(err error) (*SourceBuilderEnvironmentV1, error) {
 		if cleanupErr := environment.Cleanup(context.WithoutCancel(ctx)); cleanupErr != nil {
 			return nil, errors.Join(err, cleanupErr)
@@ -658,6 +708,34 @@ func prepareSourceBuilderEnvironmentV1(
 	}
 	environment.Descriptor = inspected.Descriptor
 	environment.Image = inspected
+	if native != nil {
+		pathsByScope := map[string]map[string]string{}
+		for _, entry := range tools.Lock.Plan.PortableToolPlan.Tools {
+			if len(entry.Responsibilities.NativePackageSets) == 0 || len(entry.Responsibilities.Payloads) != 0 || len(entry.Responsibilities.BindingContracts) != 0 || len(entry.Exports) == 0 {
+				continue
+			}
+			paths := pathsByScope[entry.Scope]
+			if paths == nil {
+				paths = map[string]string{}
+				pathsByScope[entry.Scope] = paths
+			}
+			for _, export := range entry.Exports {
+				paths[export.Name] = path.Join(SourceBuilderExportsDirectoryV1, export.Name)
+			}
+		}
+		scopes := make([]string, 0, len(pathsByScope))
+		for scope := range pathsByScope {
+			scopes = append(scopes, scope)
+		}
+		sort.Strings(scopes)
+		for _, scope := range scopes {
+			exports, _, err := collectSourceBuilderNativeExportsV1(ctx, store, inspected, tools.Lock, scope, native.Graph.Catalog, pathsByScope[scope])
+			if err != nil {
+				return fail(fmt.Errorf("validate native source-builder exports: %w", err))
+			}
+			environment.NativeExports = append(environment.NativeExports, exports...)
+		}
+	}
 	// Derive the image's selected validation cases from its validated lock at
 	// the point of use. There is no independently mutable schedule retained by
 	// either the materialized tools or the prepared environment.

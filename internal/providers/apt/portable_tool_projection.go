@@ -20,6 +20,17 @@ func ProjectPortableToolAPTRootsV1(
 	plan providers.PortableToolPlanV1,
 	components []providers.ResolvedComponentRequestV1,
 ) ([]providers.ResolvedComponentRequestV1, error) {
+	return projectPortableToolAPTRootsV1(plan, components, false)
+}
+
+// ProjectSourceBuilderPortableToolAPTRootsV1 projects only builder scopes into
+// a separate APT graph. The provider-local contribution never enters the
+// application graph; all builder recipes share one package-manager domain.
+func ProjectSourceBuilderPortableToolAPTRootsV1(plan providers.PortableToolPlanV1) ([]providers.ResolvedComponentRequestV1, error) {
+	return projectPortableToolAPTRootsV1(plan, []providers.ResolvedComponentRequestV1{}, true)
+}
+
+func projectPortableToolAPTRootsV1(plan providers.PortableToolPlanV1, components []providers.ResolvedComponentRequestV1, builder bool) ([]providers.ResolvedComponentRequestV1, error) {
 	if err := providers.ValidatePortableToolPlanV1(plan); err != nil {
 		return nil, fmt.Errorf("portable APT projection plan: %w", err)
 	}
@@ -59,10 +70,15 @@ func ProjectPortableToolAPTRootsV1(
 		}
 		owner, ok := strings.CutPrefix(tool.Scope, "application:")
 		component := blueprint.ApplicationContributionID(owner, blueprint.ContributionProviderOS)
-		if !ok || owner == "" {
+		if builder {
+			if owner, ok = strings.CutPrefix(tool.Scope, "source-builder:"); !ok || owner == "" {
+				return nil, fmt.Errorf("portable builder APT roots require source-builder:<owner> scope, got %q", tool.Scope)
+			}
+			component = "source-builder"
+		} else if !ok || owner == "" {
 			return nil, fmt.Errorf("portable APT roots require application:<owner> scope, got %q", tool.Scope)
 		}
-		if _, valid := blueprint.ApplicationContributionOwner(component, blueprint.ContributionProviderOS); !valid {
+		if _, valid := blueprint.ApplicationContributionOwner(component, blueprint.ContributionProviderOS); !builder && !valid {
 			return nil, fmt.Errorf("portable APT root scope %q has an invalid application owner", tool.Scope)
 		}
 		request := APTProviderRequestV1{Components: []APTComponentRequestV1{{Component: component}}}
@@ -75,6 +91,7 @@ func ProjectPortableToolAPTRootsV1(
 				return nil, fmt.Errorf("portable APT root component %q: %w", component, err)
 			}
 		}
+		roots := map[string]blueprint.APTPackageRequest{}
 		for _, selected := range tool.Responsibilities.NativePackageSets {
 			if selected.Record.Schema != portabletool.NativePackageSetSchemaV1 {
 				return nil, fmt.Errorf("selected native package set %q has invalid schema", selected.Reference.ID)
@@ -98,15 +115,42 @@ func ProjectPortableToolAPTRootsV1(
 				if err != nil {
 					return nil, fmt.Errorf("selected native package set %q root %q: %w", selected.Reference.ID, requirement, err)
 				}
-				// An ordinary declaration can already own this exact root and
-				// carry executable exports. Keep it instead of appending the
-				// catalog's export-free root as a conflicting declaration.
-				if slices.ContainsFunc(request.Components[0].Packages, func(existing blueprint.APTPackageRequest) bool {
-					return existing.Name == pkg.Name && existing.Version == pkg.Version
-				}) {
-					continue
+				if previous, exists := roots[pkg.Name]; exists && previous.Version != pkg.Version {
+					return nil, fmt.Errorf("portable APT root %q has conflicting exact versions", pkg.Name)
 				}
+				roots[pkg.Name] = pkg
+			}
+		}
+		// Archive and binding exports keep their existing materializers. A
+		// native-only export can be attributed without discovery only when
+		// exactly one pinned root owns it. Dpkg evidence still verifies that
+		// attribution on the actual materialized image.
+		nativeExports := len(tool.Responsibilities.Payloads) == 0 && len(tool.Responsibilities.BindingContracts) == 0 && len(tool.Exports) != 0
+		if nativeExports && len(roots) != 1 {
+			return nil, fmt.Errorf("portable native exports for %q require one unambiguous exact package root", tool.Scope)
+		}
+		for _, pkg := range roots {
+			if nativeExports {
+				if pkg.Version == "" {
+					return nil, fmt.Errorf("portable native export package %q must have an exact version", pkg.Name)
+				}
+				for _, export := range tool.Exports {
+					pkg.Exports[export.Name] = blueprint.ExecutableExport{Executable: export.Path}
+				}
+			}
+			index := slices.IndexFunc(request.Components[0].Packages, func(existing blueprint.APTPackageRequest) bool {
+				return existing.Name == pkg.Name && existing.Version == pkg.Version
+			})
+			if index < 0 {
 				request.Components[0].Packages = append(request.Components[0].Packages, pkg)
+				continue
+			}
+			existing := &request.Components[0].Packages[index]
+			for name, export := range pkg.Exports {
+				if previous, exists := existing.Exports[name]; exists && previous != export {
+					return nil, fmt.Errorf("portable native export %q conflicts with ordinary package export", name)
+				}
+				existing.Exports[name] = export
 			}
 		}
 		canonicalRequest, err := CanonicalProviderRequestV1(request)
