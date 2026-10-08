@@ -171,9 +171,9 @@ func CollectPortableNativeExportEvidenceV1(
 		if err != nil {
 			return nil, nil, err
 		}
-		if current.Terminal.Path != consumer.Terminal.Path {
-			return nil, nil, fmt.Errorf("native export and consumer resolve to different terminal paths: export %q, consumer %q", current.Terminal.Path, consumer.Terminal.Path)
-		}
+		// Directory aliases can retain different lexical terminal paths in
+		// ordinary probe observations. Bind their regular-file byte identity
+		// on this held image; neither alias spelling claims package ownership.
 		if current.Terminal.SHA256 != owned.Terminal.SHA256 || current.Terminal.Size != owned.Terminal.Size ||
 			current.Terminal.SHA256 != consumer.Terminal.SHA256 || current.Terminal.Size != consumer.Terminal.Size {
 			return nil, nil, fmt.Errorf("native export and consumer regular file differ from locked bytes")

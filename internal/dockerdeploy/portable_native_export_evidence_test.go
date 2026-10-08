@@ -101,7 +101,7 @@ func mergedBashConsumerObservation(id, terminalPath string) probe.ExecutableObse
 }
 
 func TestCollectPortableNativeExportEvidenceV1ExactStateAndUnownedConsumer(t *testing.T) {
-	for _, fault := range []string{"", "consumer missing", "consumer different", "consumer alternate", "export bytes", "package state", "wrong owner", "cleanup"} {
+	for _, fault := range []string{"", "directory alias", "consumer missing", "consumer different", "consumer alternate", "export bytes", "package state", "wrong owner", "cleanup"} {
 		t.Run(fault, func(t *testing.T) {
 			tools, store, image, output := nativeEvidenceFixtureForTest(t)
 			workspace := testPreparedProbeWorkspace(t, image.Descriptor.Platform, t.TempDir())
@@ -124,11 +124,15 @@ func TestCollectPortableNativeExportEvidenceV1ExactStateAndUnownedConsumer(t *te
 					if options.Stdin != nil {
 						consumer := mergedBashConsumerObservation("consumer_000", "/usr/bin/bash")
 						export := directExecutableObservation("export_000", "/usr/bin/bash")
+						if fault == "directory alias" {
+							consumer = directExecutableObservation("consumer_000", "/bin/bash")
+						}
 						if fault == "consumer different" {
 							consumer.Terminal.SHA256 = rendererDigest("d")
 						}
 						if fault == "consumer alternate" {
 							consumer = mergedBashConsumerObservation("consumer_000", "/opt/alternate/bash")
+							consumer.Terminal.SHA256 = rendererDigest("d")
 						}
 						if fault == "export bytes" {
 							export.Terminal.SHA256 = rendererDigest("e")
@@ -155,7 +159,7 @@ func TestCollectPortableNativeExportEvidenceV1ExactStateAndUnownedConsumer(t *te
 				}, nil
 			}
 			exports, consumers, err := CollectPortableNativeExportEvidenceV1(context.Background(), store, image, tools.Lock, "source-builder:demo", []providers.RealizedOutput{output}, map[string]string{"bash": "/bin/bash"})
-			if fault != "" {
+			if fault != "" && fault != "directory alias" {
 				if err == nil || exports != nil || consumers != nil {
 					t.Fatalf("accepted defective evidence: %s %v", fault, err)
 				}
@@ -167,7 +171,11 @@ func TestCollectPortableNativeExportEvidenceV1ExactStateAndUnownedConsumer(t *te
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !cleaned || len(exports) != 1 || len(consumers) != 1 || exports[0].Terminal.Owner == nil || consumers[0].Terminal.Owner != nil || exports[0].Terminal.Path != "/usr/bin/bash" || consumers[0].InvocationPath != "/bin/bash" || consumers[0].Terminal.Path != "/usr/bin/bash" || exports[0].Terminal.SHA256 != consumers[0].Terminal.SHA256 {
+			consumerTerminal := "/usr/bin/bash"
+			if fault == "directory alias" {
+				consumerTerminal = "/bin/bash"
+			}
+			if !cleaned || len(exports) != 1 || len(consumers) != 1 || exports[0].Terminal.Owner == nil || consumers[0].Terminal.Owner != nil || exports[0].Terminal.Path != "/usr/bin/bash" || consumers[0].InvocationPath != "/bin/bash" || consumers[0].Terminal.Path != consumerTerminal || exports[0].Terminal.SHA256 != consumers[0].Terminal.SHA256 {
 				t.Fatal("missing exact state or invented consumer alias ownership")
 			}
 			for _, command := range commands {
