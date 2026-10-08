@@ -14,50 +14,127 @@ import (
 	"github.com/omry/reploy/internal/toolcatalog"
 )
 
-func TestPortableToolBashAMD64CasesDeriveCompleteCurrentInventory(t *testing.T) {
-	cases, err := toolcatalog.EmbeddedIntegrationCasesV1()
-	if err != nil {
-		t.Fatal(err)
+func TestPortableToolBashCasesDeriveCompleteCurrentInventory(t *testing.T) {
+	for _, arch := range []string{"amd64", "arm64"} {
+		t.Run(arch, func(t *testing.T) {
+			cases, err := toolcatalog.EmbeddedIntegrationCasesV1()
+			if err != nil {
+				t.Fatal(err)
+			}
+			selected, err := portableToolIntegrationCasesForPlatformV1(cases, "bash", "linux/"+arch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := map[canonical.Digest]bool{}
+			for _, c := range cases {
+				if c.Manifest.Tool == "bash" && c.Target.Target.OCIArchitecture == arch {
+					want[c.ID] = true
+				}
+			}
+			contexts := map[string]map[string]bool{}
+			for _, c := range selected {
+				if !want[c.ID] || c.Fixture.Target.Platform != "linux/"+arch {
+					t.Fatal("unadvertised or other-architecture case selected")
+				}
+				delete(want, c.ID)
+				key := c.Target.Target.OSReleaseID + "/" + c.Target.Target.VersionID
+				if contexts[key] == nil {
+					contexts[key] = map[string]bool{}
+				}
+				contexts[key][c.Support.Context] = true
+			}
+			if len(selected) != 6 || len(want) != 0 || len(contexts) != 3 {
+				t.Fatalf("incomplete current Bash inventory: cases=%d missing=%d targets=%d", len(selected), len(want), len(contexts))
+			}
+			for target, contexts := range contexts {
+				if !contexts["build"] || !contexts["runtime"] || len(contexts) != 2 {
+					t.Fatalf("target %s lacks both exact contexts", target)
+				}
+			}
+			for i, j := 0, len(cases)-1; i < j; i, j = i+1, j-1 {
+				cases[i], cases[j] = cases[j], cases[i]
+			}
+			again, err := portableToolIntegrationCasesForPlatformV1(cases, "bash", "linux/"+arch)
+			if err != nil || !reflect.DeepEqual(selected, again) {
+				t.Fatalf("inventory order changed the exhaustive set: %v", err)
+			}
+			if _, err := portableToolIntegrationCasesForPlatformV1(cases, "bash", "linux/unsupported"); err == nil {
+				t.Fatal("empty or unsupported architecture set accepted")
+			}
+		})
 	}
-	selected, err := portableToolIntegrationCasesForPlatformV1(cases, "bash", "linux/amd64")
-	if err != nil {
-		t.Fatal(err)
+}
+
+func TestPortableToolBashRunnerRejectsArchitectureAndWorkflowSubstitutions(t *testing.T) {
+	// These are isolated context predicate checks, never successful case records
+	// or evidence that either architecture has actually been qualified.
+	for _, arch := range []string{"amd64", "arm64"} {
+		t.Run(arch, func(t *testing.T) {
+			r := portableToolBashRunnerV1{GOOS: "linux", GOARCH: arch, HostArchitecture: arch,
+				WorkflowSHA: "current-sha", RunID: "current-run", RunAttempt: "1", RunnerName: "native-host", RunnerOS: "Linux",
+				Job: "ci", RunnerArch: "X64"}
+			r.Docker.Os, r.Docker.Arch, r.Docker.Version = "linux", arch, "observed-version"
+			if arch == "arm64" {
+				r.Job, r.RunnerArch = "target-smoke", "ARM64"
+			}
+			check := func(r portableToolBashRunnerV1) error {
+				return requirePortableToolBashRunnerV1(r, arch, "current-sha", "current-run", "1")
+			}
+			if err := check(r); err != nil {
+				t.Fatal(err)
+			}
+			for _, fault := range []string{"process", "host", "daemon", "os", "version", "sha", "run", "attempt", "job", "runner-name", "runner-os", "runner-arch"} {
+				t.Run(fault, func(t *testing.T) {
+					changed := r
+					switch fault {
+					case "process":
+						changed.GOARCH = "other"
+					case "host":
+						changed.HostArchitecture = "other"
+					case "daemon":
+						changed.Docker.Arch = "other"
+					case "os":
+						changed.Docker.Os = "other"
+					case "version":
+						changed.Docker.Version = ""
+					case "sha":
+						changed.WorkflowSHA = "old"
+					case "run":
+						changed.RunID = "old"
+					case "attempt":
+						changed.RunAttempt = "old"
+					case "job":
+						changed.Job = "other"
+					case "runner-name":
+						changed.RunnerName = ""
+					case "runner-os":
+						changed.RunnerOS = "other"
+					case "runner-arch":
+						changed.RunnerArch = "other"
+					}
+					if err := check(changed); err == nil {
+						t.Fatalf("%s runner substitution passed", fault)
+					}
+				})
+			}
+		})
 	}
-	want := map[canonical.Digest]bool{}
-	for _, c := range cases {
-		if c.Manifest.Tool == "bash" && c.Target.Target.OCIArchitecture == "amd64" {
-			want[c.ID] = true
+}
+
+func TestPortableToolBashProducerAttemptAllowsPartialWorkflowReruns(t *testing.T) {
+	for _, attempts := range [][2]string{{"1", "1"}, {"1", "2"}, {"2", "2"}, {"2", "3"}} {
+		if err := requirePortableToolBashProducerAttemptV1(attempts[0], attempts[1]); err != nil {
+			t.Fatalf("successful producer %s must remain valid for consumer %s: %v", attempts[0], attempts[1], err)
 		}
 	}
-	contexts := map[string]map[string]bool{}
-	for _, c := range selected {
-		if !want[c.ID] || c.Fixture.Target.Platform != "linux/amd64" {
-			t.Fatal("unadvertised or other-architecture case selected")
+	for _, attempts := range [][2]string{
+		{"2", "1"}, {"3", "2"}, {"", "2"}, {"0", "2"}, {"-1", "2"}, {"invalid", "2"},
+		{"01", "2"}, {"+1", "2"}, {"1", ""}, {"1", "0"}, {"1", "-1"}, {"1", "invalid"},
+		{"1", "02"}, {"1", "+2"}, {"999999999999999999999999", "2"},
+	} {
+		if err := requirePortableToolBashProducerAttemptV1(attempts[0], attempts[1]); err == nil {
+			t.Fatalf("invalid or future producer attempt %q for consumer %q was accepted", attempts[0], attempts[1])
 		}
-		delete(want, c.ID)
-		key := c.Target.Target.OSReleaseID + "/" + c.Target.Target.VersionID
-		if contexts[key] == nil {
-			contexts[key] = map[string]bool{}
-		}
-		contexts[key][c.Support.Context] = true
-	}
-	if len(selected) != 6 || len(want) != 0 || len(contexts) != 3 {
-		t.Fatalf("incomplete current Bash amd64 inventory: cases=%d missing=%d targets=%d", len(selected), len(want), len(contexts))
-	}
-	for target, contexts := range contexts {
-		if !contexts["build"] || !contexts["runtime"] || len(contexts) != 2 {
-			t.Fatalf("target %s lacks both exact contexts", target)
-		}
-	}
-	for i, j := 0, len(cases)-1; i < j; i, j = i+1, j-1 {
-		cases[i], cases[j] = cases[j], cases[i]
-	}
-	again, err := portableToolIntegrationCasesForPlatformV1(cases, "bash", "linux/amd64")
-	if err != nil || !reflect.DeepEqual(selected, again) {
-		t.Fatalf("inventory order changed the exhaustive set: %v", err)
-	}
-	if _, err := portableToolIntegrationCasesForPlatformV1(cases, "bash", "linux/unsupported"); err == nil {
-		t.Fatal("empty or unsupported architecture set accepted")
 	}
 }
 

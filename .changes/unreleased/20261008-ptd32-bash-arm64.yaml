@@ -1,0 +1,2 @@
+kind: Added
+body: Validate all six native Bash ARM64 cases on the ARM64 CI runner and require original output, runtime provenance and matching native runner context for the complete twelve-case Bash evidence gate.
