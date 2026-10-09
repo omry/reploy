@@ -8,8 +8,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 jobs:
   ci:
@@ -23,10 +22,14 @@ jobs:
     with:
       macos_runner: macos-15-intel
 
-  publish:
-    name: Publish PyPI and GitHub Release
+  prepare:
+    name: Build and validate release artifacts
     needs: integration
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -112,6 +115,33 @@ jobs:
             --prerelease "$PRERELEASE" \
             --out release-notes.md
 
+      - name: Upload release artifacts for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            pypi-dists/
+            release-assets/
+            release-notes.md
+
+  publish:
+    name: Approve and publish PyPI and GitHub Release
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Download reviewed release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-${{ github.sha }}
+
+      - name: Verify downloaded binary checksums
+        run: cd release-assets && sha256sum --check SHA256SUMS
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
@@ -121,9 +151,10 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.release.outputs.tag }}
-          VERSION: ${{ steps.release.outputs.version }}
-          PRERELEASE: ${{ steps.release.outputs.prerelease }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
         run: |
           set -euo pipefail
           args=(

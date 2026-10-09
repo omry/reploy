@@ -1,0 +1,2 @@
+kind: Changed
+body: Require maintainer approval before publishing development and final releases, with validated release artifacts available for review.
