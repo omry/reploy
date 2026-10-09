@@ -1,7 +1,13 @@
 name: Publish
+run-name: Publish Reploy ${{ inputs.version }}
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: Release version (must match VERSION on the selected ref, without a v prefix).
+        required: true
+        type: string
 
 concurrency:
   group: publish-${{ github.ref }}
@@ -11,53 +17,30 @@ permissions:
   contents: read
 
 jobs:
-  ci:
-    name: CI gate
-    uses: ./.github/workflows/ci.yml
-
-  integration:
-    name: Integration smoke gate
-    needs: ci
-    uses: ./.github/workflows/integration.yml
-    with:
-      macos_runner: macos-15-intel
-
-  prepare:
-    name: Build and validate release artifacts
-    needs: integration
+  version:
+    name: Check requested release version
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.release.outputs.version }}
       tag: ${{ steps.release.outputs.tag }}
       prerelease: ${{ steps.release.outputs.prerelease }}
     steps:
-      - name: Check out repository
+      - name: Check out release version
         uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
         with:
-          go-version: "1.25.x"
-          cache: true
+          sparse-checkout: VERSION
+          sparse-checkout-cone-mode: false
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install Python build dependencies
-        run: python -m pip install --upgrade pip build hatchling editables twine
-
-      - name: Validate release version
+      - name: Validate requested release version and available tag
         id: release
         env:
+          REQUESTED_VERSION: ${{ inputs.version }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           version="$(tr -d '[:space:]' < VERSION)"
-          if [[ -z "$version" ]]; then
-            echo "VERSION is empty" >&2
+          if [[ -z "$version" || "$version" != "$REQUESTED_VERSION" ]]; then
+            echo "Requested release version '$REQUESTED_VERSION' does not match VERSION '$version'." >&2
             exit 1
           fi
 
@@ -80,6 +63,50 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
 
+  ci:
+    name: CI gate
+    needs: version
+    uses: ./.github/workflows/ci.yml
+
+  integration:
+    name: Integration smoke gate
+    needs: version
+    uses: ./.github/workflows/integration.yml
+    with:
+      macos_runner: macos-15-intel
+      portable_tool_checks_in_ci: true
+
+  prepare:
+    name: Build and validate release artifacts
+    needs: version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ needs.version.outputs.version }}
+      tag: ${{ needs.version.outputs.tag }}
+      prerelease: ${{ needs.version.outputs.prerelease }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Select shared Go build cache
+        shell: bash
+        run: echo "GOCACHE=$RUNNER_TEMP/reploy-go-cache" >> "$GITHUB_ENV"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Python build dependencies
+        run: python -m pip install --upgrade pip build hatchling editables twine
+
       - name: Run Go tests
         run: go test ./...
 
@@ -98,8 +125,8 @@ jobs:
 
       - name: Stage GitHub Release binaries
         env:
-          VERSION: ${{ steps.release.outputs.version }}
-          PRERELEASE: ${{ steps.release.outputs.prerelease }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
           set -euo pipefail
           mkdir -p release-assets
@@ -127,7 +154,7 @@ jobs:
 
   publish:
     name: Approve and publish PyPI and GitHub Release
-    needs: prepare
+    needs: [ci, integration, prepare]
     runs-on: ubuntu-latest
     environment: release
     permissions:

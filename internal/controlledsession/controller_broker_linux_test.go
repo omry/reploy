@@ -289,6 +289,9 @@ func TestRunControllerBrokerV1FailsWhenAttachmentIsLostBeforeHostOpened(t *testi
 	case <-ctx.Done():
 		t.Fatal("broker did not detect attachment loss before host opened")
 	}
+	// Attachment loss may end the broker before it dials the host. Wake the
+	// fake host's AcceptUnix before waiting for its goroutine to finish.
+	_ = hostListener.Close()
 	<-hostDone
 }
 

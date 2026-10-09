@@ -35,9 +35,9 @@ PY_COMPILE_FILES = (
 def _go_test(session: nox.Session) -> None:
     default_go_cache = Path(tempfile.gettempdir()) / "reploy-go-cache"
     env = {"GOCACHE": os.environ.get("GOCACHE", str(default_go_cache))}
-    # Native Windows ARM64 has slower filesystem-heavy fixture setup; this
+    # Windows ARM64 and Intel macOS have slower filesystem-heavy fixture setup; this
     # bounds the whole package suite, independently of individual probe limits.
-    timeout = "5m" if _current_target_label() == "windows-arm64" else "3m"
+    timeout = "5m" if _current_target_label() in {"windows-arm64", "darwin-amd64"} else "3m"
     session.run("go", "test", "-timeout", timeout, "./...", env=env, external=True)
 
 
@@ -104,6 +104,9 @@ def _python_package_tests(session: nox.Session) -> None:
         "packaging/python",
         "-p",
         "test_*.py",
+    )
+    session.run(
+        "python", "-m", "unittest", "discover", "-s", "tools/ci", "-p", "test_*.py"
     )
 
 
