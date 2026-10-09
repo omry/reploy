@@ -846,7 +846,7 @@ func TestApplicationPortablePreparationSelectsBeforeBaseRealizationV1(t *testing
 			selectedBase.Descriptor = testProbeImageDescriptor(t, "linux/amd64")
 			order := []string{}
 			backend := providerBuildPreparationTestBackend(t, loaded, current, selectedBase, prepared, &order)
-			backend.selectCachedBase = func(context.Context, providers.ResolvedRequestV1) (SelectedProviderBase, bool, error) {
+			backend.selectCachedBase = func(context.Context, providers.ResolvedRequestV1, deploy.ImageDescriptor) (SelectedProviderBase, bool, error) {
 				return SelectedProviderBase{}, false, nil
 			}
 			realized := 0
@@ -911,7 +911,7 @@ func TestApplicationPortablePreparationUsesNormalBaseSelectionWithCachedBaseV1(t
 			backend := providerBuildPreparationTestBackend(t, loaded, current, selectedBase, PreparedProviderBase{}, &order)
 			cachedSelections, normalSelections := 0, 0
 			// The configured local hit must not be consulted for fresh application builds.
-			backend.selectCachedBase = func(_ context.Context, request providers.ResolvedRequestV1) (SelectedProviderBase, bool, error) {
+			backend.selectCachedBase = func(_ context.Context, request providers.ResolvedRequestV1, _ deploy.ImageDescriptor) (SelectedProviderBase, bool, error) {
 				order = append(order, "cached-select")
 				cachedSelections++
 				if !reflect.DeepEqual(request, loaded.Request) {

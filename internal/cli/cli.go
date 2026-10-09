@@ -2214,15 +2214,18 @@ func runDockerRuntimeCommand(action string, args []string, stdout io.Writer, std
 		return 2
 	}
 	if !allowInstalledDir {
-		options.Dir, err = resolveImplicitStagingDeploymentDir(options.Dir, options.DirExplicit, stderr)
+		options.Dir = resolveImplicitDeploymentDir(options.Dir, options.DirExplicit, stderr)
+		err = dockerdeploy.RequireStagingDeployment(options.Dir)
 		if err != nil {
 			fmt.Fprintf(stderr, "reploy %s error: %v\n", action, err)
+			printStagingCompatibilityHint(stderr, options.Dir, err, false)
 			return 1
 		}
 	}
 	errorStderr, err := deploymentErrorWriter(options.Dir, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy %s error: %v\n", action, err)
+		printStagingCompatibilityHint(stderr, options.Dir, err, false)
 		return 1
 	}
 	stopSpinner := func(bool) {}
@@ -2232,6 +2235,7 @@ func runDockerRuntimeCommand(action string, args []string, stdout io.Writer, std
 		label, err := runtimeSpinnerLabel(options.Dir, action, stderr)
 		if err != nil {
 			fmt.Fprintf(stderr, "reploy %s error: %v\n", action, err)
+			printStagingCompatibilityHint(stderr, options.Dir, err, false)
 			return 1
 		}
 		var logOutput io.Writer
@@ -2267,6 +2271,7 @@ func runDockerRuntimeCommand(action string, args []string, stdout io.Writer, std
 	if runtimeErr != nil {
 		stopSpinner(false)
 		fmt.Fprintf(errorStderr, "reploy %s error: %v\n", action, runtimeErr)
+		printStagingCompatibilityHint(errorStderr, options.Dir, runtimeErr, false)
 		return 1
 	}
 	stopSpinner(true)
