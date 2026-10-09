@@ -33,6 +33,22 @@ Publish from GitHub Actions after CI is green:
 gh workflow run publish.yml --ref main
 ```
 
+The workflow runs CI and integration checks, then builds and validates the
+release artifacts. It uploads the wheels, binaries, checksums, and release
+notes as a `release-<commit SHA>` workflow artifact before requesting approval.
+Open the workflow run, inspect its commit and artifacts, and use **Review
+deployments** to approve the `release` environment. Rejecting the deployment
+leaves the artifacts unpublished. This approval is required for dev releases
+as well as final releases. After approval, the workflow publishes those same
+artifacts to PyPI and GitHub without rebuilding them.
+
+The repository's GitHub **Settings > Environments > release** environment must
+have required reviewers configured. Referencing an environment in the workflow
+does not itself require approval; GitHub enforces its protection rules outside
+the repository. Configure the release maintainer as a required reviewer, allow
+self-review if that maintainer also starts the workflow, and disable
+administrator bypass so publication requires the approval step.
+
 The publish workflow reads `VERSION`, builds active Linux, macOS, and Windows
 wheels, publishes the wheel artifacts to PyPI, and creates a GitHub Release
 containing direct binary assets plus checksums:
@@ -51,3 +67,4 @@ may be unsigned until Authenticode signing is added.
 
 The PyPI project must be configured for GitHub trusted publishing for
 `omry/reploy` and `.github/workflows/publish.yml`.
+If the trusted publisher specifies an environment, it must match `release`.
