@@ -108,7 +108,7 @@ func TestInspectCachedBaseUsesMutableLocalReferenceWithoutPulling(t *testing.T) 
 		t.Context(),
 		"python:3.11-slim",
 		platform,
-		run,
+		run, nil,
 	)
 	if err != nil || !found {
 		t.Fatalf("cached base = %#v, found=%v, error=%v", descriptor, found, err)
@@ -132,7 +132,7 @@ func TestInspectCachedBaseTreatsMissingMutableReferenceAsCacheMiss(t *testing.T)
 		platform,
 		func(context.Context, ...string) (string, error) {
 			return "", fmt.Errorf("not found")
-		},
+		}, nil,
 	)
 	if err != nil || found {
 		t.Fatalf("found/error = %v/%v", found, err)

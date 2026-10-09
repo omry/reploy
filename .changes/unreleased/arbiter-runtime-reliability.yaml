@@ -1,0 +1,2 @@
+kind: Fixed
+body: Reuse unchanged staged builds with local package overrides and multiple Docker manifest aliases, keep normal startup output concise with phase progress and failure diagnostics, retry transient base-image pulls, and suggest staging refresh when controller metadata is incompatible.

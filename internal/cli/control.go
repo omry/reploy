@@ -29,8 +29,18 @@ func runEmbeddedControl(args []string, stdout io.Writer, stderr io.Writer, globa
 		return 2
 	}
 	metadata, found, err := dockerdeploy.LoadEmbeddedControlMetadataV1(context.Background(), options.Dir)
+	if (err != nil || !found) && (len(options.Command) == 0 || isHelpArg(options.Command[0])) {
+		// General help must remain accessible with incompatible staging files.
+		printEmbeddedControlUsage(stdout, embeddedControlUsageContext{ScriptName: options.ScriptName})
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy control metadata error: %v\n", err)
+			printStagingCompatibilityHint(stderr, options.Dir, err, true)
+		}
+		return 0
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy control error: %v\n", err)
+		printStagingCompatibilityHint(stderr, options.Dir, err, true)
 		return 1
 	}
 	if !found {

@@ -1047,7 +1047,7 @@ func TestProviderBuildPreparationRetriesOrdinaryValidatedCleanupBeforePruningV1(
 				loadVerifier: func(blueprint.Platform) (deploy.ApplicationStartupVerifierV1, error) {
 					return deploy.ApplicationStartupVerifierV1{}, nil
 				},
-				selectCachedBase: func(context.Context, providers.ResolvedRequestV1) (SelectedProviderBase, bool, error) {
+				selectCachedBase: func(context.Context, providers.ResolvedRequestV1, deploy.ImageDescriptor) (SelectedProviderBase, bool, error) {
 					return SelectedProviderBase{}, false, nil
 				},
 				selectBase: func(context.Context, providers.ResolvedRequestV1) (SelectedProviderBase, error) {
@@ -1209,7 +1209,7 @@ func TestProviderBuildPreparationCleanupFailurePreservesOwnersV1(t *testing.T) {
 				loadVerifier: func(blueprint.Platform) (deploy.ApplicationStartupVerifierV1, error) {
 					return deploy.ApplicationStartupVerifierV1{}, nil
 				},
-				selectCachedBase: func(context.Context, providers.ResolvedRequestV1) (SelectedProviderBase, bool, error) {
+				selectCachedBase: func(context.Context, providers.ResolvedRequestV1, deploy.ImageDescriptor) (SelectedProviderBase, bool, error) {
 					return SelectedProviderBase{}, false, nil
 				},
 				selectBase: func(context.Context, providers.ResolvedRequestV1) (SelectedProviderBase, error) {

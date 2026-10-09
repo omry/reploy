@@ -36,6 +36,9 @@ func LoadEmbeddedControlMetadataV1(ctx context.Context, dir string) (metadata Em
 		return EmbeddedControlMetadataV1{}, false, err
 	}
 	if schema != deploy.StateSchemaV1 {
+		if schema != "" {
+			return EmbeddedControlMetadataV1{}, false, fmt.Errorf("state schema %q is unsupported; expected %q", schema, deploy.StateSchemaV1)
+		}
 		return EmbeddedControlMetadataV1{}, false, nil
 	}
 	operation, err := deploy.AcquireOperationLock(ctx, dir)

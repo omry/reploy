@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -77,7 +78,7 @@ func InspectCachedBase(
 	authorReference string,
 	platform blueprint.Platform,
 ) (deploy.ImageDescriptor, deploy.BaseConfig, bool, error) {
-	return inspectCachedBase(ctx, authorReference, platform, runDockerOutput)
+	return inspectCachedBase(ctx, authorReference, platform, runDockerOutput, nil)
 }
 
 func inspectCachedBase(
@@ -85,6 +86,7 @@ func inspectCachedBase(
 	authorReference string,
 	platform blueprint.Platform,
 	run dockerOutputRunner,
+	expected *deploy.ImageDescriptor,
 ) (deploy.ImageDescriptor, deploy.BaseConfig, bool, error) {
 	if ctx == nil {
 		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, fmt.Errorf("inspect cached Docker base requires a context")
@@ -114,10 +116,28 @@ func inspectCachedBase(
 	if err != nil {
 		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, nil
 	}
+	// A local image can carry multiple repository digests (for example an
+	// index and its platform manifest). Prefer the locked identity only when
+	// it is still attached to this author reference and names the same bytes.
+	if expected != nil && expected.AuthorReference == authorReference && expected.ManifestDigest != "" {
+		locked, _, lockedErr := parseResolvedDockerBase(expected.ImmutableReference, platform, []byte(output), "")
+		if lockedErr == nil {
+			locked.AuthorReference = authorReference
+			if reflect.DeepEqual(locked, *expected) {
+				descriptor = locked
+			}
+		}
+	}
 	return descriptor, config, true, nil
 }
 
 func resolveBase(ctx context.Context, authorReference string, platform blueprint.Platform, run dockerOutputRunner) (deploy.ImageDescriptor, deploy.BaseConfig, error) {
+	if ctx == nil {
+		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("resolve Docker base requires a context")
+	}
+	if err := ctx.Err(); err != nil {
+		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, err
+	}
 	if err := validateDockerAuthorReference(authorReference); err != nil {
 		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, err
 	}
@@ -142,7 +162,7 @@ func resolveBase(ctx context.Context, authorReference string, platform blueprint
 				}
 			}
 		}
-		pullOutput, err := run(ctx, "pull", "--platform", platform.Canonical, authorReference)
+		pullOutput, err := pullDockerBaseWithRetry(ctx, run, platform.Canonical, authorReference)
 		if err != nil {
 			return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("pull Docker base image %s for %s: %w", authorReference, platform.Canonical, err)
 		}

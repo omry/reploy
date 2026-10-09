@@ -1,10 +1,13 @@
 package dockerdeploy
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"reflect"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providers/registry"
@@ -19,11 +22,17 @@ type CurrentBuildReuseInput struct {
 	DockerPlan       DockerExecutionPlan
 	StartupVerifier  deploy.ApplicationStartupVerifierV1
 	PortableToolPlan *providers.PortableToolPlanV1
+	Progress         io.Writer
 }
 
 // CurrentBuildMatches returns false for a valid but changed build input. It
-// performs no I/O; malformed current state or candidate inputs remain errors.
+// reads no external state; malformed current state or candidate inputs remain
+// errors. Progress, when supplied, explains the rejected reuse boundary.
 func CurrentBuildMatches(current CurrentBuild, input CurrentBuildReuseInput) (bool, error) {
+	mismatch := func(reason string) (bool, error) {
+		writeProviderBuildProgress(input.Progress, "cannot reuse current build: %s", reason)
+		return false, nil
+	}
 	if err := deploy.ValidateStateV1(current.State); err != nil {
 		return false, fmt.Errorf("current build reuse state: %w", err)
 	}
@@ -35,10 +44,10 @@ func CurrentBuildMatches(current CurrentBuild, input CurrentBuildReuseInput) (bo
 		return false, err
 	}
 	if blueprintPayload != current.State.Blueprint {
-		return false, nil
+		return mismatch("blueprint changed")
 	}
 	if current.State.Platform != input.ResolvedRequest.Platform {
-		return false, nil
+		return mismatch("platform changed")
 	}
 	if err := validateGenerationBuildLock(current.Generation, current.Lock, registry.ValidateRequirementProfileV1); err != nil {
 		return false, fmt.Errorf("current build reuse: %w", err)
@@ -50,7 +59,7 @@ func CurrentBuildMatches(current CurrentBuild, input CurrentBuildReuseInput) (bo
 		return false, err
 	}
 	if !portableToolsMatch {
-		return false, nil
+		return mismatch("portable tool selection changed")
 	}
 	requestDigest, err := providers.ResolvedRequestDigest(input.ResolvedRequest, registry.ValidateResolvedRequestOwnersV1)
 	if err != nil {
@@ -68,7 +77,7 @@ func CurrentBuildMatches(current CurrentBuild, input CurrentBuildReuseInput) (bo
 		return false, err
 	}
 	if stateOverlayDigest != overlayDigest {
-		return false, nil
+		return mismatch("selected options or packages changed")
 	}
 	if err := input.Base.Validate(); err != nil {
 		return false, fmt.Errorf("current build reuse base: %w", err)
@@ -110,16 +119,33 @@ func CurrentBuildMatches(current CurrentBuild, input CurrentBuildReuseInput) (bo
 	if err != nil {
 		return false, err
 	}
-	if current.Lock.ResolvedRequestDigest != requestDigest ||
-		lockedOverlayDigest != overlayDigest ||
-		!reflect.DeepEqual(current.Lock.PackageOverrides, input.PackageOverrides) ||
-		current.Lock.Platform != input.ResolvedRequest.Platform ||
-		!reflect.DeepEqual(current.Lock.Base, input.Base) ||
-		lockedPolicyDigest != policyDigest ||
-		!reflect.DeepEqual(current.Lock.RuntimeLayer.Verifier, input.StartupVerifier) ||
-		!reflect.DeepEqual(current.Lock.RuntimeLayer.Account, account) {
-		return false, nil
+	// Compare the serialized intent: optional empty arrays disappear on disk.
+	desiredOverrides, err := canonical.Marshal(input.PackageOverrides)
+	if err != nil {
+		return false, err
 	}
+	lockedOverrides, err := canonical.Marshal(current.Lock.PackageOverrides)
+	if err != nil {
+		return false, err
+	}
+	for _, check := range []struct {
+		changed bool
+		reason  string
+	}{
+		{current.Lock.ResolvedRequestDigest != requestDigest, "resolved package request changed"},
+		{lockedOverlayDigest != overlayDigest, "selected options or packages changed"},
+		{!bytes.Equal(lockedOverrides, desiredOverrides), "package overrides changed"},
+		{current.Lock.Platform != input.ResolvedRequest.Platform, "platform changed"},
+		{!reflect.DeepEqual(current.Lock.Base, input.Base), "base image changed"},
+		{lockedPolicyDigest != policyDigest, "runtime policy changed"},
+		{!reflect.DeepEqual(current.Lock.RuntimeLayer.Verifier, input.StartupVerifier), "startup verifier changed"},
+		{!reflect.DeepEqual(current.Lock.RuntimeLayer.Account, account), "container account changed"},
+	} {
+		if check.changed {
+			return mismatch(check.reason)
+		}
+	}
+
 	return true, nil
 }
 

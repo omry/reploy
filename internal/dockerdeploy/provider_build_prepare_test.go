@@ -458,7 +458,7 @@ func providerBuildPreparationTestBackend(
 			}
 			return selected, nil
 		},
-		selectCachedBase: func(_ context.Context, request providers.ResolvedRequestV1) (SelectedProviderBase, bool, error) {
+		selectCachedBase: func(_ context.Context, request providers.ResolvedRequestV1, _ deploy.ImageDescriptor) (SelectedProviderBase, bool, error) {
 			*order = append(*order, "cached-select")
 			if !reflect.DeepEqual(request, loaded.Request) {
 				t.Fatal("selected cached base for different request")
