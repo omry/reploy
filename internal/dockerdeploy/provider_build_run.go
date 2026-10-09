@@ -204,6 +204,9 @@ func runLockedProviderBuildV1(
 	if ctx == nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("run locked provider build requires a context")
 	}
+	if input.Progress != nil {
+		ctx = context.WithValue(ctx, dockerPullProgressContextKey{}, input.Progress)
+	}
 	ctx, endBuild := buildprofile.Start(ctx, "Build staged environment")
 	defer func() { endBuild(resultErr) }()
 	if err := ctx.Err(); err != nil {
@@ -368,7 +371,7 @@ func runLockedProviderBuildV1(
 		Sources:        reuseSources,
 		LocalOverrides: localOverrides,
 		ReployVersion:  deploy.ToolVersion,
-		DockerPlan:     dockerPlan, NoCache: input.NoCache, ValidatedCandidate: func() *ValidatedBuildCandidateV1 {
+		DockerPlan:     dockerPlan, NoCache: input.NoCache, Progress: input.Progress, ValidatedCandidate: func() *ValidatedBuildCandidateV1 {
 			if validatedCandidateFound {
 				return &validatedCandidate
 			}
@@ -449,11 +452,12 @@ func runLockedProviderBuildV1(
 	if !input.ValidateChoices && validatedCandidateFound && !preparation.ReusedCandidate {
 		retireValidatedAfterPublication = true
 	}
-	writeProviderBuildProgress(input.Progress, "preparing component packages and image layers")
 	if preparation.Reused {
 		buildprogress.Report(input.BuildProgress, buildprogress.Event{
 			Phase: buildprogress.PhasePublish, Detail: "Finalizing cached environment image",
 		})
+	} else {
+		writeProviderBuildProgress(input.Progress, "preparing component packages and image layers")
 	}
 	options := input.RunOptions
 	options.NoCache = effectiveNoCache

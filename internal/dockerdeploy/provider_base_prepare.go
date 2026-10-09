@@ -88,6 +88,7 @@ func SelectProviderBase(
 func SelectCachedProviderBase(
 	ctx context.Context,
 	request providers.ResolvedRequestV1,
+	expected deploy.ImageDescriptor,
 ) (SelectedProviderBase, bool, error) {
 	if ctx == nil {
 		return SelectedProviderBase{}, false, fmt.Errorf("select cached provider base requires a context")
@@ -108,7 +109,7 @@ func SelectCachedProviderBase(
 	if err != nil {
 		return SelectedProviderBase{}, false, err
 	}
-	descriptor, config, found, err := InspectCachedBase(ctx, baseReference, request.Platform)
+	descriptor, config, found, err := inspectCachedBase(ctx, baseReference, request.Platform, runDockerOutput, &expected)
 	if err != nil || !found {
 		return SelectedProviderBase{}, found, err
 	}

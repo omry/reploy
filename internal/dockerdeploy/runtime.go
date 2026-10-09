@@ -52,6 +52,11 @@ func Runtime(options RuntimeOptions) error {
 			return err
 		}
 		if runtimeActionEnsuresCurrentBuildV1(options.Action) && !installed {
+			stdout, stderr := options.Stdout, options.Stderr
+			if !options.Verbose {
+				// Nil writers retain command output in failure diagnostics.
+				stdout, stderr = nil, nil
+			}
 			if options.Progress != nil {
 				fmt.Fprintln(options.Progress, "prepare current build")
 			}
@@ -59,8 +64,9 @@ func Runtime(options RuntimeOptions) error {
 				DeploymentDir: options.Dir,
 				Runtime:       runtime,
 				Automatic:     true,
+				Progress:      options.Progress,
 				RunOptions: RunOptions{
-					Stdout: options.Stdout, Stderr: options.Stderr,
+					Stdout: stdout, Stderr: stderr, Progress: options.Progress,
 					DockerPreflightTimeout: options.DockerPreflightTimeout,
 				},
 			}); err != nil {

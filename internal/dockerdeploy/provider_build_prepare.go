@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"strings"
 
@@ -27,6 +28,7 @@ type LockedProviderBuildPreparationInputV1 struct {
 	ReployVersion      string
 	DockerPlan         DockerExecutionPlan
 	NoCache            bool
+	Progress           io.Writer
 	ValidatedCandidate *ValidatedBuildCandidateV1
 	ValidatedInputs    ValidatedBuildInputsV1
 }
@@ -81,7 +83,7 @@ type providerBuildPreparationBackend struct {
 	) error
 	load             func(*deploy.OperationLock, deploy.PackageOverrideIntentV1, string, []providers.ResolvedSourceInput) (LoadedBuildRequestV1, error)
 	loadVerifier     func(blueprint.Platform) (deploy.ApplicationStartupVerifierV1, error)
-	selectCachedBase func(context.Context, providers.ResolvedRequestV1) (SelectedProviderBase, bool, error)
+	selectCachedBase func(context.Context, providers.ResolvedRequestV1, deploy.ImageDescriptor) (SelectedProviderBase, bool, error)
 	selectBase       func(context.Context, providers.ResolvedRequestV1) (SelectedProviderBase, error)
 	validateCurrent  currentBuildLoader
 	lockedSources    func(deploy.BuildLockV1) ([]providers.ResolvedSourceInput, error)
@@ -271,6 +273,9 @@ func prepareLockedProviderBuildV1(
 		validated        bool
 	}
 	var currentReuse *reuseCandidate
+	if input.NoCache {
+		writeProviderBuildProgress(input.Progress, "cannot reuse current build: cache disabled")
+	}
 	if !input.NoCache {
 		currentCtx, endCurrent := buildprofile.Start(ctx, "Load current provider build")
 		current, currentFound, err := backend.validateCurrent(
@@ -281,6 +286,9 @@ func prepareLockedProviderBuildV1(
 			return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build current generation: %w", err)
 		}
 		if currentFound {
+			if hasApplicationTools {
+				writeProviderBuildProgress(input.Progress, "cannot reuse current build: application tools require selection and validation")
+			}
 			result.Current = &current
 			available, err := backend.cacheAvailable(current.Lock, input.Store)
 			if err != nil {
@@ -289,6 +297,9 @@ func prepareLockedProviderBuildV1(
 			if available {
 				lock := current.Lock
 				result.ReusableLock = &lock
+			}
+			if !available {
+				writeProviderBuildProgress(input.Progress, "cannot reuse current build: provider cache is missing")
 			}
 			if available && !hasApplicationTools {
 				lockedSources, err := backend.lockedSources(current.Lock)
@@ -301,6 +312,9 @@ func prepareLockedProviderBuildV1(
 				)
 				if err != nil {
 					return LockedProviderBuildPreparationV1{}, err
+				}
+				if !exactSources {
+					writeProviderBuildProgress(input.Progress, "cannot reuse current build: selected sources or package overrides changed")
 				}
 				if exactSources {
 					currentReuse = &reuseCandidate{
@@ -317,12 +331,14 @@ func prepareLockedProviderBuildV1(
 		// lock therefore forces graph execution instead of turning its old plan
 		// into self-fulfilling desired state. Unused mappings remain untouched.
 		if portableToolPlanHasSourceBuilderScopesV1(candidate.current.Lock.PortableTools) {
+			writeProviderBuildProgress(input.Progress, "cannot reuse current build: local source tools require revalidation")
 			return false, nil
 		}
 		// Application-scoped Python bindings need the graph to reopen and
 		// reverify their exact locked wheels. Reusing the prior provider bundle
 		// would allow a substituted selected wheel to bypass that boundary.
 		if portableToolPlanHasPythonBindingScopesV1(candidate.current.Lock.PortableTools) {
+			writeProviderBuildProgress(input.Progress, "cannot reuse current build: Python tool bindings require revalidation")
 			return false, nil
 		}
 		var portableToolPlan *providers.PortableToolPlanV1
@@ -333,7 +349,7 @@ func prepareLockedProviderBuildV1(
 			ResolvedRequest: candidate.request, Overlay: loaded.State.Overlay,
 			PackageOverrides: candidate.packageOverrides, Base: selected.Descriptor,
 			Document: loaded.Document, DockerPlan: input.DockerPlan, StartupVerifier: startupVerifier,
-			PortableToolPlan: portableToolPlan,
+			PortableToolPlan: portableToolPlan, Progress: input.Progress,
 		})
 		if err != nil || !matches {
 			return false, err
@@ -351,7 +367,7 @@ func prepareLockedProviderBuildV1(
 
 	var cachedSelection *SelectedProviderBase
 	if currentReuse != nil {
-		cached, found, err := backend.selectCachedBase(ctx, loaded.Request)
+		cached, found, err := backend.selectCachedBase(ctx, loaded.Request, currentReuse.current.Lock.Base)
 		if err != nil {
 			return LockedProviderBuildPreparationV1{}, err
 		}
@@ -362,8 +378,11 @@ func prepareLockedProviderBuildV1(
 			} else if reused {
 				return result, nil
 			}
+		} else {
+			writeProviderBuildProgress(input.Progress, "cannot reuse current build: local base image is missing or unusable")
 		}
 	}
+	writeProviderBuildProgress(input.Progress, "selecting base image")
 	selectCtx, endSelect := buildprofile.Start(ctx, "Select base image")
 	selected, err := backend.selectBase(selectCtx, loaded.Request)
 	endSelect(err)
