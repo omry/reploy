@@ -163,6 +163,43 @@ The fixture proves Reploy's terminal, browser endpoint, lifecycle, retained
 artifact, and owned cleanup contracts. Consumer recording formats, adapters,
 redaction, and media rendering remain outside this proof.
 
+## Portable-tool Qualification
+
+The embedded catalog is generated from explicit, digest-checked records with
+`go generate ./internal/toolcatalog`. Generation validates and canonicalizes
+definitions; it does not download or execute tools. Verify generation produces
+no tracked diff before publishing a catalog change.
+
+Derive support from `toolcatalog.EmbeddedIntegrationCasesV1` and match each
+case's external provider-store record with
+`dockerdeploy.MatchPortableToolCaseEvidenceV1`. A passing match binds the exact
+release manifest, selected closure, target, context, binding, selections,
+fixture, validator, immutable image, and original probe output. Catalog
+presence, a representative test, or cross-compilation cannot establish the
+complete matrix.
+
+Linux CI executes all four Java build cases, three Playwright Python/Chromium
+runtime cases, and six native AMD64 Bash cases. The ARM64 job executes the
+other six native Bash cases. `Bash native evidence checks` consumes both jobs'
+retained records and runner metadata, requiring the same workflow SHA and run,
+with every artifact bound to its own recorded producer attempt no later than
+the consuming gate attempt, and all twelve current cases. Partial workflow
+reruns may reuse artifacts from earlier producer attempts in the same workflow
+run when those attempts precede the consuming gate attempt. Keep the uploaded
+`portable-tool-evidence-ci-*` and `portable-tool-evidence-arm64-*` JSON files
+and `.reploy/provider-store/validation/` objects together when reviewing a
+support claim. On pull requests the recorded workflow SHA is the tested merge
+revision; retain its relationship to the PR head rather than relabeling it.
+
+`REPLOY_PORTABLE_TOOL_EVIDENCE_DIR` selects the integration output directory.
+Runtime Bash also retains the exact build lock and image, selected package
+export, and consumer `/bin/bash` file evidence. Hand these facts to consumers
+without claiming OmegaFlow adapter qualification. Recording remains
+consumer-owned; there is no Reploy asciinema acquisition prerequisite.
+
+The final scope and migration dispositions are recorded in
+[Portable Tool Cutover](PORTABLE_TOOL_DEFINITION_CUTOVER.md).
+
 ## Changelog Fragments
 
 Reploy uses [Changie](https://github.com/miniscruff/changie) for release-note
