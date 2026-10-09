@@ -3,18 +3,18 @@ artifact: swe-design-review-attestation
 schema_version: 4
 scope_key: 79997c63f8940ef40d881dc169edf2ad383734721ff20b54cb2d4ff8229339ee
 scope: {"kind": "path", "primary_target": "docs/REPOSITORY_DESIGN.md", "repository": ".", "selector": "docs/REPOSITORY_DESIGN.md"}
-review_content_identity_sha256: 9fc79c57d97198407da3ab616ef7df1357f931ee85cada117372113c07383261
-target_content_identity_sha256: 6ea86bb27b69ba9c0660678cd8a839137510614da68ea01f115b52b4ed98e5c9
+review_content_identity_sha256: 1dec96b22fd2102bf8f9557aab54f91151eac7ee326719ad41b77b5eb32cbdcd
+target_content_identity_sha256: c5fa06c571c76961e938a93639d2aa1db6157827c8782c697f106b8957636c63
 baseline_content_identity_sha256: null
-target_documents: [{"path": "docs/REPOSITORY_DESIGN.md", "repository": ".", "sha256": "454e6b632ad4513119b3d15b0e157b03644bb94e6cb0a70e0e98d832a1d017d4"}]
+target_documents: [{"path": "docs/REPOSITORY_DESIGN.md", "repository": ".", "sha256": "e83f0d27463629b7da4db15fc4d29ad10892a3184c78623ff6e482b3d7e8ed9d"}]
 baseline_documents: []
 design_dependency_documents: []
 document_repository: "."
 document_path: "docs/REPOSITORY_DESIGN.md"
-document_revision_provenance: "9c814e87fd6a42ecb2dfe0fecf56f4a400bf1922"
-document_sha256: 454e6b632ad4513119b3d15b0e157b03644bb94e6cb0a70e0e98d832a1d017d4
+document_revision_provenance: "6009472369cbb57d89cb62ef0d7c7bdac1291bd7"
+document_sha256: e83f0d27463629b7da4db15fc4d29ad10892a3184c78623ff6e482b3d7e8ed9d
 verdict: clean
-attested_at: 2026-09-22T20:27:34Z
+attested_at: 2026-10-09T10:11:10Z
 ---
 <!-- swe-design-review-attestation:v4 -->
 
