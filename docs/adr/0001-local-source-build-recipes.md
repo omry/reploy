@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-27
+updated: 2026-10-09
 summary: Keep local-source build recipes developer-owned and outside package distribution.
 ---
 
@@ -47,34 +47,34 @@ an exact definition-revision suffix:
 ```yaml
 requires:
   - tool:java==21
-  - tool:java==21~2
+  - tool:java==21~1
 ```
 
 A request with bindings or selections uses a structured mapping:
 
 ```yaml
 requires:
-  - tool: playwright
-    version: "1.61.0"
+  - tool: java
+    version: "==21"
     definition_revision: 1
-    binding: python
-    select:
-      browser: chromium
 ```
 
 The recipe supplies build context and an isolated source-builder scope. Reploy
 canonically merges repeated same-tool requirements in that scope: version
 constraints accumulate, exact revision pins must agree, explicit binding and
 selection sets union, omitted bindings retain inference, and `binding: "*"`
-dominates other binding demands. Catalog resolution, acquisition, and provider
-materialization remain separate downstream responsibilities.
+dominates other binding demands. Catalog-backed planning consumes the complete
+demand before acquisition and provider materialization. The resolved request,
+provider request, build evidence, and build lock retain the exact upstream
+version, definition revision, release-manifest digest, and selected-closure
+digest. Reploy never reduces these constraints to a tool name.
 
-The current legacy source-builder bridge can execute only an optionless tool
-name with inferred bindings. A constrained request still parses canonically and
-participates in recipe identity, but the source build fails before provider
-work until catalog-backed planning consumes the complete demand. Reploy never
-silently reduces versions, definition revisions, bindings, or selections to a
-tool name.
+The Java request shown above is currently qualified for build context: Java
+`21`, definition revision `1`, using
+Eclipse Temurin JDK `21.0.12+8` on Debian 12/13 and Ubuntu 25.10/26.04 AMD64.
+Playwright's Python/Chromium support is runtime-only; a structured request's
+syntax does not grant build-context support. Unsupported context, target,
+binding, or selection combinations fail during planning before acquisition.
 
 ### Supported Python Build Types
 

@@ -75,6 +75,42 @@ Add only the nodes the app needs. Common additions are:
 - `environment.workload.endpoints` and `docker.workload.endpoints` for published
   services and readiness checks.
 
+## Portable Tool Requests
+
+Put application-owned runtime tools in `packages.tools`. Tool versions and
+definition revisions are independent of the base distribution:
+
+```yaml
+packages:
+  tools:
+    - tool:bash==5.2.37~1
+```
+
+This Bash request is qualified on Debian 13 for both `linux/amd64` and
+`linux/arm64`. A complete staging example is
+`examples/portable-tools/portable-tools.blueprint.yaml` in the repository.
+After staging and building it, `reploy shell` opens the environment with the
+selected Bash available.
+
+Bindings and selections use a structured request. For an AMD64 application on
+Debian 12 or Ubuntu 25.10/26.04, the qualified Playwright request is:
+
+```yaml
+packages:
+  tools:
+    - tool: playwright
+      version: "1.61.0"
+      definition_revision: 1
+      binding: python
+      select:
+        browser: chromium
+```
+
+The application needs an available compatible Python interpreter for its
+Python packages. The browser payload and native dependencies are materialized
+by Reploy; no upstream browser installer runs. See the exact tuples in
+[Support](/docs/support-matrix) before selecting a base image or architecture.
+
 ## Local Development Overrides
 
 Local development choices do not belong in a published blueprint. Stage the
@@ -122,6 +158,24 @@ environment:
 An override is used only if the blueprint or a dependency actually requires
 that package. Installation consumes the artifacts built during staging and
 does not retain the sidecar or external source paths.
+
+Build-only tools belong to the selected local project. For example, its root
+`.reploy.yaml` can declare:
+
+```yaml
+schema: 1
+project: omegaconf
+type: python
+build: setuptools-legacy
+requires:
+  - tool:java==21~1
+```
+
+Java is then resolved for the isolated source-builder scope and stays out of
+the application's runtime tool set. This example requires Debian 12/13 or
+Ubuntu 25.10/26.04 on AMD64. The build type must match the project's metadata:
+use `pep517` when it declares a `[build-system]` table. Published packages do
+not activate local recipes, and a recipe cannot supply arbitrary build commands.
 
 The editor shades explicit package dependencies and lists them before
 override-only mappings. It discovers direct dependencies from static Python
