@@ -30,17 +30,35 @@ tools/build_release_dists --clean
 Publish from GitHub Actions after CI is green:
 
 ```bash
-gh workflow run publish.yml --ref main
+gh workflow run publish.yml --ref main --field version="$(tr -d '[:space:]' < VERSION)"
 ```
 
-The workflow runs CI and integration checks, then builds and validates the
-release artifacts. It uploads the wheels, binaries, checksums, and release
-notes as a `release-<commit SHA>` workflow artifact before requesting approval.
+Pass the version from the selected ref's `VERSION` file, without a `v` prefix.
+The Actions run title includes this version, and the workflow checks that it
+matches the selected commit before starting CI and integration checks.
+
+The workflow runs CI, integration checks, and release artifact preparation
+concurrently against the selected commit. All three must succeed before the
+publication job can request approval. Preparation uploads the wheels, binaries,
+checksums, and release notes as a `release-<commit SHA>` workflow artifact before
+requesting approval.
 Open the workflow run, inspect its commit and artifacts, and use **Review
 deployments** to approve the `release` environment. Rejecting the deployment
 leaves the artifacts unpublished. This approval is required for dev releases
 as well as final releases. After approval, the workflow publishes those same
 artifacts to PyPI and GitHub without rebuilding them.
+
+Standalone integration runs retain the full portable-tool matrices and direct
+controlled-session contract. Publication runs perform those checks once in
+their mandatory CI gate, while integration still runs the representative cases
+and all other runtime checks.
+
+macOS Docker integration installs checksum-pinned upstream binaries using
+`tools/ci/install_macos_docker.py` and `tools/ci/macos-docker-tools.json`, avoiding
+Homebrew source builds. Update the URLs and SHA256 values together when changing
+the tooling versions. The Intel Colima VM uses 3 CPUs and 8 GB of memory;
+other macOS hosts retain the 2-CPU/4-GB allocation. Smoke builds print their
+existing hierarchical profiles to help diagnose remaining preparation costs.
 
 The repository's GitHub **Settings > Environments > release** environment must
 have required reviewers configured. Referencing an environment in the workflow

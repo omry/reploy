@@ -728,7 +728,7 @@ def run_smoke(
     bundle_list = run([str(reploy), "bundle", "list", "--dir", str(deploy_dir)], cwd=workdir, env=env)
     require_contains(bundle_list.stdout, "option\tapplication/imap", "bundle list")
 
-    run([str(reploy), "build", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+    run([str(reploy), "build", "--profile", "--dir", str(deploy_dir)], cwd=workdir, env=env)
     app_check = run(
         [str(reploy), "app", "config", "check", "--dir", str(deploy_dir)],
         cwd=workdir,
@@ -737,7 +737,7 @@ def run_smoke(
     require_contains(app_check.stdout, '"check": "pass"', "app command after explicit build")
 
     # A second explicit build must still reconstruct selected local wheels.
-    repeated_build = run([str(reploy), "build", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+    repeated_build = run([str(reploy), "build", "--profile", "--dir", str(deploy_dir)], cwd=workdir, env=env)
     require_contains(
         completed_output(repeated_build),
         "building local Python projects smoke-imap, smoke-suite",

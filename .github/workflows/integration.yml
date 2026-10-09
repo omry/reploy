@@ -13,6 +13,10 @@ on:
         description: GitHub-hosted macOS runner for Docker integration.
         type: string
         default: macos-15-intel
+      portable_tool_checks_in_ci:
+        description: Caller requires ci.yml's portable-tool matrices and direct controlled-session contract before publication.
+        type: boolean
+        default: false
 
 concurrency:
   group: integration-${{ github.ref }}
@@ -43,6 +47,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Select shared Go build cache
+        shell: bash
+        run: echo "GOCACHE=$RUNNER_TEMP/reploy-go-cache" >> "$GITHUB_ENV"
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -63,17 +71,26 @@ jobs:
       - name: Install Docker runtime on macOS
         if: runner.os == 'macOS'
         run: |
-          brew update
-          brew install docker docker-buildx docker-compose colima
+          tool_dir="$RUNNER_TEMP/reploy-macos-docker"
+          python tools/ci/install_macos_docker.py --prefix "$tool_dir"
+          export PATH="$tool_dir/bin:$PATH"
+          echo "$tool_dir/bin" >> "$GITHUB_PATH"
           mkdir -p ~/.docker/cli-plugins
-          ln -sf "$(brew --prefix)/lib/docker/cli-plugins/docker-buildx" ~/.docker/cli-plugins/docker-buildx
-          ln -sf "$(brew --prefix docker-compose)/bin/docker-compose" ~/.docker/cli-plugins/docker-compose
+          ln -sf "$tool_dir/libexec/docker/cli-plugins/docker-buildx" ~/.docker/cli-plugins/docker-buildx
+          ln -sf "$tool_dir/libexec/docker/cli-plugins/docker-compose" ~/.docker/cli-plugins/docker-compose
           sw_vers
           uname -a
           sysctl -n kern.hv_support || true
           colima version
           limactl --version
-          colima start --runtime docker --vm-type vz --mount-type virtiofs --cpu 2 --memory 4 --disk 20
+          # Leave resources for the host; Intel runners have 4 CPUs/14 GB.
+          vm_cpu=2
+          vm_memory=4
+          if [[ "$(uname -m)" == x86_64 ]]; then
+            vm_cpu=3
+            vm_memory=8
+          fi
+          colima start --runtime docker --vm-type vz --mount-type virtiofs --cpu "$vm_cpu" --memory "$vm_memory" --disk 20
           colima status
           docker info
           docker buildx version
@@ -110,13 +127,22 @@ jobs:
           -run '^TestPortableChromiumUbuntu2604DockerIntegration$'
 
       - name: Prove representative cases and complete Java and Playwright matrices with current evidence
-        if: matrix.name == 'Linux amd64'
+        if: matrix.name == 'Linux amd64' && !inputs.portable_tool_checks_in_ci
         env:
           REPLOY_DOCKER_INTEGRATION: "1"
           REPLOY_PORTABLE_TOOL_EVIDENCE_DIR: ${{ runner.temp }}/portable-tool-evidence
         run: >-
           go test -v -count=1 -timeout 30m ./internal/dockerdeploy
           -run '^(TestPortableToolRepresentativeDockerIntegration|TestPortableToolJavaMatrixDockerIntegration|TestPortableToolPlaywrightMatrixDockerIntegration)$'
+
+      - name: Prove representative portable-tool cases with current evidence
+        if: matrix.name == 'Linux amd64' && inputs.portable_tool_checks_in_ci
+        env:
+          REPLOY_DOCKER_INTEGRATION: "1"
+          REPLOY_PORTABLE_TOOL_EVIDENCE_DIR: ${{ runner.temp }}/portable-tool-evidence
+        run: >-
+          go test -v -count=1 -timeout 30m ./internal/dockerdeploy
+          -run '^TestPortableToolRepresentativeDockerIntegration$'
 
       - name: Retain external portable-tool observations
         if: always() && matrix.name == 'Linux amd64'
@@ -152,7 +178,7 @@ jobs:
           -run '^(TestControlledSessionSupervisorDockerIntegration|TestControlledSessionNetworkingDockerIntegration|TestControlledSessionControllerPackageDockerIntegration)$'
 
       - name: Install pinned controlled-session browser fixtures
-        if: matrix.name == 'Linux amd64'
+        if: matrix.name == 'Linux amd64' && !inputs.portable_tool_checks_in_ci
         run: |
           fixture=testdata/controlled-session/controlled-session-contract-v1.json
           playwright_url=$(jq -r '.packages[] | select(.name == "playwright") | .url' "$fixture")
@@ -167,7 +193,7 @@ jobs:
           echo "REPLOY_PLAYWRIGHT_CORE_FIXTURE=$RUNNER_TEMP/playwright-core.tgz" >> "$GITHUB_ENV"
 
       - name: Prove the direct controlled-session terminal and browser contract
-        if: matrix.name == 'Linux amd64'
+        if: matrix.name == 'Linux amd64' && !inputs.portable_tool_checks_in_ci
         env:
           REPLOY_DOCKER_INTEGRATION: "1"
         run: >-

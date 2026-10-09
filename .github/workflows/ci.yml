@@ -23,6 +23,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Select shared Go build cache
+        shell: bash
+        run: echo "GOCACHE=$RUNNER_TEMP/reploy-go-cache" >> "$GITHUB_ENV"
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -128,6 +132,10 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Select shared Go build cache
+        shell: bash
+        run: echo "GOCACHE=$RUNNER_TEMP/reploy-go-cache" >> "$GITHUB_ENV"
 
       - name: Set up Go
         uses: actions/setup-go@v5

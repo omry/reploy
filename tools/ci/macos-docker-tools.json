@@ -1,0 +1,58 @@
+{
+  "x86_64": {
+    "lima": {
+      "url": "https://github.com/lima-vm/lima/releases/download/v2.2.1/lima-2.2.1-Darwin-x86_64.tar.gz",
+      "sha256": "6b776e4bc41f358e6ee01fefcc78e2eb26f11635a0fcff632234af77a566c6c4",
+      "archive": "prefix"
+    },
+    "colima": {
+      "url": "https://github.com/abiosoft/colima/releases/download/v0.10.3/colima-Darwin-x86_64",
+      "sha256": "3082737fe8a98afda11cba7d9a20b6e56fe80c6153464beda04bec630758770b",
+      "target": "bin/colima"
+    },
+    "docker": {
+      "url": "https://download.docker.com/mac/static/stable/x86_64/docker-29.9.0.tgz",
+      "sha256": "65a7885c563226dba96c31d1a7aa78ee098199dc1c1f111582673544c91ad8de",
+      "member": "docker/docker",
+      "target": "bin/docker"
+    },
+    "buildx": {
+      "url": "https://github.com/docker/buildx/releases/download/v0.38.0/buildx-v0.38.0.darwin-amd64",
+      "sha256": "b123dc6fb51f88e47d37223938e2acd66edec73105459f65f19f15cc912ee559",
+      "target": "libexec/docker/cli-plugins/docker-buildx"
+    },
+    "compose": {
+      "url": "https://github.com/docker/compose/releases/download/v5.6.0/docker-compose-darwin-x86_64",
+      "sha256": "c76e3abf5fde1aeb3bd7c7306ff15bef2246afc1f9e54832a0a050dd7cdfb2f8",
+      "target": "libexec/docker/cli-plugins/docker-compose"
+    }
+  },
+  "arm64": {
+    "lima": {
+      "url": "https://github.com/lima-vm/lima/releases/download/v2.2.1/lima-2.2.1-Darwin-arm64.tar.gz",
+      "sha256": "9e9eacce88f37e185c346bad73aa6136f738d8cdf8c3bb23cd42b071824bc66e",
+      "archive": "prefix"
+    },
+    "colima": {
+      "url": "https://github.com/abiosoft/colima/releases/download/v0.10.3/colima-Darwin-arm64",
+      "sha256": "980ad8bf61a4ca370243f4cb41401a61276dcd2c2502bee7b9b86f9250169f34",
+      "target": "bin/colima"
+    },
+    "docker": {
+      "url": "https://download.docker.com/mac/static/stable/aarch64/docker-29.9.0.tgz",
+      "sha256": "c640fd61d9ba801e0ea282fd0df344d6943efd1994c7454537707cdb7a3d3e0b",
+      "member": "docker/docker",
+      "target": "bin/docker"
+    },
+    "buildx": {
+      "url": "https://github.com/docker/buildx/releases/download/v0.38.0/buildx-v0.38.0.darwin-arm64",
+      "sha256": "85989b895add5f119c1ccf8eada2f6892fc33ccf16bd8917638eae404ef26344",
+      "target": "libexec/docker/cli-plugins/docker-buildx"
+    },
+    "compose": {
+      "url": "https://github.com/docker/compose/releases/download/v5.6.0/docker-compose-darwin-aarch64",
+      "sha256": "bd714a42b46e51757fc1121085b3096b9064e3f80d3ca5a991e33f44df4f43c9",
+      "target": "libexec/docker/cli-plugins/docker-compose"
+    }
+  }
+}

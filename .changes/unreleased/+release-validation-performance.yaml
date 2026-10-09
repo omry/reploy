@@ -1,0 +1,2 @@
+kind: Changed
+body: Run release validation and artifact preparation concurrently, install pinned prebuilt macOS Docker tooling, share the restored Go build cache, and avoid repeating portable-tool checks already required by release CI.
