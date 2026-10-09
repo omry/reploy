@@ -1180,14 +1180,13 @@ The tool exports the supported Playwright CLI into the application executable
 namespace. Browser payload executables remain internal unless the definition
 deliberately exposes a stable named interface.
 
-An interim built-in bridge will implement the approved initial Python/Chromium
-profile before the repository protocol exists. Its artifact acquisition will
-remain a closed, reviewed primitive. This bridge will not be an official
-repository, accept external definitions, or satisfy the publication, trust,
-lifecycle, or multi-browser portions of this design. A separate implementation
-WIP uses flat, complete-per-target JSON files as a checkpoint; those files will
-be migrated to the explicit record composition in the Portable Tool Definition
-Design before release.
+The delivered embedded bridge implements the approved initial Python/Chromium
+profile through the explicit record composition described in the Portable Tool
+Definition Design. Its artifact acquisition remains a closed, reviewed
+primitive. The embedded bridge is not an official repository, does not accept
+external definitions, and does not satisfy the publication, trust, lifecycle,
+or multi-browser portions of this design. Those portions remain deferred to
+the repository protocol and future supported definitions.
 
 Target selection continues to use validated base-profile evidence inside
 provider resolution; image-reference parsing and cross-generation package

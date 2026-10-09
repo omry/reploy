@@ -34,4 +34,7 @@ release. Do not increase it merely because a newer Debian, Ubuntu, Python, or
 Docker version is used.
 
 See [Support](/docs/support-matrix) for the current host and release-target
-matrix.
+matrix and qualified portable-tool tuples. Portable tools impose their own
+exact distribution generation, architecture, context, binding, and selection
+requirements. Generic APT capability on an image does not qualify a portable
+tool for that image; an unsupported tuple fails before tool acquisition.
