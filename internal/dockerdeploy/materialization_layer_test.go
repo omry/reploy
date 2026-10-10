@@ -111,11 +111,18 @@ func TestBuildMaterializationLayerReturnsNoIdentityOnFailure(t *testing.T) {
 	original := runMaterializationBuildCommand
 	t.Cleanup(func() { runMaterializationBuildCommand = original })
 	cause := errors.New("argument list too long")
-	runMaterializationBuildCommand = func(CommandSpec, RunOptions) error { return cause }
-	image, err := BuildMaterializationLayer(store, request, RunOptions{})
+	generatedOutput := "ERROR: failed to solve: materialization package command failed"
+	capture := NewCommandOutputCapture()
+	runMaterializationBuildCommand = func(CommandSpec, RunOptions) error {
+		return capture.Wrap(cause, generatedOutput)
+	}
+	image, err := BuildMaterializationLayer(store, request, RunOptions{Capture: capture})
 	var failure *providers.BuildErrorV1
 	if err == nil || !errors.As(err, &failure) || failure.Code != "materialization.failed" || failure.Phase != "materialize" || !errors.Is(err, cause) || strings.Contains(err.Error(), "argument list too long") {
 		t.Fatalf("error = %v", err)
+	}
+	if got := CommandOutputCaptureDiagnostic(err, capture); got != generatedOutput {
+		t.Fatalf("promoted generated diagnostic = %q, want %q", got, generatedOutput)
 	}
 	if !reflect.DeepEqual(image, MaterializationLayerCandidate{}) {
 		t.Fatalf("failed build returned image identity: %#v", image)
