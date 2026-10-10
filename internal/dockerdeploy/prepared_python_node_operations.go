@@ -442,13 +442,8 @@ func (operations PreparedPythonNodeOperations) materializeLocalOverrides(
 	if err != nil {
 		return nil, nil, err
 	}
-	projectKind := "project"
-	if len(distributions) != 1 {
-		projectKind = "projects"
-	}
 	writeProviderBuildProgress(
-		operations.Progress, "building local Python %s %s%s",
-		projectKind,
+		operations.Progress, "rebuilding Python source dependencies: %s%s",
 		strings.Join(distributions, ", "),
 		providerProgressContextSuffix([]string{providerProgressComponentContext(
 			blueprint.ComponentTypePython, component, operations.ShowApplicationContext,
