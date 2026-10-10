@@ -1,0 +1,2 @@
+kind: Changed
+body: Explicitly report when Python source dependencies are being rebuilt, including the selected package names.

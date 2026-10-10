@@ -577,7 +577,7 @@ func TestPreparedPythonNodeOperationsBuildsOnlySelectedLocalSource(t *testing.T)
 	if overrides := resolution.Bundle.Payload.Request.Value["overrides"].([]any); len(overrides) != 1 {
 		t.Fatalf("closure-relevant bundle overrides = %#v", overrides)
 	}
-	if want := "building local Python project demo-server"; !strings.Contains(progress.String(), want) {
+	if want := "rebuilding Python source dependencies: demo-server"; !strings.Contains(progress.String(), want) {
 		t.Fatalf("progress missing %q:\n%s", want, progress.String())
 	}
 	if strings.Contains(progress.String(), "app: application") {

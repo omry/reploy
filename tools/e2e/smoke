@@ -767,7 +767,7 @@ def run_smoke(
     repeated_build = run([str(reploy), "build", "--profile", "--dir", str(deploy_dir)], cwd=workdir, env=env)
     require_contains(
         completed_output(repeated_build),
-        "building local Python projects smoke-imap, smoke-suite",
+        "rebuilding Python source dependencies: smoke-imap, smoke-suite",
         "repeated explicit local-source build",
     )
     if runtime:
