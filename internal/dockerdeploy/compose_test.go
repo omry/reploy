@@ -51,6 +51,68 @@ func TestRunCommandCapturesSuppressedOutputOnFailure(t *testing.T) {
 	}
 }
 
+func TestRunCommandCommandCapturePreservesStreamedOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture requires a POSIX host")
+	}
+	var stdout, stderr strings.Builder
+	capture := NewCommandOutputCapture()
+	err := runCommand(
+		CommandSpec{Name: "sh", Args: []string{"-c", "printf streamed-stdout; printf streamed-stderr >&2; exit 1"}},
+		RunOptions{Context: t.Context(), Stdout: &stdout, Stderr: &stderr, Capture: capture},
+	)
+	if err == nil {
+		t.Fatal("err = nil, want failure")
+	}
+	if stdout.String() != "streamed-stdout" || stderr.String() != "streamed-stderr" {
+		t.Fatalf("streams stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	diagnostic := CommandOutputCaptureDiagnostic(err, capture)
+	if !strings.Contains(diagnostic, "streamed-stdout") || !strings.Contains(diagnostic, "streamed-stderr") {
+		t.Fatalf("capture diagnostic = %q", diagnostic)
+	}
+}
+
+func TestRunCommandCommandCaptureSuppressesOutputWithoutStreams(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture requires a POSIX host")
+	}
+	capture := NewCommandOutputCapture()
+	err := runCommand(
+		CommandSpec{Name: "sh", Args: []string{"-c", "printf suppressed-stdout; printf suppressed-stderr >&2; exit 1"}},
+		RunOptions{Context: t.Context(), Capture: capture},
+	)
+	if err == nil {
+		t.Fatal("err = nil, want failure")
+	}
+	diagnostic := CommandOutputCaptureDiagnostic(err, capture)
+	if !strings.Contains(diagnostic, "suppressed-stdout") || !strings.Contains(diagnostic, "suppressed-stderr") {
+		t.Fatalf("capture diagnostic = %q", diagnostic)
+	}
+}
+
+func TestRunCommandCommandCaptureCapturesUnforwardedStream(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture requires a POSIX host")
+	}
+	var stdout strings.Builder
+	capture := NewCommandOutputCapture()
+	err := runCommand(
+		CommandSpec{Name: "sh", Args: []string{"-c", "printf partial-stdout; printf partial-stderr >&2; exit 1"}},
+		RunOptions{Context: t.Context(), Stdout: &stdout, Capture: capture},
+	)
+	if err == nil {
+		t.Fatal("err = nil, want failure")
+	}
+	if stdout.String() != "partial-stdout" {
+		t.Fatalf("forwarded stdout = %q", stdout.String())
+	}
+	diagnostic := CommandOutputCaptureDiagnostic(err, capture)
+	if !strings.Contains(diagnostic, "partial-stdout") || !strings.Contains(diagnostic, "partial-stderr") {
+		t.Fatalf("capture diagnostic = %q", diagnostic)
+	}
+}
+
 func TestRunCommandSkipsDockerPreflightForNonDockerCommand(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture requires a POSIX host")

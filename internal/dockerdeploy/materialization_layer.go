@@ -67,7 +67,7 @@ type InspectedImageCandidate struct {
 	Image      providers.RealizedImageV1
 }
 
-var runMaterializationBuildCommand = runCommand
+var runMaterializationBuildCommand = runDockerBuildWithFrontendRetry
 var runMaterializationBuildReferenceDocker = runDockerOutput
 
 func BuildMaterializationLayer(store providerstore.Store, request MaterializationLayerRequest, options RunOptions) (result MaterializationLayerCandidate, resultErr error) {
@@ -149,6 +149,9 @@ func BuildMaterializationLayer(store providerstore.Store, request Materializatio
 			BaseDigest: request.Transaction.Upstream.ConfigDigest, NodeID: request.Transaction.NodeID, CauseKind: "docker.build",
 			Correction: &providers.CorrectionV1{Kind: "retry-materialization"},
 		}, err)
+		if diagnostic := CommandOutputCaptureDiagnostic(err, options.Capture); diagnostic != "" {
+			return MaterializationLayerCandidate{}, options.Capture.Wrap(failure, diagnostic)
+		}
 		return MaterializationLayerCandidate{}, failure
 	}
 	content, err := os.ReadFile(iidPath)
