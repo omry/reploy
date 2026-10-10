@@ -26,7 +26,7 @@ type ApplicationRuntimeLayerBuildRequest struct {
 }
 
 var locateApplicationRuntimeExecutable = os.Executable
-var runApplicationRuntimeBuildCommand = runCommand
+var runApplicationRuntimeBuildCommand = runDockerBuildWithFrontendRetry
 var runApplicationRuntimeBuildDocker = runDockerOutput
 
 func LoadApplicationStartupVerifierV1(platform blueprint.Platform) (deploy.ApplicationStartupVerifierV1, error) {

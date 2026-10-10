@@ -21,7 +21,7 @@ type FinalizationBuildRequest struct {
 	Platform            blueprint.Platform
 }
 
-var runFinalizationBuildCommand = runCommand
+var runFinalizationBuildCommand = runDockerBuildWithFrontendRetry
 var runFinalizationBuildReferenceDocker = runDockerOutput
 
 func FinalizationDockerfile(request FinalizationBuildRequest) ([]byte, error) {

@@ -34,6 +34,7 @@ import (
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/dockerdeploy"
 	"github.com/omry/reploy/internal/overrideui"
+	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
 )
 
@@ -821,9 +822,9 @@ func TestBuildFailureDiagnosticTranslatesProviderFailures(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			buildErr := test.err
 			if buildErr == nil {
-				buildErr = errors.New("docker failed: exit status 1")
+				buildErr = errors.New(test.output)
 			}
-			got := buildFailureDiagnostic(buildErr, test.output)
+			got := buildFailureDiagnostic(buildErr, nil)
 			if !strings.Contains(got, test.want) {
 				t.Fatalf("diagnostic = %q, want substring %q", got, test.want)
 			}
@@ -840,6 +841,133 @@ func TestBuildFailureDiagnosticTranslatesProviderFailures(t *testing.T) {
 				t.Fatalf("diagnostic lost backend output: %q", got)
 			}
 		})
+	}
+}
+
+func TestBuildFailureDiagnosticPrefersActiveFailureOverRecoveredFrontendOutput(t *testing.T) {
+	err := errors.New("inspect generated image: expected controller label was not present")
+
+	got := buildFailureDiagnostic(err, nil)
+	if !strings.Contains(got, "inspect generated image: expected controller label was not present") {
+		t.Fatalf("diagnostic = %q, want active inspection failure", got)
+	}
+	if strings.Contains(got, "failed to resolve source metadata") {
+		t.Fatalf("diagnostic reused recovered frontend output: %q", got)
+	}
+}
+
+func TestBuildFailureDiagnosticPrefersActiveErrorChainOverRecoveredFrontendOutput(t *testing.T) {
+	err := errors.New("inspect generated image: docker failed: exit status 1\ncommand output:\nERROR: write result.iid: no space left on device")
+
+	got := buildFailureDiagnostic(err, nil)
+	if !strings.Contains(got, "write result.iid: no space left on device") {
+		t.Fatalf("diagnostic = %q, want active backend diagnostic", got)
+	}
+	if strings.Contains(got, "failed to resolve source metadata") {
+		t.Fatalf("diagnostic reused recovered frontend output: %q", got)
+	}
+}
+
+func TestBuildFailureDiagnosticStopsAtSafeProviderErrorBoundary(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "hidden ERROR cause",
+			err: providers.NewBuildErrorV1(providers.BuildErrorV1{
+				Code: "python.resolve_failed", Phase: "resolve", CauseKind: "python.resolve",
+			}, errors.New("ERROR: resolver token credential=secret-value")),
+			want: "provider build failed",
+		},
+		{
+			name: "fmt wrapper around hidden command output cause",
+			err: fmt.Errorf("prepare provider node: %w", providers.NewBuildErrorV1(providers.BuildErrorV1{
+				Code: "python.resolve_failed", Phase: "resolve", CauseKind: "python.resolve",
+			}, errors.New("docker failed: exit status 1\ncommand output:\nERROR: resolver token credential=secret-value"))),
+			want: "provider build failed",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := buildFailureDiagnostic(test.err, nil)
+			if !strings.Contains(got, test.want) {
+				t.Fatalf("diagnostic = %q, want %q", got, test.want)
+			}
+			for _, hidden := range []string{"credential=secret-value", "failed to resolve source metadata"} {
+				if strings.Contains(got, hidden) {
+					t.Fatalf("diagnostic surfaced hidden or stale output %q: %q", hidden, got)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildFailureDiagnosticUsesOwnedCapturedFinalAttempt(t *testing.T) {
+	frontend := "ERROR: failed to solve: " + dockerdeploy.MaterializationDockerfileSyntax +
+		": failed to resolve source metadata for docker.io/" + dockerdeploy.MaterializationDockerfileSyntax + ": i/o timeout"
+	capture := dockerdeploy.NewCommandOutputCapture()
+	err := capture.Wrap(providers.NewBuildErrorV1(providers.BuildErrorV1{
+		Code: "materialization.failed", Phase: "materialize", CauseKind: "docker.build",
+	}, errors.New("docker failed: exit status 1")), frontend)
+
+	got := buildFailureDiagnostic(err, capture)
+	if !strings.Contains(got, "environment image construction failed: "+dockerdeploy.MaterializationDockerfileSyntax) || !strings.Contains(got, "i/o timeout") {
+		t.Fatalf("diagnostic = %q, want final frontend failure", got)
+	}
+	if strings.Contains(got, "provider build failed") || strings.Contains(got, "docker failed") {
+		t.Fatalf("diagnostic leaked safe summary or backend status: %q", got)
+	}
+}
+
+func TestBuildFailureDiagnosticUsesOwnedCapturedLaterFailure(t *testing.T) {
+	capture := dockerdeploy.NewCommandOutputCapture()
+	err := capture.Wrap(providers.NewBuildErrorV1(providers.BuildErrorV1{
+		Code: "materialization.failed", Phase: "materialize", CauseKind: "docker.build",
+	}, errors.New("docker failed: exit status 1")), "ERROR: write result.iid: no space left on device")
+
+	got := buildFailureDiagnostic(err, capture)
+	if !strings.Contains(got, "environment build failed: write result.iid: no space left on device") {
+		t.Fatalf("diagnostic = %q, want later ordinary failure", got)
+	}
+}
+
+func TestBuildFailureDiagnosticRejectsUnrelatedCaptureOwner(t *testing.T) {
+	capture := dockerdeploy.NewCommandOutputCapture()
+	otherCapture := dockerdeploy.NewCommandOutputCapture()
+	err := providers.NewBuildErrorV1(providers.BuildErrorV1{
+		Code: "python.resolve_failed", Phase: "resolve", CauseKind: "python.resolve",
+	}, otherCapture.Wrap(errors.New("docker failed: exit status 1"), "ERROR: resolver token credential=secret-value"))
+
+	got := buildFailureDiagnostic(err, capture)
+	if !strings.Contains(got, "provider build failed") || strings.Contains(got, "credential=secret-value") {
+		t.Fatalf("diagnostic crossed capture ownership boundary: %q", got)
+	}
+}
+
+func TestBuildFailureDiagnosticKeepsOwnedResolverCaptureBehindProviderBoundary(t *testing.T) {
+	capture := dockerdeploy.NewCommandOutputCapture()
+	hidden := capture.Wrap(errors.New("resolver command failed"), "ERROR: resolver credential=secret-value")
+	err := fmt.Errorf("execute provider graph: %w", providers.NewBuildErrorV1(providers.BuildErrorV1{
+		Code: "python.resolve_failed", Phase: "resolve", CauseKind: "python.resolve",
+	}, errors.Join(fmt.Errorf("resolver wrapper: %w", hidden), errors.New("resolver cleanup failed"))))
+
+	got := buildFailureDiagnostic(err, capture)
+	if !strings.Contains(got, "provider build failed") || strings.Contains(got, "credential=secret-value") {
+		t.Fatalf("diagnostic crossed provider boundary through errors.Join: %q", got)
+	}
+}
+
+func TestBuildFailureDiagnosticUsesUnknownOwnedTail(t *testing.T) {
+	capture := dockerdeploy.NewCommandOutputCapture()
+	err := capture.Wrap(providers.NewBuildErrorV1(providers.BuildErrorV1{
+		Code: "materialization.failed", Phase: "materialize", CauseKind: "docker.build",
+	}, errors.New("docker failed: exit status 1")), "\x1b[31mopaque backend detail\x1b[0m")
+
+	got := buildFailureDiagnostic(err, capture)
+	if !strings.Contains(got, "provider build failed") || !strings.Contains(got, "opaque backend detail") || strings.ContainsAny(got, "\x1b") {
+		t.Fatalf("diagnostic = %q, want safe context and sanitized owned tail", got)
 	}
 }
 
@@ -920,8 +1048,14 @@ func TestBuildCommandFailureRetainsStepWithoutRawBackendTranscript(t *testing.T)
 	writeCLITestStagedState(t, stageDir, "demo")
 	dockerProviderBuild = func(_ context.Context, input dockerdeploy.ProviderBuildRunInputV1) (dockerdeploy.LockedProviderBuildExecutionResultV1, error) {
 		fmt.Fprintln(input.Progress, "assembling environment image")
-		fmt.Fprintln(input.RunOptions.Stderr, "ERROR: failed to solve: selected base image was not found")
-		return dockerdeploy.LockedProviderBuildExecutionResultV1{}, errors.New("execute provider graph: docker failed: exit status 1")
+		activeDiagnostic := "ERROR: failed to solve: selected base image was not found"
+		fmt.Fprintln(input.RunOptions.Stderr, activeDiagnostic)
+		if input.RunOptions.Capture == nil {
+			t.Fatal("build fixture did not receive an operation-owned capture")
+		}
+		return dockerdeploy.LockedProviderBuildExecutionResultV1{}, input.RunOptions.Capture.Wrap(
+			errors.New("execute provider graph: docker failed: exit status 1"), activeDiagnostic,
+		)
 	}
 
 	code, stdout, stderr := runCLI("build", "--dir", stageDir)
@@ -2917,7 +3051,7 @@ func TestPackageOverridesOpensEditorForStagedDeployment(t *testing.T) {
 	}
 }
 
-func TestPackageOverridesValidationRequiresAuthoritativeTrialResult(t *testing.T) {
+func TestPackageOverridesValidationRequiresAuthoritativeTrialResultAndPassesCommandCapture(t *testing.T) {
 	packDir := makeCLITestPack(t)
 	deployDir := filepath.Join(t.TempDir(), "deployment")
 	code, stdout, stderr := runCLI("stage", "--dir", deployDir, "file:"+packDir)
@@ -2984,6 +3118,9 @@ func TestPackageOverridesValidationRequiresAuthoritativeTrialResult(t *testing.T
 	}
 	if !buildInput.ValidateChoices || buildInput.DeploymentDir != deployDir {
 		t.Fatalf("trial build input = %#v", buildInput)
+	}
+	if buildInput.RunOptions.Capture == nil {
+		t.Fatal("override trial build did not receive an operation-owned capture")
 	}
 	if len(result.Packages) != 1 || result.Packages[0].Package != "dependency" {
 		t.Fatalf("validation result = %#v", result)

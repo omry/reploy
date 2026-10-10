@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/omry/reploy/internal/buildprogress"
 	"github.com/omry/reploy/internal/dockerdeploy"
 	"github.com/omry/reploy/internal/overrideui"
+	"github.com/omry/reploy/internal/providers"
 )
 
 var dockerBuildWarningPattern = regexp.MustCompile(`^-\s*([A-Za-z][A-Za-z0-9]+):\s*(.+)$`)
@@ -118,13 +120,14 @@ func runDockerBuild(args []string, stdout io.Writer, stderr io.Writer, globalOpt
 
 	runtimeInput, err := dockerProviderBuildRuntime()
 	if err != nil {
-		_ = presenter.Failure("reploy build error: " + buildFailureDiagnostic(err, ""))
+		_ = presenter.Failure("reploy build error: " + buildFailureDiagnostic(err, nil))
 		return 1
 	}
 	ctx := context.Background()
 	if profile != nil {
 		ctx = buildprofile.WithRecorder(ctx, profile)
 	}
+	capture := dockerdeploy.NewCommandOutputCapture()
 	result, err := dockerProviderBuild(ctx, dockerdeploy.ProviderBuildRunInputV1{
 		DeploymentDir: options.Dir,
 		Runtime:       runtimeInput,
@@ -133,7 +136,7 @@ func runDockerBuild(args []string, stdout io.Writer, stderr io.Writer, globalOpt
 		Progress:      presenter.Progress(),
 		RunOptions: dockerdeploy.RunOptions{
 			Stdout: presenter.ChildOutput(), Stderr: presenter.ChildOutput(),
-			DockerPreflightTimeout: globalOptions.DockerTimeout,
+			DockerPreflightTimeout: globalOptions.DockerTimeout, Capture: capture,
 		},
 	})
 	childOutput := presenter.CapturedChildOutput()
@@ -141,7 +144,7 @@ func runDockerBuild(args []string, stdout io.Writer, stderr io.Writer, globalOpt
 		presenter.Warn(warning)
 	}
 	if err != nil {
-		_ = presenter.Failure("reploy build error: " + buildFailureDiagnostic(err, childOutput))
+		_ = presenter.Failure("reploy build error: " + buildFailureDiagnostic(err, capture))
 		return 1
 	}
 	if result.VerificationFailure != "" {
@@ -307,6 +310,7 @@ func interactiveBuildRunner(
 			return overrideui.ValidationResult{}, err
 		}
 		var childOutput synchronizedBuffer
+		capture := dockerdeploy.NewCommandOutputCapture()
 		build, err := dockerProviderBuild(ctx, dockerdeploy.ProviderBuildRunInputV1{
 			DeploymentDir: deploymentDir,
 			Runtime:       runtimeInput,
@@ -316,13 +320,13 @@ func interactiveBuildRunner(
 			BuildProgress: reporter,
 			RunOptions: dockerdeploy.RunOptions{
 				Stdout: &childOutput, Stderr: &childOutput,
-				DockerPreflightTimeout: globalOptions.DockerTimeout,
+				DockerPreflightTimeout: globalOptions.DockerTimeout, Capture: capture,
 			},
 		})
 		if err != nil {
 			return overrideui.ValidationResult{}, fmt.Errorf(
 				"build environment: %s",
-				buildFailureDiagnostic(err, childOutput.String()),
+				buildFailureDiagnostic(err, capture),
 			)
 		}
 		summary, err := summarizeProviderBuild(build)
@@ -442,21 +446,52 @@ func translateDockerBuildWarning(code string, message string) string {
 	}
 }
 
-func buildFailureDiagnostic(err error, childOutput string) string {
-	if diagnostic := buildOutputFailureDiagnostic(childOutput); diagnostic != "" {
-		return diagnostic
-	}
-	if diagnostic := buildOutputFailureDiagnostic(err.Error()); diagnostic != "" {
-		return diagnostic
-	}
+func buildFailureDiagnostic(err error, capture *dockerdeploy.CommandOutputCapture) string {
 	message := strings.TrimSpace(stripBuildTerminalControls(err.Error()))
-	if diagnostic := buildCommandFailureDiagnostic(message); diagnostic != "" {
-		return diagnostic
+	if output := dockerdeploy.CommandOutputCaptureDiagnostic(err, capture); output != "" {
+		if diagnostic := buildOutputFailureDiagnostic(output); diagnostic != "" {
+			return diagnostic
+		}
+		if diagnostic := buildCommandFailureDiagnostic(output); diagnostic != "" {
+			return diagnostic
+		}
+		if diagnostic := buildCapturedFailureDiagnostic(message, output); diagnostic != "" {
+			return diagnostic
+		}
+	}
+	for active := err; active != nil; active = errors.Unwrap(active) {
+		activeMessage := strings.TrimSpace(stripBuildTerminalControls(active.Error()))
+		if diagnostic := buildOutputFailureDiagnostic(activeMessage); diagnostic != "" {
+			return diagnostic
+		}
+		if diagnostic := buildCommandFailureDiagnostic(activeMessage); diagnostic != "" {
+			return diagnostic
+		}
+		var providerFailure *providers.BuildErrorV1
+		if errors.As(active, &providerFailure) {
+			break
+		}
+	}
+	if message != "" && !strings.Contains(strings.ToLower(message), "docker failed: exit status") {
+		return message
 	}
 	if strings.Contains(strings.ToLower(message), "docker failed: exit status") {
 		return "environment image construction failed; the build backend did not provide a usable diagnostic"
 	}
 	return message
+}
+
+func buildCapturedFailureDiagnostic(message string, output string) string {
+	output = strings.TrimSpace(stripBuildTerminalControls(output))
+	if output == "" {
+		return ""
+	}
+	context := strings.TrimSpace(dockerExitStatusPattern.ReplaceAllString(message, ""))
+	context = strings.TrimSuffix(context, ":")
+	if context == "" {
+		context = "environment image construction failed"
+	}
+	return context + "\ncommand output:\n" + output
 }
 
 func buildCommandFailureDiagnostic(message string) string {

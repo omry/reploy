@@ -406,6 +406,7 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 		Image: completionInput.Graph.PrefixImages[0], Catalog: completionInput.BaseCatalog,
 	}
 	localOverrides := []PythonLocalOverrideV1{{Distribution: "demo-server", HostDir: "/tmp/demo-server"}}
+	capture := NewCommandOutputCapture()
 	var sourceOwner providers.NodeID
 	for _, node := range prepared.Plan.Nodes {
 		if node.Provider == blueprint.ComponentTypePython {
@@ -431,6 +432,7 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 		SourceWheels:   []providerstore.ArtifactDescriptor{},
 		LocalOverrides: localOverrides,
 		RunValidation:  completionInput.RunValidation,
+		RunOptions:     RunOptions{Capture: capture},
 	}
 	wantState := deploy.StateV1{Schema: deploy.StateSchemaV1}
 	wantLock := deploy.BuildLockV1{Schema: deploy.BuildLockSchemaV1}
@@ -439,7 +441,8 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 		executeGraph: func(_ context.Context, got PreparedPythonGraphExecutionInput) (providers.GraphExecutionResult, error) {
 			order = append(order, "graph")
 			if !reflect.DeepEqual(got.Plan, prepared.Plan) || !reflect.DeepEqual(got.Sources, candidateRequest.Sources) ||
-				!reflect.DeepEqual(got.LocalOverrides, localOverrides) || got.SourceBuilder == nil || got.CurrentLock != nil || got.RunOptions.Context == nil {
+				!reflect.DeepEqual(got.LocalOverrides, localOverrides) || got.SourceBuilder == nil || got.CurrentLock != nil || got.RunOptions.Context == nil ||
+				effectiveCommandOutputCapture(got.RunOptions) != capture {
 				t.Fatalf("graph input = %#v", got)
 			}
 			got.SourceBuilder.latest = sourceTools
@@ -458,7 +461,8 @@ func TestExecuteLockedProviderBuildV1OrdersGraphValidationAndCompletion(t *testi
 		},
 		complete: func(_ context.Context, gotOperation *deploy.OperationLock, gotStore providerstore.Store, got ProviderBuildCompletionInput) (ProviderBuildCompletionResult, error) {
 			order = append(order, "complete")
-			if gotOperation != operation || gotStore.Root() != store.Root() || !reflect.DeepEqual(got.ResolvedRequest, completionInput.ResolvedRequest) || !reflect.DeepEqual(got.Graph, completionInput.Graph) || !reflect.DeepEqual(got.PortableTools, completionInput.PortableTools) || !reflect.DeepEqual(got.Validation, completionInput.Validation) || !got.NoCache || got.RunValidation == nil || got.RunOptions.Context == nil {
+			if gotOperation != operation || gotStore.Root() != store.Root() || !reflect.DeepEqual(got.ResolvedRequest, completionInput.ResolvedRequest) || !reflect.DeepEqual(got.Graph, completionInput.Graph) || !reflect.DeepEqual(got.PortableTools, completionInput.PortableTools) || !reflect.DeepEqual(got.Validation, completionInput.Validation) || !got.NoCache || got.RunValidation == nil || got.RunOptions.Context == nil ||
+				effectiveCommandOutputCapture(got.RunOptions) != capture {
 				t.Fatalf("completion input = %#v", got)
 			}
 			return ProviderBuildCompletionResult{State: wantState, Lock: wantLock}, nil

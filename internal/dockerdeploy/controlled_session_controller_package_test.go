@@ -223,7 +223,7 @@ func TestControlledSessionControllerPackageDockerIntegration(t *testing.T) {
 	}
 	prepared, err := buildControlledSessionControllerPackageV1(ctx, store, current, controlledSessionControllerPackageBackendV1{
 		locateExecutable: func() (string, error) { return packagedHost, nil },
-		buildCommand:     runCommand,
+		buildCommand:     runDockerBuildWithFrontendRetry,
 		docker:           runDockerOutput,
 		hostRelease:      manifest.Release,
 	})

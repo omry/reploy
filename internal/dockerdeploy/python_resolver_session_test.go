@@ -24,27 +24,28 @@ func TestPythonResolverSessionProbesAndInspectsInOneContainer(t *testing.T) {
 	descriptor := testProbeImageDescriptor(t, "linux/amd64")
 	workspace := testPreparedProbeWorkspace(t, descriptor.Platform, filepath.Join(t.TempDir(), "with,comma"))
 	artifacts := testPreparedPythonResolverArtifacts(t)
+	ctx := context.Background()
 	request, responseRecord := pythonResolverProbeExchange()
 	response := mustCanonicalProbeResponse(t, responseRecord)
 	commands, probeInput := stubPythonResolverCommands(t, response, pythonInspectionOutputV2ForTest("3.13.2", nil, nil), nil)
 
-	session, err := OpenPythonResolverSession(context.Background(), descriptor, workspace, artifacts)
+	session, err := OpenPythonResolverSession(ctx, descriptor, workspace, artifacts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.Probe(context.Background(), request); err != nil {
+	if _, err := session.Probe(ctx, request); err != nil {
 		t.Fatal(err)
 	}
 	launcher := pythonResolverSessionInput(t, session, responseRecord.Observations[0], providers.ExecutableRoleEnvironmentLauncher)
 	interpreter := pythonResolverSessionInput(t, session, responseRecord.Observations[1], providers.ExecutableRoleSelectedOutput)
-	facts, err := session.InspectInterpreter(context.Background(), launcher, interpreter, []string{})
+	facts, err := session.InspectInterpreter(ctx, launcher, interpreter, []string{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if facts.Version != "3.13.2" {
 		t.Fatalf("facts = %#v", facts)
 	}
-	if err := session.Close(context.Background()); err != nil {
+	if err := session.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
 

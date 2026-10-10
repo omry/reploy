@@ -442,10 +442,11 @@ func TestAPTResolverPlanRejectsUnsupportedMarkersAndDoesNotRetryOrLeakOutput(t *
 	}
 }
 
-func TestAPTResolverRefreshForwardsDiagnosticsAndReturnsStructuredError(t *testing.T) {
+func TestAPTResolverRefreshForwardsDiagnosticsWithoutAmbientCommandCapture(t *testing.T) {
 	descriptor := testProbeImageDescriptor(t, "linux/amd64")
 	probeWorkspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
 	resolverWorkspace := testPreparedAPTResolverWorkspace(t)
+	ctx := context.Background()
 	outputs := [][]byte{
 		[]byte("ID\x00debian\x00VERSION_ID\x0013\x00"),
 		[]byte("apt 3.0.3 (amd64)\n"), []byte("dpkg 1\n"), []byte("dpkg-deb 1\n"), []byte("dpkg-query 1\n"),
@@ -455,7 +456,7 @@ func TestAPTResolverRefreshForwardsDiagnosticsAndReturnsStructuredError(t *testi
 	var liveStdout bytes.Buffer
 	var liveStderr bytes.Buffer
 	session, err := OpenAPTResolverSession(
-		context.Background(), descriptor, probeWorkspace, resolverWorkspace,
+		ctx, descriptor, probeWorkspace, resolverWorkspace,
 		RunOptions{Stdout: &liveStdout, Stderr: &liveStderr},
 	)
 	if err != nil {
@@ -464,11 +465,14 @@ func TestAPTResolverRefreshForwardsDiagnosticsAndReturnsStructuredError(t *testi
 	if err := session.RefreshIndexes(context.Background()); err == nil || !strings.Contains(err.Error(), "requires successful base validation") {
 		t.Fatalf("pre-validation refresh err = %v", err)
 	}
-	if _, err := session.ProbeBaseProfile(context.Background()); err != nil {
+	if _, err := session.ProbeBaseProfile(ctx); err != nil {
 		t.Fatal(err)
 	}
 	prior := session.runDocker
 	session.runDocker = func(spec CommandSpec, options RunOptions) error {
+		if effectiveCommandOutputCapture(options) != nil {
+			t.Fatalf("APT resolver command capture = %p, want nil", effectiveCommandOutputCapture(options))
+		}
 		commandsValue := *commands
 		commandsValue = append(commandsValue, spec)
 		*commands = commandsValue
@@ -477,7 +481,7 @@ func TestAPTResolverRefreshForwardsDiagnosticsAndReturnsStructuredError(t *testi
 		return errors.New("exit status 100: user:secret")
 	}
 	t.Cleanup(func() { session.runDocker = prior })
-	err = session.RefreshIndexes(context.Background())
+	err = session.RefreshIndexes(ctx)
 	if err == nil || !strings.Contains(err.Error(), "apt.resolve.update") || !strings.Contains(err.Error(), "apt.update_failed") || !strings.Contains(err.Error(), "select or rebuild a base image") || strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "example.invalid") {
 		t.Fatalf("refresh err = %v", err)
 	}
@@ -489,12 +493,12 @@ func TestAPTResolverRefreshForwardsDiagnosticsAndReturnsStructuredError(t *testi
 		t.Fatalf("live output was not forwarded: stdout=%q stderr=%q", liveStdout.String(), liveStderr.String())
 	}
 	commandCount := len(*commands)
-	err = session.RefreshIndexes(context.Background())
+	err = session.RefreshIndexes(ctx)
 	if err == nil || !strings.Contains(err.Error(), "already failed") || len(*commands) != commandCount {
 		t.Fatalf("retry err = %v, commands = %d", err, len(*commands))
 	}
 	session.runDocker = prior
-	if err := session.Close(context.Background()); err != nil {
+	if err := session.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
 }
