@@ -1,0 +1,2 @@
+kind: Fixed
+body: Retry recognized transient failures fetching the pinned BuildKit Dockerfile frontend during generated builds, with bounded cancellable backoff, concise progress and retained failure diagnostics.

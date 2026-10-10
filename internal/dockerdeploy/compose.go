@@ -16,6 +16,7 @@ import (
 
 	"github.com/omry/reploy/internal/buildprofile"
 	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/providers"
 )
 
 type CommandSpec struct {
@@ -33,6 +34,89 @@ type RunOptions struct {
 	Progress               io.Writer
 	DockerPreflightTimeout time.Duration
 	NoCache                bool
+	Capture                *CommandOutputCapture
+}
+
+// CommandOutputCapture identifies one build invocation's explicit diagnostic
+// channel. Its non-zero-sized token makes each operation's owner distinct.
+type CommandOutputCapture struct {
+	token byte
+}
+
+func effectiveCommandOutputCapture(options RunOptions) *CommandOutputCapture {
+	return options.Capture
+}
+
+// NewCommandOutputCapture creates an operation-owned diagnostic channel.
+func NewCommandOutputCapture() *CommandOutputCapture {
+	return &CommandOutputCapture{token: 1}
+}
+
+type commandOutputCaptureError struct {
+	cause  error
+	owner  *CommandOutputCapture
+	output string
+}
+
+func (err *commandOutputCaptureError) Error() string {
+	if err == nil || err.cause == nil {
+		return ""
+	}
+	return err.cause.Error()
+}
+
+func (err *commandOutputCaptureError) Unwrap() error {
+	if err == nil {
+		return nil
+	}
+	return err.cause
+}
+
+// Wrap attaches bounded live output to an error without changing its rendered
+// message or its errors.Is/errors.As behavior.
+func (capture *CommandOutputCapture) Wrap(err error, output string) error {
+	if capture == nil || err == nil {
+		return err
+	}
+	output = trimmedCommandOutput(output)
+	if output == "" {
+		return err
+	}
+	return &commandOutputCaptureError{cause: err, owner: capture, output: output}
+}
+
+// CommandOutputCaptureDiagnostic returns only output owned by capture in the
+// returned error chain. Structured provider errors remain a trust boundary;
+// their arbitrary hidden causes are never inspected for this diagnostic.
+func CommandOutputCaptureDiagnostic(err error, capture *CommandOutputCapture) string {
+	if err == nil || capture == nil {
+		return ""
+	}
+	var visit func(error) string
+	visit = func(active error) string {
+		if active == nil {
+			return ""
+		}
+		switch typed := active.(type) {
+		case *commandOutputCaptureError:
+			if typed.owner == capture {
+				return typed.output
+			}
+			return ""
+		case *providers.BuildErrorV1:
+			return ""
+		}
+		if joined, ok := active.(interface{ Unwrap() []error }); ok {
+			for _, cause := range joined.Unwrap() {
+				if diagnostic := visit(cause); diagnostic != "" {
+					return diagnostic
+				}
+			}
+			return ""
+		}
+		return visit(errors.Unwrap(active))
+	}
+	return visit(err)
 }
 
 const commandOutputErrorLimit = 4000
@@ -123,19 +207,50 @@ func runCommandWithoutDockerPreflight(spec CommandSpec, options RunOptions) (res
 		command.Env = append(os.Environ(), spec.Env...)
 	}
 	command.Stdin = options.Stdin
+	capture := effectiveCommandOutputCapture(options)
 	var capturedOutput bytes.Buffer
+	var capturedStdout, capturedStderr bytes.Buffer
+	var diagnosticTail dockerBuildOutputTail
+	stdout, stderr := options.Stdout, options.Stderr
+	if capture != nil {
+		if stdout != nil {
+			stdout = io.MultiWriter(stdout, &diagnosticTail)
+		} else {
+			stdout = &diagnosticTail
+		}
+		if stderr != nil {
+			stderr = io.MultiWriter(stderr, &diagnosticTail)
+		} else {
+			stderr = &diagnosticTail
+		}
+	}
 	if options.Stdout == nil && options.Stderr == nil {
-		command.Stdout = &capturedOutput
-		command.Stderr = &capturedOutput
+		if capture == nil {
+			command.Stdout = &capturedOutput
+			command.Stderr = &capturedOutput
+		} else {
+			command.Stdout = io.MultiWriter(&capturedStdout, &diagnosticTail)
+			command.Stderr = io.MultiWriter(&capturedStderr, &diagnosticTail)
+		}
 	} else {
-		command.Stdout = options.Stdout
-		command.Stderr = options.Stderr
+		command.Stdout = stdout
+		command.Stderr = stderr
 	}
 	if err := command.Run(); err != nil {
-		if output := trimmedCommandOutput(capturedOutput.String()); output != "" {
-			return fmt.Errorf("%s failed: %w\ncommand output:\n%s", spec.Name, err, output)
+		var result error
+		output := capturedOutput.String()
+		if capture != nil {
+			output = capturedStdout.String() + capturedStderr.String()
 		}
-		return fmt.Errorf("%s failed: %w", spec.Name, err)
+		if output := trimmedCommandOutput(output); output != "" {
+			result = fmt.Errorf("%s failed: %w\ncommand output:\n%s", spec.Name, err, output)
+		} else {
+			result = fmt.Errorf("%s failed: %w", spec.Name, err)
+		}
+		if capture != nil {
+			return capture.Wrap(result, diagnosticTail.String())
+		}
+		return result
 	}
 	return nil
 }

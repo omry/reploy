@@ -800,17 +800,18 @@ func packageOverrideEditorConfig(
 				return overrideui.ValidationResult{}, err
 			}
 			var childOutput synchronizedBuffer
+			capture := dockerdeploy.NewCommandOutputCapture()
 			_, err = dockerProviderBuild(ctx, dockerdeploy.ProviderBuildRunInputV1{
 				DeploymentDir: deploymentDir, Runtime: runtime, ValidateChoices: true,
 				NoCache: noCache, Progress: progress,
 				RunOptions: dockerdeploy.RunOptions{
 					Stdout: &childOutput, Stderr: &childOutput,
-					DockerPreflightTimeout: globalOptions.DockerTimeout,
+					DockerPreflightTimeout: globalOptions.DockerTimeout, Capture: capture,
 				},
 			})
 			if err != nil {
 				return overrideui.ValidationResult{}, errors.New(
-					buildFailureDiagnostic(err, childOutput.String()),
+					buildFailureDiagnostic(err, capture),
 				)
 			}
 			status, err := inspectStagedOverrideValidation(ctx, deploymentDir)

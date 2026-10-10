@@ -175,7 +175,11 @@ func runCurrentControlledSessionV1(
 			return result, fmt.Errorf("plan controlled session does not yet support private environment injection for the %s", runtime.role)
 		}
 	}
-	preparedController, err := backend.prepareController(ctx, controllerDir, controller.current)
+	prepareControllerContext := ctx
+	if input.Notice != nil {
+		prepareControllerContext = context.WithValue(ctx, dockerPullProgressContextKey{}, input.Notice)
+	}
+	preparedController, err := backend.prepareController(prepareControllerContext, controllerDir, controller.current)
 	if err != nil {
 		return result, fmt.Errorf("prepare controlled-session controller package: %w", err)
 	}

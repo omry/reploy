@@ -65,7 +65,7 @@ func prepareControlledSessionControllerPackageV1(
 	}
 	return buildControlledSessionControllerPackageV1(ctx, store, current, controlledSessionControllerPackageBackendV1{
 		locateExecutable: locateControlledSessionControllerExecutableV1,
-		buildCommand:     runCommand,
+		buildCommand:     runDockerBuildWithFrontendRetry,
 		docker:           runDockerOutput,
 		hostRelease:      currentControllerReleaseV1(),
 	})

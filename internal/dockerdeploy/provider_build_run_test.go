@@ -19,6 +19,32 @@ import (
 	"github.com/omry/reploy/internal/providerstore"
 )
 
+func TestRunProviderBuildV1DoesNotPropagateCommandCaptureContext(t *testing.T) {
+	dir := t.TempDir()
+	capture := NewCommandOutputCapture()
+	backendError := errors.New("stop before provider build state")
+	var gotCapture *CommandOutputCapture
+
+	_, err := runProviderBuildV1(t.Context(), ProviderBuildRunInputV1{
+		DeploymentDir: dir,
+		RunOptions:    RunOptions{Capture: capture},
+	}, providerBuildRunBackend{
+		acquire: func(ctx context.Context, _ string) (*deploy.OperationLock, error) {
+			gotCapture = effectiveCommandOutputCapture(RunOptions{Context: ctx})
+			return nil, backendError
+		},
+		newStore: providerstore.NewStore,
+		prepare:  PrepareLockedProviderBuildV1,
+		execute:  ExecuteLockedProviderBuildV1,
+	})
+	if !errors.Is(err, backendError) {
+		t.Fatalf("error = %v, want %v", err, backendError)
+	}
+	if gotCapture != nil {
+		t.Fatalf("acquire capture = %p, want nil", gotCapture)
+	}
+}
+
 func TestRunProviderBuildV1HoldsOneLockAcrossPreparationAndExecution(t *testing.T) {
 	dir, document := stageProviderBuildRunState(t, false)
 	baseOverride := "sha256:" + strings.Repeat("a", 64)

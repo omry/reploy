@@ -1,8 +1,10 @@
 package dockerdeploy
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path"
@@ -53,6 +55,7 @@ func TestRunCurrentControlledSessionV1AdmitsExactPairAndDelegatesSupervisor(t *t
 	published := false
 	controllerPrepared := false
 	controllerCleaned := false
+	var notice bytes.Buffer
 	options := testControlledSessionRunOptionsV1()
 	backend := currentControlledSessionRunBackendV1{
 		acquire: func(ctx context.Context, dir string) (*deploy.OperationLock, error) {
@@ -83,6 +86,27 @@ func TestRunCurrentControlledSessionV1AdmitsExactPairAndDelegatesSupervisor(t *t
 		prepareController: func(ctx context.Context, dir string, current CurrentBuild) (*preparedControlledSessionControllerV1, error) {
 			if ctx == nil || dir != controllerDir || !reflect.DeepEqual(current, fixture.ControllerCurrent) {
 				t.Fatalf("controller preparation = dir %q current %#v", dir, current)
+			}
+			if got, _ := ctx.Value(dockerPullProgressContextKey{}).(io.Writer); got != &notice {
+				t.Fatalf("controller preparation notice = %T %v, want %p", got, got, &notice)
+			}
+			calls := 0
+			if err := runDockerBuildWithFrontendRetryDelay(
+				CommandSpec{}, RunOptions{Context: ctx},
+				func(_ CommandSpec, options RunOptions) error {
+					calls++
+					fmt.Fprintln(options.Stderr, frontendFetchFailure("i/o timeout"))
+					if calls == 1 {
+						return errors.New("controller frontend fetch failed")
+					}
+					return nil
+				},
+				func(context.Context, time.Duration) error { return nil },
+			); err != nil || calls != 2 {
+				t.Fatalf("controller package frontend retry calls=%d err=%v", calls, err)
+			}
+			if !strings.Contains(notice.String(), "retrying Dockerfile frontend fetch") || !strings.Contains(notice.String(), "fetch recovered") {
+				t.Fatalf("controller package frontend progress = %q", notice.String())
 			}
 			controllerPrepared = true
 			return preparedControlledSessionControllerForTestV1(ctx, dir, current)
@@ -204,6 +228,7 @@ func TestRunCurrentControlledSessionV1AdmitsExactPairAndDelegatesSupervisor(t *t
 		InitialColumns:          100,
 		InitialRows:             28,
 		SupervisorOptions:       options,
+		Notice:                  &notice,
 	}, backend)
 	if err != nil {
 		t.Fatal(err)
