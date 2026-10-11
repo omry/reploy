@@ -1,0 +1,1317 @@
+#!/usr/bin/env python3
+"""Run the private multi-identity Podman conformance probe.
+
+This harness deliberately operates below Reploy's public blueprint surface. It
+creates only uniquely named disposable Podman resources, captures evidence,
+and removes those exact resources in a finally block.
+"""
+
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import datetime as dt
+import getpass
+import grp
+import hashlib
+import json
+import os
+import pathlib
+import pwd
+import secrets
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from typing import Any, Callable, Iterable
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[3]
+HERE = pathlib.Path(__file__).resolve().parent
+PROBE_PACKAGE = "./tools/conformance/multiidentity/probe"
+SUPERVISOR_UID = 100
+SUPERVISOR_GID = 100
+DECLARED_UID = 1001
+DECLARED_GID = 2001
+DECLARED_GROUPS = (3001, 3002)
+RUNTIME_GID = 5
+EXPECTED_SUPERVISOR_CAPS = 0x1C0  # SETGID, SETUID, SETPCAP
+OWNER_LABEL = "reploy.multiidentity.attempt"
+BOUNDED_ID_COUNT = 4096
+
+
+class ConformanceError(RuntimeError):
+    pass
+
+
+@dataclasses.dataclass
+class Runner:
+    output: pathlib.Path
+    commands: list[str] = dataclasses.field(default_factory=list)
+
+    def run(
+        self,
+        argv: Iterable[str | os.PathLike[str]],
+        *,
+        check: bool = True,
+        env: dict[str, str] | None = None,
+        timeout: float = 120,
+    ) -> subprocess.CompletedProcess[str]:
+        args = [os.fspath(value) for value in argv]
+        self.commands.append(shlex.join(args))
+        result = subprocess.run(
+            args,
+            cwd=ROOT,
+            env={**os.environ, **(env or {})},
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+        )
+        if check and result.returncode != 0:
+            raise ConformanceError(
+                f"command failed ({result.returncode}): {shlex.join(args)}\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        return result
+
+    def json(self, argv: Iterable[str | os.PathLike[str]], **kwargs: Any) -> Any:
+        result = self.run(argv, **kwargs)
+        try:
+            return json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise ConformanceError(
+                f"invalid JSON from {self.commands[-1]}: {result.stdout!r}"
+            ) from exc
+
+    def save_commands(self) -> None:
+        (self.output / "commands.txt").write_text(
+            "\n".join(self.commands) + "\n", encoding="utf-8"
+        )
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--output-dir",
+        type=pathlib.Path,
+        default=None,
+        help="evidence directory (default: a new directory under /tmp)",
+    )
+    parser.add_argument("--iterations", type=int, default=3)
+    parser.add_argument(
+        "--profiles",
+        default="exact,bounded",
+        help="comma-separated subset of exact,bounded",
+    )
+    return parser.parse_args()
+
+
+def sha256_file(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def source_hash() -> str:
+    digest = hashlib.sha256()
+    paths = [
+        HERE / "conformance.py",
+        HERE / "Containerfile",
+        HERE / "posix_ipc.c",
+        HERE / "probe" / "main.go",
+    ]
+    for path in paths:
+        digest.update(path.relative_to(ROOT).as_posix().encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def write_json(path: pathlib.Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def inventory(runner: Runner, runtime: str) -> dict[str, list[str]]:
+    if runtime == "podman":
+        commands = {
+            "containers": ["podman", "ps", "-aq"],
+            "images": ["podman", "images", "-aq"],
+            "volumes": ["podman", "volume", "ls", "-q"],
+            "networks": ["podman", "network", "ls", "-q"],
+        }
+    else:
+        commands = {
+            "containers": ["docker", "ps", "-aq"],
+            "images": ["docker", "images", "-q", "--no-trunc"],
+            "volumes": ["docker", "volume", "ls", "-q"],
+            "networks": ["docker", "network", "ls", "-q"],
+        }
+    return {
+        name: sorted(filter(None, runner.run(command).stdout.splitlines()))
+        for name, command in commands.items()
+    }
+
+
+def docker_negative(runner: Runner) -> dict[str, Any]:
+    before = inventory(runner, "docker")
+    info = runner.json(["docker", "info", "--format", "{{json .}}"])
+    version = runner.json(["docker", "version", "--format", "{{json .Server}}"])
+    components = json.dumps(version.get("Components", []))
+    is_podman = "Podman" in components or "podman" in str(info.get("Name", "")).lower()
+    if is_podman:
+        raise ConformanceError("default Docker endpoint unexpectedly identifies as Podman")
+    # The backend gate rejects here. No mapping request or mutation command is sent.
+    after = inventory(runner, "docker")
+    if before != after:
+        raise ConformanceError("Docker inventory changed during pre-mutation rejection")
+    return {
+        "pass": True,
+        "decision": "rejected_before_mutation",
+        "reason": "server is Docker Engine, not Podman",
+        "server": {
+            "name": info.get("Name"),
+            "operating_system": info.get("OperatingSystem"),
+            "server_version": info.get("ServerVersion"),
+            "components": version.get("Components"),
+        },
+        "before": before,
+        "after": after,
+        "mapping_request_sent": False,
+    }
+
+
+def current_head(runner: Runner) -> str:
+    return runner.run(
+        ["sl", "log", "-r", ".", "-T", "{node}"], env={"CHGDISABLE": "1"}
+    ).stdout.strip()
+
+
+def require_enumerable_subid_backend() -> list[str]:
+    nsswitch = pathlib.Path("/etc/nsswitch.conf")
+    if not nsswitch.is_file():
+        raise ConformanceError("cannot establish the subordinate-ID backend without /etc/nsswitch.conf")
+    for raw_line in nsswitch.read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        database, separator, value = line.partition(":")
+        if separator and database.strip() == "subid":
+            sources = value.split()
+            if sources != ["files"]:
+                raise ConformanceError(
+                    "cannot enumerate every subordinate-ID delegation from "
+                    f"the configured subid sources: {sources}"
+                )
+            return sources
+    # libsubid defaults to the files backend when nsswitch.conf has no subid entry.
+    return ["files"]
+
+
+def effective_caller() -> tuple[int, str, set[str]]:
+    """Return the effective UID's canonical account and accepted aliases.
+
+    ``getpass.getuser`` may be selected from process environment variables.
+    It is useful as a consistency check, but it is never an authority source.
+    """
+    uid = os.getuid()
+    effective_uid = os.geteuid()
+    if uid != effective_uid:
+        raise ConformanceError(
+            f"rootless caller requires matching real/effective UIDs: {uid} != {effective_uid}"
+        )
+    try:
+        canonical = pwd.getpwuid(effective_uid).pw_name
+    except KeyError as exc:
+        raise ConformanceError(f"no passwd account for effective UID {uid}") from exc
+    reported = getpass.getuser()
+    if reported != canonical:
+        raise ConformanceError(
+            f"login identity {reported!r} disagrees with passwd account "
+            f"{canonical!r} for effective UID {uid}"
+        )
+    return uid, canonical, {canonical, str(uid)}
+
+
+def host_context(runner: Runner) -> dict[str, Any]:
+    podman_version = runner.json(["podman", "version", "--format", "json"])
+    podman_info = runner.json(["podman", "info", "--format", "json"])
+    security = podman_info.get("host", {}).get("security", {})
+    if not security.get("rootless"):
+        raise ConformanceError("the selected Podman engine is not rootless")
+    if not security.get("seccompEnabled"):
+        raise ConformanceError("the selected Podman engine has no seccomp support")
+    seccomp_path = pathlib.Path(str(security.get("seccompProfilePath", "")))
+    if not seccomp_path.is_file():
+        raise ConformanceError(f"Podman seccomp profile is missing: {seccomp_path}")
+    subid_sources = require_enumerable_subid_backend()
+    _, username, _ = effective_caller()
+    subuid = pathlib.Path("/etc/subuid").read_text(encoding="utf-8")
+    subgid = pathlib.Path("/etc/subgid").read_text(encoding="utf-8")
+    uname = os.uname()
+    return {
+        "reploy_head_before_evidence": current_head(runner),
+        "probe_source_sha256": source_hash(),
+        "host": {
+            "uname": dict(
+                zip(
+                    ("sysname", "nodename", "release", "version", "machine"),
+                    uname,
+                    strict=True,
+                )
+            ),
+            "uid": os.getuid(),
+            "gid": os.getgid(),
+            "username": username,
+            "subuid": subuid.splitlines(),
+            "subgid": subgid.splitlines(),
+            "subid_sources": subid_sources,
+        },
+        "podman_version": podman_version,
+        "podman_host": podman_info.get("host"),
+        "podman_store": podman_info.get("store"),
+        "seccomp_profile": {
+            "path": str(seccomp_path),
+            "sha256": sha256_file(seccomp_path),
+        },
+        "runtime_required_identities": [
+            {
+                "kind": "gid",
+                "container_id": RUNTIME_GID,
+                "reason": "the rootless OCI devpts mount requires container GID 5",
+            }
+        ],
+        "supervisor_allowlist": ["CAP_SETGID", "CAP_SETUID", "CAP_SETPCAP"],
+        "supervisor_setpcap_reason": (
+            "the trusted launcher needs CAP_SETPCAP to empty each child bounding set; "
+            "the container bounding set contains no other capability"
+        ),
+    }
+
+
+def build_image(runner: Runner, output: pathlib.Path, tag: str, token: str) -> dict[str, Any]:
+    staging = output / "build-context"
+    staging.mkdir()
+    probe = staging / "probe"
+    posix_ipc_probe = staging / "posix-ipc-probe"
+    env = {"CGO_ENABLED": "0"}
+    runner.run(
+        [
+            "go", "build", "-trimpath", "-buildvcs=false",
+            "-o", probe, PROBE_PACKAGE,
+        ],
+        env=env,
+    )
+    runner.run(
+        [
+            "cc", "-O2", "-static", "-pthread",
+            "-o", posix_ipc_probe, HERE / "posix_ipc.c",
+        ]
+    )
+    shutil.copy2(HERE / "Containerfile", staging / "Containerfile")
+    build = runner.run(
+        [
+            # Keep the disposable fixture atomic at the image-store boundary:
+            # a failed RUN must not leave unlabelled intermediate cache images
+            # or a retained build container outside attempt-owned cleanup.
+            "podman", "build", "--network=none", "--pull=never",
+            "--layers=false", "--force-rm=true",
+            "--label", f"{OWNER_LABEL}={token}",
+            "--file", staging / "Containerfile", "--tag", tag, staging,
+        ],
+        timeout=300,
+    )
+    inspect = runner.json(["podman", "image", "inspect", tag])
+    write_json(output / "image-inspect.json", inspect)
+    (output / "image-build.stdout").write_text(build.stdout, encoding="utf-8")
+    (output / "image-build.stderr").write_text(build.stderr, encoding="utf-8")
+    return {"tag": tag, "probe_sha256": sha256_file(probe), "inspect": inspect}
+
+
+def exact_map_args(slot: int) -> list[str]:
+    base = 1 + slot * 20
+    args: list[str] = []
+    for container_id, intermediate_id, count in (
+        (0, base, 1),
+        (SUPERVISOR_UID, base + 1, 1),
+        (DECLARED_UID, base + 2, 1),
+    ):
+        args.extend(["--uidmap", f"{container_id}:{intermediate_id}:{count}"])
+    for container_id, intermediate_id, count in (
+        (0, base, 1),
+        (RUNTIME_GID, base + 1, 1),
+        (SUPERVISOR_GID, base + 2, 1),
+        (DECLARED_GID, base + 3, 1),
+        (DECLARED_GROUPS[0], base + 4, 2),
+    ):
+        args.extend(["--gidmap", f"{container_id}:{intermediate_id}:{count}"])
+    return args
+
+
+def mapping_args(profile: str, slot: int) -> list[str]:
+    if profile == "exact":
+        return exact_map_args(slot)
+    return ["--userns", "auto:size=4096"]
+
+
+def common_run_args(
+    name: str,
+    seccomp_path: str,
+    profile: str,
+    slot: int,
+    *,
+    volume: str | None = None,
+    capabilities: bool = True,
+    seccomp_override: str | None = None,
+) -> list[str]:
+    args = [
+        "podman", "run", "--name", name,
+        *mapping_args(profile, slot),
+        "--network", "none", "--ipc", "private", "--pid", "private",
+        "--uts", "private", "--read-only",
+        "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=16m",
+        "--tmpfs", "/run:rw,noexec,nosuid,nodev,size=4m,mode=1777",
+        "--pids-limit", "128", "--memory", "128m", "--cpus", "0.5",
+        "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges",
+        "--security-opt", f"seccomp={seccomp_override or seccomp_path}",
+        "--user", "0:0",
+    ]
+    if capabilities:
+        for cap in ("SETGID", "SETUID", "SETPCAP"):
+            args.extend(["--cap-add", cap])
+    if volume:
+        args.extend(["--mount", f"type=volume,src={volume},dst=/probe-state"])
+    return args
+
+
+def inspect_container(runner: Runner, name: str) -> dict[str, Any]:
+    value = runner.json(["podman", "inspect", name])
+    if not isinstance(value, list) or len(value) != 1:
+        raise ConformanceError(f"unexpected inspect response for {name}")
+    return value[0]
+
+
+def request_action(runner: Runner, container: str, action: str, **values: Any) -> dict[str, Any]:
+    args = [
+        "podman", "exec", "--user", f"{SUPERVISOR_UID}:{SUPERVISOR_GID}",
+        container, "/probe", "request", action,
+    ]
+    args.extend(f"{key}={value}" for key, value in values.items())
+    outer = runner.json(args)
+    if not outer.get("pass") or outer.get("error"):
+        raise ConformanceError(f"supervisor request {action} failed: {outer}")
+    data = outer.get("data")
+    if not isinstance(data, dict):
+        raise ConformanceError(f"supervisor request {action} returned no object: {outer}")
+    return {"response": outer, "data": data}
+
+
+def wait_ready(runner: Runner, container: str) -> dict[str, Any]:
+    last = ""
+    for _ in range(100):
+        result = runner.run(
+            [
+                "podman", "exec", "--user", f"{SUPERVISOR_UID}:{SUPERVISOR_GID}",
+                container, "/probe", "request", "ready",
+            ],
+            check=False,
+            timeout=5,
+        )
+        last = result.stderr or result.stdout
+        if result.returncode == 0:
+            value = json.loads(result.stdout)
+            if value.get("pass"):
+                return value
+        time.sleep(0.05)
+    logs = runner.run(["podman", "logs", container], check=False, timeout=5)
+    inspect = runner.run(["podman", "inspect", container], check=False, timeout=5)
+    raise ConformanceError(
+        f"supervisor {container} did not become ready: {last}\n"
+        f"logs:\n{logs.stdout}{logs.stderr}\ninspect:\n{inspect.stdout}{inspect.stderr}"
+    )
+
+
+def read_proc(pid: int, name: str) -> str:
+    return pathlib.Path(f"/proc/{pid}/{name}").read_text(encoding="utf-8")
+
+
+def parse_id_map(text: str) -> list[tuple[int, int, int]]:
+    return [tuple(map(int, line.split())) for line in text.splitlines() if line.strip()]
+
+
+def mapped_host_ids(mapping: list[tuple[int, int, int]]) -> set[int]:
+    result: set[int] = set()
+    for _, host_start, count in mapping:
+        result.update(range(host_start, host_start + count))
+    return result
+
+
+def mapped_container_ids(mapping: list[tuple[int, int, int]]) -> set[int]:
+    result: set[int] = set()
+    for container_start, _, count in mapping:
+        result.update(range(container_start, container_start + count))
+    return result
+
+
+def assert_bounded_mapping_geometry(
+    mapping: list[tuple[int, int, int]],
+    *,
+    kind: str,
+    workload: int,
+) -> dict[str, int | list[int]]:
+    """Require the bounded map to be one ordered, contiguous affine range.
+
+    The kernel exposes mappings as ordered segments.  Set equality alone would
+    accept reordered or fragmented segments, so validate both the segment
+    sequence and its translation before any payload can be released.
+    """
+    next_container = 0
+    next_host: int | None = None
+    offset: int | None = None
+    for index, (container_start, host_start, count) in enumerate(mapping):
+        prefix = f"workload {workload} bounded {kind} mapping geometry"
+        if count <= 0:
+            raise ConformanceError(
+                f"{prefix} segment {index} has non-positive length: {count}"
+            )
+        if container_start != next_container:
+            raise ConformanceError(
+                f"{prefix} has a gap, overlap, or reordered segment at index {index}"
+            )
+        if next_host is not None and host_start != next_host:
+            raise ConformanceError(
+                f"{prefix} host range is not contiguous at segment {index}"
+            )
+        segment_offset = host_start - container_start
+        if offset is None:
+            offset = segment_offset
+        elif segment_offset != offset:
+            raise ConformanceError(
+                f"{prefix} changes affine offset at segment {index}"
+            )
+        next_container += count
+        next_host = host_start + count
+
+    if next_container != BOUNDED_ID_COUNT:
+        raise ConformanceError(
+            f"workload {workload} bounded {kind} mapping geometry covers "
+            f"{next_container} IDs, expected {BOUNDED_ID_COUNT}"
+        )
+    if next_host is None or offset is None:
+        raise ConformanceError(
+            f"workload {workload} bounded {kind} mapping geometry is empty"
+        )
+    return {
+        "container_start": 0,
+        "container_end": BOUNDED_ID_COUNT - 1,
+        "host_start": next_host - BOUNDED_ID_COUNT,
+        "host_end": next_host - 1,
+        "offset": offset,
+        "segments": len(mapping),
+    }
+
+
+def assert_mapping_profile(
+    profile: str,
+    uid_maps: list[list[tuple[int, int, int]]],
+    gid_maps: list[list[tuple[int, int, int]]],
+) -> dict[str, Any]:
+    expected_uids = (
+        {0, SUPERVISOR_UID, DECLARED_UID}
+        if profile == "exact"
+        else set(range(BOUNDED_ID_COUNT))
+    )
+    expected_gids = (
+        {0, RUNTIME_GID, SUPERVISOR_GID, DECLARED_GID, *DECLARED_GROUPS}
+        if profile == "exact"
+        else set(range(BOUNDED_ID_COUNT))
+    )
+    if profile == "bounded":
+        for index, uid_map in enumerate(uid_maps):
+            assert_bounded_mapping_geometry(uid_map, kind="UID", workload=index)
+        for index, gid_map in enumerate(gid_maps):
+            assert_bounded_mapping_geometry(gid_map, kind="GID", workload=index)
+    actual_uids = [mapped_container_ids(mapping) for mapping in uid_maps]
+    actual_gids = [mapped_container_ids(mapping) for mapping in gid_maps]
+    for index, values in enumerate(actual_uids):
+        if values != expected_uids:
+            raise ConformanceError(
+                f"workload {index} has unexpected {profile} UID geometry"
+            )
+    for index, values in enumerate(actual_gids):
+        if values != expected_gids:
+            raise ConformanceError(
+                f"workload {index} has unexpected {profile} GID geometry"
+            )
+    return {
+        "pass": True,
+        "profile": profile,
+        "container_uids": sorted(expected_uids),
+        "container_gids": sorted(expected_gids),
+    }
+
+
+def parse_subids(path: pathlib.Path) -> list[tuple[str, int, int]]:
+    values = []
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line.strip():
+            continue
+        name, start, count = line.split(":", 2)
+        values.append((name, int(start), int(count)))
+    return values
+
+
+def owned_subid_ranges(
+    entries: list[tuple[str, int, int]],
+    caller_names: set[str],
+) -> list[tuple[int, int]]:
+    return [
+        (start, count)
+        for name, start, count in entries
+        if name in caller_names
+    ]
+
+
+def query_subids(
+    runner: Runner,
+    username: str,
+    caller_names: set[str],
+    *,
+    gids: bool,
+) -> list[tuple[int, int]]:
+    executable = shutil.which("getsubids")
+    if executable is None:
+        raise ConformanceError("getsubids is required to verify the active libsubid delegation")
+    command = [executable]
+    if gids:
+        command.append("-g")
+    command.append(username)
+    ranges: list[tuple[int, int]] = []
+    for line in runner.run(command).stdout.splitlines():
+        fields = line.split()
+        if (
+            len(fields) != 4
+            or not fields[0].endswith(":")
+            or fields[1] not in caller_names
+        ):
+            raise ConformanceError(f"unexpected getsubids output: {line!r}")
+        ranges.append((int(fields[2]), int(fields[3])))
+    if not ranges:
+        kind = "GID" if gids else "UID"
+        raise ConformanceError(f"getsubids reported no subordinate {kind} ranges for {username}")
+    return ranges
+
+
+def resolved_principals(values: set[int], *, gids: bool) -> dict[int, str]:
+    collisions: dict[int, str] = {}
+    lookup = grp.getgrgid if gids else pwd.getpwuid
+    for value in values:
+        try:
+            entry = lookup(value)
+        except KeyError:
+            continue
+        collisions[value] = entry.gr_name if gids else entry.pw_name
+    return collisions
+
+
+def validate_host_authority(
+    uid_maps: list[list[tuple[int, int, int]]],
+    gid_maps: list[list[tuple[int, int, int]]],
+    *,
+    caller_names: set[str],
+    uid_ranges: list[tuple[str, int, int]],
+    gid_ranges: list[tuple[str, int, int]],
+    own_uids: list[tuple[int, int]],
+    own_gids: list[tuple[int, int]],
+    resolve_uids: Callable[[set[int]], dict[int, str]],
+    resolve_gids: Callable[[set[int]], dict[int, str]],
+) -> dict[str, Any]:
+    def contained(value: int, ranges: list[tuple[int, int]]) -> bool:
+        return any(start <= value < start + count for start, count in ranges)
+
+    uid_sets = [mapped_host_ids(mapping) for mapping in uid_maps]
+    gid_sets = [mapped_host_ids(mapping) for mapping in gid_maps]
+    for values in uid_sets:
+        if not all(contained(value, own_uids) for value in values):
+            raise ConformanceError(f"UID mapping escaped caller subordinate ranges: {values}")
+        collisions = resolve_uids(values)
+        if collisions:
+            raise ConformanceError(f"UID mapping aliases NSS principals: {collisions}")
+    for values in gid_sets:
+        if not all(contained(value, own_gids) for value in values):
+            raise ConformanceError(f"GID mapping escaped caller subordinate ranges: {values}")
+        collisions = resolve_gids(values)
+        if collisions:
+            raise ConformanceError(f"GID mapping aliases NSS principals: {collisions}")
+    if not uid_sets or len(uid_sets) != len(gid_sets):
+        raise ConformanceError("authority requires matching nonempty UID/GID maps")
+    for index in range(len(uid_sets)):
+        for previous in range(index):
+            if uid_sets[index] & uid_sets[previous] or gid_sets[index] & gid_sets[previous]:
+                raise ConformanceError("workload mappings overlap")
+    all_uids = set().union(*uid_sets)
+    all_gids = set().union(*gid_sets)
+    for name, start, count in uid_ranges:
+        if name not in caller_names and any(start <= value < start + count for value in all_uids):
+            raise ConformanceError(f"UID mapping overlaps delegation for {name}")
+    for name, start, count in gid_ranges:
+        if name not in caller_names and any(start <= value < start + count for value in all_gids):
+            raise ConformanceError(f"GID mapping overlaps delegation for {name}")
+    return {
+        "pass": True,
+        "uid_host_ids": [sorted(values) for values in uid_sets],
+        "gid_host_ids": [sorted(values) for values in gid_sets],
+    }
+
+
+def require_authority_rejection(
+    name: str,
+    expected: str,
+    check: Callable[[], dict[str, Any]],
+) -> dict[str, Any]:
+    try:
+        check()
+    except ConformanceError as exc:
+        message = str(exc)
+        if expected not in message:
+            raise ConformanceError(
+                f"authority negative case {name} failed for the wrong reason: {message}"
+            ) from exc
+        return {"pass": True, "expected": expected, "actual": message}
+    raise ConformanceError(f"authority negative case {name} did not fail closed")
+
+
+def assert_host_authority(
+    runner: Runner,
+    uid_maps: list[list[tuple[int, int, int]]],
+    gid_maps: list[list[tuple[int, int, int]]],
+    *,
+    planned_pool: bool = False,
+) -> dict[str, Any]:
+    require_enumerable_subid_backend()
+    uid, username, caller_names = effective_caller()
+    uid_ranges = parse_subids(pathlib.Path("/etc/subuid"))
+    gid_ranges = parse_subids(pathlib.Path("/etc/subgid"))
+    own_uids = owned_subid_ranges(uid_ranges, caller_names)
+    own_gids = owned_subid_ranges(gid_ranges, caller_names)
+    if not own_uids or not own_gids:
+        raise ConformanceError(
+            f"no subordinate ranges for caller aliases {sorted(caller_names)}"
+        )
+    authoritative_uids = query_subids(
+        runner, username, caller_names, gids=False
+    )
+    authoritative_gids = query_subids(
+        runner, username, caller_names, gids=True
+    )
+    if sorted(own_uids) != sorted(authoritative_uids):
+        raise ConformanceError(
+            f"/etc/subuid disagrees with libsubid for {username}: "
+            f"{own_uids} != {authoritative_uids}"
+        )
+    if sorted(own_gids) != sorted(authoritative_gids):
+        raise ConformanceError(
+            f"/etc/subgid disagrees with libsubid for {username}: "
+            f"{own_gids} != {authoritative_gids}"
+        )
+
+    # Cache only within this admission check. Synthetic negative cases repeat
+    # the same lookups; every later admission takes a fresh NSS snapshot.
+    principal_cache: dict[tuple[bool, frozenset[int]], dict[int, str]] = {}
+
+    def resolve(values: set[int], gids: bool) -> dict[int, str]:
+        key = (gids, frozenset(values))
+        if key not in principal_cache:
+            principal_cache[key] = resolved_principals(values, gids=gids)
+        return principal_cache[key]
+
+    def resolve_uids(values: set[int]) -> dict[int, str]:
+        return resolve(values, False)
+
+    def resolve_gids(values: set[int]) -> dict[int, str]:
+        return resolve(values, True)
+
+    authority_args = {
+        "caller_names": caller_names,
+        "uid_ranges": uid_ranges,
+        "gid_ranges": gid_ranges,
+        "own_uids": own_uids,
+        "own_gids": own_gids,
+    }
+    if planned_pool:
+        # Automatic bounded allocation may select any ID in this delegation.
+        # Validate the entire pool before creating images, volumes or containers.
+        uid_maps = [[(0, start, count) for start, count in own_uids]]
+        gid_maps = [[(0, start, count) for start, count in own_gids]]
+    positive = validate_host_authority(
+        uid_maps,
+        gid_maps,
+        **authority_args,
+        resolve_uids=resolve_uids,
+        resolve_gids=resolve_gids,
+    )
+
+    collision_uid = min(mapped_host_ids(uid_maps[0]))
+    collision_gid = min(mapped_host_ids(gid_maps[0]))
+    negative_cases = {
+        "uid_nss_collision": require_authority_rejection(
+            "uid_nss_collision",
+            "UID mapping aliases NSS principals",
+            lambda: validate_host_authority(
+                uid_maps,
+                gid_maps,
+                **authority_args,
+                resolve_uids=lambda values: (
+                    {collision_uid: "synthetic-nss-principal"}
+                    if collision_uid in values
+                    else {}
+                ),
+                resolve_gids=resolve_gids,
+            ),
+        ),
+        "gid_nss_collision": require_authority_rejection(
+            "gid_nss_collision",
+            "GID mapping aliases NSS principals",
+            lambda: validate_host_authority(
+                uid_maps,
+                gid_maps,
+                **authority_args,
+                resolve_uids=resolve_uids,
+                resolve_gids=lambda values: (
+                    {collision_gid: "synthetic-nss-principal"}
+                    if collision_gid in values
+                    else {}
+                ),
+            ),
+        ),
+        "uid_delegation_collision": require_authority_rejection(
+            "uid_delegation_collision",
+            "UID mapping overlaps delegation for synthetic-other-principal",
+            lambda: validate_host_authority(
+                uid_maps,
+                gid_maps,
+                **{
+                    **authority_args,
+                    "uid_ranges": [
+                        *uid_ranges,
+                        ("synthetic-other-principal", collision_uid, 1),
+                    ],
+                },
+                resolve_uids=resolve_uids,
+                resolve_gids=resolve_gids,
+            ),
+        ),
+        "gid_delegation_collision": require_authority_rejection(
+            "gid_delegation_collision",
+            "GID mapping overlaps delegation for synthetic-other-principal",
+            lambda: validate_host_authority(
+                uid_maps,
+                gid_maps,
+                **{
+                    **authority_args,
+                    "gid_ranges": [
+                        *gid_ranges,
+                        ("synthetic-other-principal", collision_gid, 1),
+                    ],
+                },
+                resolve_uids=resolve_uids,
+                resolve_gids=resolve_gids,
+            ),
+        ),
+    }
+    numeric_owner_probe = owned_subid_ranges(
+        [(str(uid), own_uids[0][0], own_uids[0][1])],
+        caller_names,
+    )
+    if numeric_owner_probe != [own_uids[0]]:
+        raise ConformanceError("numeric subordinate-ID owner alias is not recognized")
+    return {
+        **positive,
+        "caller_owner_aliases": sorted(caller_names),
+        "numeric_owner_alias_supported": True,
+        "negative_collision_cases": negative_cases,
+        "planned_pool": planned_pool,
+    }
+
+
+def namespace_snapshot(pid: int) -> dict[str, str]:
+    return {
+        name: os.readlink(f"/proc/{pid}/ns/{name}")
+        for name in ("pid", "ipc", "net", "mnt", "user")
+    }
+
+
+def mount_snapshot(pid: int) -> dict[str, Any]:
+    text = read_proc(pid, "mountinfo")
+    selected: dict[str, str] = {}
+    mounts = []
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) < 10 or "-" not in fields[6:]:
+            raise ConformanceError(f"invalid mountinfo record: {line}")
+        mounts.append({"device": fields[2], "root": fields[3], "target": fields[4]})
+        if len(fields) > 5 and fields[4] in {"/", "/dev/shm", "/dev/mqueue", "/probe-state"}:
+            selected[fields[4]] = line
+    root = selected.get("/", "")
+    private = " shared:" not in f" {root}" and " master:" not in f" {root}"
+    if not private:
+        raise ConformanceError(f"root mount propagation is not private: {root}")
+    for required in ("/", "/dev/shm", "/dev/mqueue", "/probe-state"):
+        if required not in selected:
+            raise ConformanceError(f"required mount missing: {required}")
+    return {"private_root_propagation": private, "selected": selected,
+            "mounts": mounts}
+
+
+def assert_peer_mount_visibility(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
+    """Check each real state mount against every mount in the peer namespace."""
+    if len(snapshots) != 2:
+        raise ConformanceError("peer mount test requires two workloads")
+    own = []
+    for snapshot in snapshots:
+        fields = snapshot["selected"]["/probe-state"].split()
+        source = {"device": fields[2], "root": fields[3], "target": "/probe-state"}
+        if source not in snapshot["mounts"]:
+            raise ConformanceError("own state mount positive control failed")
+        own.append(source)
+    if (own[0]["device"], own[0]["root"]) == (own[1]["device"], own[1]["root"]):
+        raise ConformanceError("workloads share the state mount source")
+    for index, source in enumerate(own):
+        for mount in snapshots[1 - index]["mounts"]:
+            if mount["device"] != source["device"]:
+                continue
+            peer_root, root = source["root"].rstrip("/"), mount["root"].rstrip("/")
+            if (peer_root == root or peer_root.startswith(root + "/")
+                    or root.startswith(peer_root + "/")):
+                raise ConformanceError(f"peer state mount is visible: {mount}")
+    return {"pass": True, "own_mount_controls": own,
+            "peer_mounts_absent": [True, True],
+            "scope": "all mountinfo records in both workload namespaces"}
+
+
+def assert_sandbox(inspect: dict[str, Any], seccomp_path: str) -> dict[str, Any]:
+    host = inspect.get("HostConfig", {})
+    mounts = inspect.get("Mounts", [])
+    failures = []
+    checks = {
+        "not_privileged": not host.get("Privileged"),
+        "network_none": host.get("NetworkMode") == "none",
+        "pid_private": host.get("PidMode") == "private",
+        "ipc_private": host.get("IpcMode") == "private",
+        "uts_private": host.get("UTSMode") == "private",
+        "readonly_root": bool(host.get("ReadonlyRootfs")),
+        "no_devices": not host.get("Devices"),
+        "one_managed_volume": (
+            len(mounts) == 1
+            and mounts[0].get("Type") == "volume"
+            and mounts[0].get("Destination") == "/probe-state"
+            and mounts[0].get("Propagation") == "rprivate"
+        ),
+        "no_external_binds": all(mount.get("Type") == "volume" for mount in mounts),
+        "no_runtime_socket": all("sock" not in str(mount.get("Destination", "")) for mount in mounts),
+        "no_new_privileges": any("no-new-privileges" in item for item in host.get("SecurityOpt", [])),
+        "seccomp_explicit": any(seccomp_path in item for item in host.get("SecurityOpt", [])),
+    }
+    for name, passed in checks.items():
+        if not passed:
+            failures.append(name)
+    if failures:
+        raise ConformanceError(f"sandbox inspection failed: {failures}")
+    return {"pass": True, "checks": checks}
+
+
+def check_supervisor(data: dict[str, Any]) -> None:
+    status = data["status"]
+    expected_caps = f"{EXPECTED_SUPERVISOR_CAPS:016x}"
+    checks = {
+        "uids": status.get("Uid") == "100\t100\t100\t100",
+        "gids": status.get("Gid") == "100\t100\t100\t100",
+        "groups": status.get("Groups") == "100",
+        "dumpable": data.get("dumpable") == 0,
+        "effective": status.get("CapEff") == expected_caps,
+        "permitted": status.get("CapPrm") == expected_caps,
+        "inheritable": status.get("CapInh") == expected_caps,
+        "bounding": status.get("CapBnd") == expected_caps,
+        "ambient_empty": status.get("CapAmb") == "0000000000000000",
+    }
+    failed = [name for name, passed in checks.items() if not passed]
+    if failed:
+        raise ConformanceError(f"supervisor report failed {failed}: {data}")
+
+
+def require_pass(name: str, value: dict[str, Any]) -> None:
+    if not value.get("pass"):
+        raise ConformanceError(f"{name} failed: {json.dumps(value, sort_keys=True)}")
+
+
+def resource_exists(runner: Runner, kind: str, identity: str) -> bool:
+    result = runner.run(["podman", kind, "exists", identity], check=False)
+    if result.returncode not in (0, 1):
+        raise ConformanceError(f"cannot establish {kind} existence: {result.stderr}")
+    return result.returncode == 0
+
+
+def owned_resource(runner: Runner, kind: str, identity: str, token: str) -> dict[str, Any]:
+    values = runner.json(["podman", kind, "inspect", identity])
+    if not isinstance(values, list) or len(values) != 1:
+        raise ConformanceError(f"unexpected {kind} inspect: {identity}")
+    item = values[0]
+    labels = item.get("Labels") or item.get("Config", {}).get("Labels") or {}
+    if labels.get(OWNER_LABEL) != token:
+        raise ConformanceError(f"refusing foreign {kind} resource: {identity}")
+    return item
+
+
+def remove_owned_resource(runner: Runner, kind: str, identity: str, token: str) -> dict[str, Any]:
+    if not resource_exists(runner, kind, identity):
+        return {"pass": True, "already_absent": True}
+    owned_resource(runner, kind, identity, token)
+    result = runner.run(["podman", kind, "rm", "-f", identity], check=False)
+    return {"pass": result.returncode == 0 and not resource_exists(runner, kind, identity),
+            "returncode": result.returncode, "stderr": result.stderr}
+
+
+def wait_admission(runner: Runner, container: str, nonce: str) -> None:
+    for _ in range(40):
+        logs = runner.run(["podman", "logs", container])
+        if f"admission-ready {nonce}" in logs.stdout.splitlines():
+            return
+        time.sleep(0.1)
+    raise ConformanceError(f"container did not enter admission wait: {container}")
+
+
+def release_admission(runner: Runner, container: str, nonce: str) -> None:
+    runner.run(["podman", "exec", container, "/probe", "admission-release", nonce])
+
+
+def control_report(runner: Runner, container: str, nonce: str) -> dict[str, Any]:
+    release_admission(runner, container, nonce)
+    if runner.run(["podman", "wait", container]).stdout.strip() != "0":
+        raise ConformanceError(f"control payload failed: {container}")
+    lines = runner.run(["podman", "logs", container]).stdout.splitlines()
+    if not lines or lines[0] != f"admission-ready {nonce}":
+        raise ConformanceError(f"missing control admission record: {container}")
+    return json.loads("\n".join(lines[1:]))
+
+
+def run_trial(
+    runner: Runner,
+    output: pathlib.Path,
+    image: str,
+    seccomp_path: str,
+    profile: str,
+    iteration: int,
+    token: str,
+) -> dict[str, Any]:
+    trial = output / profile / f"iteration-{iteration}"
+    trial.mkdir(parents=True)
+    names = [f"reploy-mi-{token}-{profile}-{iteration}-{side}" for side in ("a", "b")]
+    volumes = [f"reploy-mi-{token}-{profile}-{iteration}-state-{side}" for side in ("a", "b")]
+    created_containers: list[str] = []
+    created_volumes: list[str] = []
+    cleanup: dict[str, Any] = {"containers": {}, "volumes": {}}
+    try:
+        planned_authority = assert_host_authority(runner, [], [], planned_pool=True)
+        mountpoints = []
+        for volume in volumes:
+            if resource_exists(runner, "volume", volume):
+                raise ConformanceError(f"volume name already exists: {volume}")
+            created_volumes.append(volume)
+            runner.run(["podman", "volume", "create", "--label", f"{OWNER_LABEL}={token}", volume])
+            mountpoint = owned_resource(runner, "volume", volume, token)["Mountpoint"]
+            pathlib.Path(mountpoint).chmod(0o777)
+            mountpoints.append(mountpoint)
+        no_cap_name = f"reploy-mi-{token}-{profile}-{iteration}-nocap"
+        seccomp_control_name = f"reploy-mi-{token}-{profile}-{iteration}-seccomp-control"
+        all_names = [*names, no_cap_name, seccomp_control_name]
+        modes = ["supervisor", "supervisor", "cap-report", "seccomp-control"]
+        nonces = [secrets.token_hex(16) for _ in all_names]
+        for slot, name in enumerate(all_names):
+            if resource_exists(runner, "container", name):
+                raise ConformanceError(f"container name already exists: {name}")
+            args = common_run_args(
+                name, seccomp_path, profile, slot,
+                volume=volumes[slot] if slot < 2 else None,
+                capabilities=slot < 2,
+                seccomp_override="unconfined" if slot == 3 else None,
+            )
+            args[1] = "create"
+            created_containers.append(name)
+            identity = runner.run([*args, "--label", f"{OWNER_LABEL}={token}", image,
+                                   "admission-wait", nonces[slot], modes[slot]]).stdout.strip()
+            if len(identity) != 64 or any(ch not in "0123456789abcdef" for ch in identity):
+                raise ConformanceError(f"invalid created container ID: {identity}")
+            created_containers[-1] = identity
+            owned_resource(runner, "container", identity, token)
+            runner.run(["podman", "start", identity])
+            wait_admission(runner, identity, nonces[slot])
+
+        all_inspections = [inspect_container(runner, identity) for identity in created_containers]
+        all_pids = [int(value["State"]["Pid"]) for value in all_inspections]
+        all_uid_maps = [parse_id_map(read_proc(pid, "uid_map")) for pid in all_pids]
+        all_gid_maps = [parse_id_map(read_proc(pid, "gid_map")) for pid in all_pids]
+        mapping_profile = assert_mapping_profile(profile, all_uid_maps, all_gid_maps)
+        authority = assert_host_authority(runner, all_uid_maps, all_gid_maps)
+        # No supervisor, application or control payload runs before this point.
+        for slot, name in enumerate(names):
+            release_admission(runner, created_containers[slot], nonces[slot])
+            wait_ready(runner, name)
+
+        inspections = all_inspections[:2]
+        pids = all_pids[:2]
+        uid_maps = all_uid_maps[:2]
+        gid_maps = all_gid_maps[:2]
+        namespaces = [namespace_snapshot(pid) for pid in pids]
+        mounts = [mount_snapshot(pid) for pid in pids]
+        peer_mount_visibility = assert_peer_mount_visibility(mounts)
+        for namespace in ("pid", "ipc", "net", "mnt", "user"):
+            if namespaces[0][namespace] == namespaces[1][namespace]:
+                raise ConformanceError(f"workloads share {namespace} namespace")
+
+        supervisor = request_action(runner, names[0], "supervisor-report")["data"]
+        check_supervisor(supervisor)
+        app = request_action(runner, names[0], "app-report")["data"]
+        require_pass("application report", app)
+        policy = {}
+        for action, value in (
+            ("reject-uid", 1999),
+            ("reject-uid", SUPERVISOR_UID),
+            ("reject-gid", 2999),
+            ("reject-gid", RUNTIME_GID),
+            ("reject-gid", SUPERVISOR_GID),
+            ("reject-group", 3999),
+            ("reject-group", RUNTIME_GID),
+            ("reject-group", SUPERVISOR_GID),
+        ):
+            key = f"{action}-{value}"
+            response = request_action(runner, names[0], action, value=value)
+            if not response["response"].get("rejected"):
+                raise ConformanceError(f"supervisor did not reject {action}={value}")
+            policy[key] = response
+
+        private = []
+        for name in names:
+            private.append(request_action(runner, name, "write-private"))
+        setid = request_action(runner, names[0], "setid-target")["data"]
+        filecap = request_action(runner, names[0], "filecap-target")["data"]
+        require_pass("set-ID privilege regain", setid)
+        require_pass("file-capability privilege regain", filecap)
+
+        service = request_action(runner, names[0], "start-services", token=token)["data"]
+        cross = request_action(
+            runner, names[1], "cross-probe", token=token, target_pid=pids[0]
+        )["data"]
+        require_pass("cross-workload isolation", cross)
+        raw = runner.json(["podman", "exec", names[0], "/probe", "raw-matrix", profile])
+        require_pass("raw identity matrix", raw)
+
+        no_cap = control_report(runner, created_containers[2], nonces[2])
+        require_pass("no-capability default", no_cap)
+
+        owners = [
+            {
+                "uid": (pathlib.Path(mountpoint) / "app-private").stat().st_uid,
+                "gid": (pathlib.Path(mountpoint) / "app-private").stat().st_gid,
+            }
+            for mountpoint in mountpoints
+        ]
+        seccomp_control = control_report(runner, created_containers[3], nonces[3])
+        require_pass("unfiltered seccomp control", seccomp_control)
+
+        expected_owners = []
+        for mapping_uid, mapping_gid in zip(uid_maps, gid_maps):
+            uid_segment = next(item for item in mapping_uid if item[0] <= DECLARED_UID < item[0] + item[2])
+            gid_segment = next(item for item in mapping_gid if item[0] <= DECLARED_GID < item[0] + item[2])
+            expected_owners.append(
+                {
+                    "uid": uid_segment[1] + DECLARED_UID - uid_segment[0],
+                    "gid": gid_segment[1] + DECLARED_GID - gid_segment[0],
+                }
+            )
+        if owners != expected_owners:
+            raise ConformanceError(f"unexpected persistent ownership: {owners} != {expected_owners}")
+
+        sandbox = [assert_sandbox(value, seccomp_path) for value in inspections]
+        evidence = {
+            "pass": True,
+            "profile": profile,
+            "iteration": iteration,
+            "containers": names,
+            "volumes": volumes,
+            "pids": pids,
+            "uid_maps": uid_maps,
+            "gid_maps": gid_maps,
+            "mapping_profile": mapping_profile,
+            "authority": authority,
+            "planned_authority": planned_authority,
+            "pre_payload_admission": [
+                {"pass": True, "name": name, "identity": identity,
+                 "mode": mode, "uid_map": uid_map, "gid_map": gid_map}
+                for name, identity, mode, uid_map, gid_map in zip(
+                    all_names, created_containers, modes, all_uid_maps, all_gid_maps, strict=True)
+            ],
+            "namespaces": namespaces,
+            "mounts": mounts,
+            "peer_mount_visibility": peer_mount_visibility,
+            "supervisor": supervisor,
+            "application": app,
+            "policy_rejections": policy,
+            "private_writes": private,
+            "setid": setid,
+            "filecap": filecap,
+            "service": service,
+            "cross_workload": cross,
+            "raw_matrix": raw,
+            "no_capability_default": no_cap,
+            "seccomp_unfiltered_control": seccomp_control,
+            "owners": owners,
+            "expected_owners": expected_owners,
+            "sandbox": sandbox,
+            "inspect": inspections,
+        }
+        write_json(trial / "evidence.json", evidence)
+        return evidence
+    finally:
+        for kind, identities, key in (("container", created_containers, "containers"),
+                                       ("volume", created_volumes, "volumes")):
+            for identity in reversed(identities):
+                try:
+                    cleanup[key][identity] = remove_owned_resource(runner, kind, identity, token)
+                except Exception as exc:
+                    cleanup[key][identity] = {"pass": False, "error": str(exc)}
+        cleanup["remaining_containers"] = runner.run(
+            ["podman", "ps", "-aq", "--filter", f"name=reploy-mi-{token}-"]
+        ).stdout.splitlines()
+        cleanup["remaining_volumes"] = runner.run(
+            ["podman", "volume", "ls", "-q", "--filter", f"name=reploy-mi-{token}-"]
+        ).stdout.splitlines()
+        cleanup["remaining_networks"] = runner.run(
+            ["podman", "network", "ls", "-q", "--filter", f"name=reploy-mi-{token}-"]
+        ).stdout.splitlines()
+        cleanup["pass"] = (not cleanup["remaining_containers"]
+                           and not cleanup["remaining_volumes"]
+                           and not cleanup["remaining_networks"]
+                           and all(value["pass"] for key in ("containers", "volumes")
+                                   for value in cleanup[key].values()))
+        write_json(trial / "cleanup.json", cleanup)
+        if not cleanup["pass"] and sys.exc_info()[0] is None:
+            raise ConformanceError(f"trial cleanup incomplete: {cleanup}")
+
+
+def main() -> int:
+    args = parse_args()
+    profiles = [item.strip() for item in args.profiles.split(",") if item.strip()]
+    if args.iterations < 1:
+        raise ConformanceError("--iterations must be positive")
+    if not profiles or any(profile not in {"exact", "bounded"} for profile in profiles):
+        raise ConformanceError("--profiles must contain exact and/or bounded")
+    timestamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
+    output = args.output_dir or pathlib.Path(tempfile.mkdtemp(prefix="reploy-mi-conformance-"))
+    output = output.resolve()
+    if output.exists():
+        if any(output.iterdir()):
+            raise ConformanceError(f"evidence directory is not empty: {output}")
+    else:
+        output.mkdir(parents=True)
+    runner = Runner(output)
+    token = (
+        f"{timestamp.lower().replace('t', '').replace('z', '')}-{os.getpid()}-"
+        f"{secrets.token_hex(16)}"
+    )
+    image = f"localhost/reploy-local/multiidentity-conformance:{token}"
+    baseline: dict[str, list[str]] | None = None
+    image_attempted = False
+    summary: dict[str, Any] = {
+        "schema": "reploy-private-multiidentity-conformance-v1",
+        "started_at": timestamp,
+        "iterations": args.iterations,
+        "profiles": profiles,
+        "pass": False,
+    }
+    try:
+        baseline = inventory(runner, "podman")
+        host = host_context(runner)
+        write_json(output / "host.json", host)
+        negative = docker_negative(runner)
+        write_json(output / "docker-negative.json", negative)
+        planned_authority = assert_host_authority(runner, [], [], planned_pool=True)
+        write_json(output / "planned-authority.json", planned_authority)
+        if resource_exists(runner, "image", image):
+            raise ConformanceError(f"image tag already exists: {image}")
+        image_attempted = True
+        image_evidence = build_image(runner, output, image, token)
+        write_json(output / "image.json", image_evidence)
+        trials = []
+        seccomp_path = host["seccomp_profile"]["path"]
+        for profile in profiles:
+            for iteration in range(1, args.iterations + 1):
+                trials.append(
+                    run_trial(
+                        runner, output, image, seccomp_path,
+                        profile, iteration, token,
+                    )
+                )
+        summary.update(
+            {
+                "pass": True,
+                "host": host,
+                "docker_negative": negative,
+                "image": image_evidence,
+                "trials": [
+                    {
+                        "profile": trial["profile"],
+                        "iteration": trial["iteration"],
+                        "pass": trial["pass"],
+                        "uid_maps": trial["uid_maps"],
+                        "gid_maps": trial["gid_maps"],
+                        "owners": trial["owners"],
+                    }
+                    for trial in trials
+                ],
+            }
+        )
+    except Exception as exc:
+        summary["error"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        try:
+            summary["image_cleanup"] = (
+                remove_owned_resource(runner, "image", image, token)
+                if image_attempted else {"pass": True, "not_attempted": True}
+            )
+        except Exception as exc:
+            summary["image_cleanup"] = {"pass": False, "error": str(exc)}
+        if not summary["image_cleanup"]["pass"]:
+            summary["pass"] = False
+            summary["error"] = "attempt-owned image cleanup failed"
+        if baseline is not None:
+            final = inventory(runner, "podman")
+            summary["podman_inventory_before"] = baseline
+            summary["podman_inventory_after"] = final
+            summary["engine_restored"] = baseline == final
+            if summary.get("pass") and baseline != final:
+                summary["pass"] = False
+                summary["error"] = "Podman inventory was not restored"
+        summary["completed_at"] = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
+        write_json(output / "summary.json", summary)
+        runner.save_commands()
+        print(output)
+    if not summary.get("pass"):
+        raise ConformanceError(str(summary.get("error", "conformance failed")))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except ConformanceError as exc:
+        print(f"conformance failed: {exc}", file=sys.stderr)
+        raise SystemExit(1)
