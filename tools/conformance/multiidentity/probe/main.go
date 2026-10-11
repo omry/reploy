@@ -78,6 +78,10 @@ func main() {
 	}
 	var err error
 	switch os.Args[1] {
+	case "admission-wait":
+		err = runAdmissionWait(os.Args[2:])
+	case "admission-release":
+		err = releaseAdmission("/run", os.Args[2:])
 	case "request":
 		err = runRequest(os.Args[2:])
 	case "child-launch":
@@ -106,6 +110,76 @@ func main() {
 		err = fmt.Errorf("unknown mode %q", os.Args[1])
 	}
 	must(err)
+}
+
+// This trusted wait runs before any supervisor canary or application payload.
+// Both markers live only on the container's private /run tmpfs.
+func admissionNonce(args []string) (string, error) {
+	if len(args) == 0 || len(args[0]) != 32 {
+		return "", errors.New("admission requires a 128-bit hexadecimal nonce")
+	}
+	for _, ch := range args[0] {
+		if !strings.ContainsRune("0123456789abcdef", ch) {
+			return "", errors.New("invalid admission nonce")
+		}
+	}
+	return args[0], nil
+}
+
+func awaitAdmission(dir, nonce string, timeout time.Duration) error {
+	ready := filepath.Join(dir, "probe-admission-ready")
+	release := filepath.Join(dir, "probe-admission-release")
+	if err := os.WriteFile(ready, []byte(nonce), 0o600); err != nil {
+		return err
+	}
+	fmt.Println("admission-ready " + nonce)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		value, err := os.ReadFile(release)
+		if err == nil {
+			if string(value) != nonce {
+				return errors.New("admission release nonce mismatch")
+			}
+			if err := os.Remove(ready); err != nil {
+				return err
+			}
+			return os.Remove(release)
+		}
+		if !os.IsNotExist(err) {
+			return err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return errors.New("admission timed out without payload execution")
+}
+
+func runAdmissionWait(args []string) error {
+	nonce, err := admissionNonce(args)
+	if err != nil {
+		return err
+	}
+	if len(args) != 2 || (args[1] != "supervisor" && args[1] != "cap-report" && args[1] != "seccomp-control") {
+		return errors.New("admission requires one permitted probe mode")
+	}
+	if err := awaitAdmission("/run", nonce, 2*time.Minute); err != nil {
+		return err
+	}
+	return syscall.Exec("/probe", []string{"/probe", args[1]}, os.Environ())
+}
+
+func releaseAdmission(dir string, args []string) error {
+	nonce, err := admissionNonce(args)
+	if err != nil || len(args) != 1 {
+		return errors.New("admission-release requires one valid nonce")
+	}
+	ready, err := os.ReadFile(filepath.Join(dir, "probe-admission-ready"))
+	if err != nil {
+		return err
+	}
+	if string(ready) != nonce {
+		return errors.New("admission ready nonce mismatch")
+	}
+	return os.WriteFile(filepath.Join(dir, "probe-admission-release"), []byte(nonce), 0o600)
 }
 
 func must(err error) {
