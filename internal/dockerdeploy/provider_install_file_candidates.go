@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/omry/reploy/internal/fsowner"
 )
 
 type preparedProviderInstallFileV1 struct {
@@ -43,11 +45,19 @@ func (prepared preparedProviderInstallFilesV1) Publish() error {
 			return fmt.Errorf("prepared install file has unexpected type or mode: %s", file.TemporaryPath)
 		}
 		parent := filepath.Dir(file.FinalPath)
-		if _, err := nearestExistingInstallDirectoryV1(file.FinalPath); err != nil {
+		ancestor, err := nearestExistingInstallDirectoryV1(file.FinalPath)
+		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(parent, 0o755); err != nil {
-			return fmt.Errorf("create install file destination directory %q: %w", parent, err)
+		relative, err := filepath.Rel(ancestor, parent)
+		if err != nil {
+			return err
+		}
+		for _, part := range strings.Split(relative, string(filepath.Separator)) {
+			ancestor = filepath.Join(ancestor, part)
+			if err := requireRealManagedPathDirectory(ancestor, true); err != nil {
+				return fmt.Errorf("create install file destination directory %q: %w", parent, err)
+			}
 		}
 		if err := validateProviderInstallDirectoryAncestorsV1(parent); err != nil {
 			return err
@@ -176,6 +186,10 @@ func validateProviderInstallDirectoryAncestorsV1(directory string) error {
 }
 
 func writeProviderInstallFileCandidateV1(parent string, candidate providerInstallFileCandidateV1) (path string, err error) {
+	owner, err := fsowner.Directory(parent)
+	if err != nil {
+		return "", err
+	}
 	file, err := os.CreateTemp(parent, ".reploy-install-*")
 	if err != nil {
 		return "", fmt.Errorf("create install file candidate beside %q: %w", candidate.Path, err)
@@ -190,6 +204,9 @@ func writeProviderInstallFileCandidateV1(parent string, candidate providerInstal
 			err = errors.Join(err, os.Remove(path))
 		}
 	}()
+	if err := owner.File(file); err != nil {
+		return "", fmt.Errorf("preserve metadata candidate owner: %w", err)
+	}
 	if _, err := file.Write(candidate.Content); err != nil {
 		return "", fmt.Errorf("write install file candidate for %q: %w", candidate.Path, err)
 	}

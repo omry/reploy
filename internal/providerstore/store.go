@@ -14,12 +14,15 @@ import (
 	"strings"
 
 	"github.com/omry/reploy/internal/canonical"
+	"github.com/omry/reploy/internal/fsowner"
 )
 
 const StoreDirName = "provider-store"
 
 type Store struct {
-	root string
+	root       string
+	owner      fsowner.Owner
+	workspaces *ownedWorkspaces
 }
 
 func NewStore(deploymentRoot string) (Store, error) {
@@ -33,7 +36,17 @@ func NewStore(deploymentRoot string) (Store, error) {
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return Store{}, fmt.Errorf("provider store deployment root must be a real directory: %s", deploymentRoot)
 	}
-	return Store{root: filepath.Join(deploymentRoot, ".reploy", StoreDirName)}, nil
+	metadata := filepath.Join(deploymentRoot, ".reploy")
+	ownerPath := metadata
+	if _, err := os.Lstat(metadata); errors.Is(err, fs.ErrNotExist) {
+		ownerPath = deploymentRoot
+	}
+	owner, err := fsowner.Directory(ownerPath)
+	if err != nil {
+		return Store{}, fmt.Errorf("provider store metadata owner: %w", err)
+	}
+	store := Store{root: filepath.Join(metadata, StoreDirName), owner: owner}
+	return store, nil
 }
 
 func (store Store) Root() string { return store.root }
@@ -96,6 +109,10 @@ func (store Store) NewWorkspace(pattern string) (string, error) {
 		_ = os.Remove(workspace)
 		return "", fmt.Errorf("protect provider store workspace: %w", err)
 	}
+	if err := store.retainWorkspace(workspace); err != nil {
+		_ = os.Remove(workspace)
+		return "", fmt.Errorf("retain private workspace owner: %w", err)
+	}
 	return workspace, nil
 }
 
@@ -149,13 +166,13 @@ func (store Store) publishArtifact(ctx context.Context, logicalPath string, kind
 		return ArtifactDescriptor{}, err
 	}
 	finalDir := filepath.Dir(finalPath)
-	if err := ensureRealDirectory(filepath.Join(store.root, "blobs")); err != nil {
+	if err := store.ensureDirectory(filepath.Join(store.root, "blobs")); err != nil {
 		return ArtifactDescriptor{}, err
 	}
-	if err := ensureRealDirectory(filepath.Join(store.root, "blobs", "sha256")); err != nil {
+	if err := store.ensureDirectory(filepath.Join(store.root, "blobs", "sha256")); err != nil {
 		return ArtifactDescriptor{}, err
 	}
-	if err := ensureRealDirectory(finalDir); err != nil {
+	if err := store.ensureDirectory(finalDir); err != nil {
 		return ArtifactDescriptor{}, err
 	}
 	if err := publishTemporary(temporary.path, finalPath, func() error {
@@ -203,13 +220,13 @@ func (store Store) publishRecord(ctx context.Context, reference StoreObjectRef, 
 		return err
 	}
 	finalDir := filepath.Dir(finalPath)
-	if err := ensureRealDirectory(filepath.Join(store.root, directory)); err != nil {
+	if err := store.ensureDirectory(filepath.Join(store.root, directory)); err != nil {
 		return err
 	}
-	if err := ensureRealDirectory(filepath.Join(store.root, directory, "sha256")); err != nil {
+	if err := store.ensureDirectory(filepath.Join(store.root, directory, "sha256")); err != nil {
 		return err
 	}
-	if err := ensureRealDirectory(finalDir); err != nil {
+	if err := store.ensureDirectory(finalDir); err != nil {
 		return err
 	}
 	if err := publishTemporary(temporary.path, finalPath, func() error {
@@ -315,13 +332,13 @@ func validateValidationRecordReference(reference StoreObjectRef) error {
 }
 
 func (store Store) prepareBaseDirectories() error {
-	if err := ensureRealDirectory(filepath.Dir(store.root)); err != nil {
+	if err := store.ensureDirectory(filepath.Dir(store.root)); err != nil {
 		return err
 	}
-	if err := ensureRealDirectory(store.root); err != nil {
+	if err := store.ensureDirectory(store.root); err != nil {
 		return err
 	}
-	return ensureRealDirectory(filepath.Join(store.root, "tmp"))
+	return store.ensureDirectory(filepath.Join(store.root, "tmp"))
 }
 
 func ensureRealDirectory(path string) error {
@@ -416,6 +433,9 @@ func (store Store) writeTemporary(ctx context.Context, pattern string, reader io
 	}
 	if err := temporary.Chmod(0o444); err != nil {
 		return temporaryObject{}, fmt.Errorf("make provider store object read-only: %w", err)
+	}
+	if err := store.owner.File(temporary); err != nil {
+		return temporaryObject{}, fmt.Errorf("preserve provider store object owner: %w", err)
 	}
 	if err := temporary.Sync(); err != nil {
 		return temporaryObject{}, fmt.Errorf("sync provider store temporary object: %w", err)

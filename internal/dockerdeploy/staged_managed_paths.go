@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/fsowner"
 )
 
 // PrepareStagedManagedBindPathsV1 ensures that every Reploy-owned bind source
@@ -21,9 +22,11 @@ func PrepareStagedManagedBindPathsV1(deploymentDir string, plan DockerExecutionP
 		return fmt.Errorf("resolve staged managed path root: %w", err)
 	}
 	root = filepath.Clean(root)
-	if err := requireRealManagedPathDirectory(root, false); err != nil {
+	held, _, err := fsowner.OpenDirectory(root)
+	if err != nil {
 		return fmt.Errorf("staged managed path root: %w", err)
 	}
+	defer held.Close()
 	for _, mount := range plan.Mounts {
 		if mount.Mode != blueprint.MountManagedBind {
 			continue
@@ -32,38 +35,56 @@ func PrepareStagedManagedBindPathsV1(deploymentDir string, plan DockerExecutionP
 		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
 			return fmt.Errorf("staged managed path %q escapes deployment root", mount.Name)
 		}
-		current := root
-		for _, part := range strings.Split(relative, string(filepath.Separator)) {
-			if part == "" || part == "." {
-				continue
-			}
-			current = filepath.Join(current, part)
-			if err := requireRealManagedPathDirectory(current, true); err != nil {
-				return fmt.Errorf("prepare staged managed path %q: %w", mount.Name, err)
-			}
+		if err := prepareManagedPathAt(held, relative); err != nil {
+			return fmt.Errorf("prepare staged managed path %q: %w", mount.Name, err)
 		}
 	}
 	return nil
 }
 
-func requireRealManagedPathDirectory(path string, create bool) error {
-	for {
-		info, err := os.Lstat(path)
-		if os.IsNotExist(err) && create {
-			if err := os.Mkdir(path, 0o755); err != nil {
-				if os.IsExist(err) {
-					continue
-				}
-				return err
-			}
+func prepareManagedPathAt(root *os.Root, relative string) error {
+	current := root
+	defer func() {
+		if current != root {
+			_ = current.Close()
+		}
+	}()
+	for _, part := range strings.Split(relative, string(filepath.Separator)) {
+		if part == "" || part == "." {
 			continue
 		}
+		info, err := current.Stat(".")
 		if err != nil {
 			return err
 		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return fmt.Errorf("%s is not a real directory", path)
+		child, err := fsowner.FromInfo(info).EnsureDirectory(current, part, 0o755)
+		if err != nil {
+			return err
 		}
-		return nil
+		if current != root {
+			_ = current.Close()
+		}
+		current = child
 	}
+	return nil
+}
+
+func requireRealManagedPathDirectory(path string, create bool) error {
+	if !create {
+		root, _, err := fsowner.OpenDirectory(path)
+		if root != nil {
+			_ = root.Close()
+		}
+		return err
+	}
+	parent, owner, err := fsowner.OpenDirectory(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	child, err := owner.EnsureDirectory(parent, filepath.Base(path), 0o755)
+	if child != nil {
+		_ = child.Close()
+	}
+	return err
 }
