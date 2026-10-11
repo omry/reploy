@@ -2,11 +2,14 @@ package deploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/omry/reploy/internal/fsowner"
 )
 
 const operationLockRelativePath = ".reploy/operation.lock"
@@ -17,6 +20,7 @@ const operationLockPollInterval = 10 * time.Millisecond
 // The lock-file path is stable, but file existence never indicates ownership.
 type OperationLock struct {
 	file            *os.File
+	stateRoot       *os.Root
 	path            string
 	mutex           sync.Mutex
 	released        bool
@@ -51,18 +55,17 @@ func acquireOperationLock(ctx context.Context, deploymentDir string, create bool
 	if err != nil {
 		return nil, fmt.Errorf("resolve deployment directory for operation lock: %w", err)
 	}
-	lockPath, err := prepareOperationLockPath(absoluteDir, create)
+	stateRoot, directory, stateDirectory, err := prepareOperationLockRoot(absoluteDir, create)
 	if err != nil {
 		return nil, err
 	}
-	directory, err := os.Lstat(absoluteDir)
-	if err != nil {
-		return nil, err
-	}
-	stateDirectory, err := os.Lstat(filepath.Dir(lockPath))
-	if err != nil {
-		return nil, err
-	}
+	retained := false
+	defer func() {
+		if !retained {
+			_ = stateRoot.Close()
+		}
+	}()
+	lockPath := filepath.Join(absoluteDir, operationLockRelativePath)
 	// Force identity capture now: Windows Lstat otherwise defers file IDs
 	// until SameFile, after a waiting acquisition's directory may have moved.
 	if !os.SameFile(directory, directory) || !os.SameFile(stateDirectory, stateDirectory) {
@@ -74,13 +77,23 @@ func acquireOperationLock(ctx context.Context, deploymentDir string, create bool
 			return nil, fmt.Errorf("ordinary operation admission rejected terminal authority: %v", err)
 		}
 	}
-	flags := os.O_RDWR
-	if create {
-		flags |= os.O_CREATE
-	}
-	file, err := os.OpenFile(lockPath, flags, 0o600)
+	file, err := openOperationLockFile(stateRoot, create)
 	if err != nil {
 		return nil, fmt.Errorf("open operation lock: %w", err)
+	}
+	// Transfer a newly opened metadata file before waiting, so cancellation
+	// cannot strand an operator-owned deployment with a root-only lock.
+	owner := fsowner.FromInfo(stateDirectory)
+	if create && owner.Enabled() {
+		identity := &OperationLock{file: file, path: lockPath, directory: directory, stateDirectory: stateDirectory}
+		if err := identity.requireHeldLocked(); err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+		if err := owner.File(file); err != nil {
+			_ = file.Close()
+			return nil, err
+		}
 	}
 	for {
 		acquired, err := tryLockOperationFile(file)
@@ -89,7 +102,8 @@ func acquireOperationLock(ctx context.Context, deploymentDir string, create bool
 			return nil, fmt.Errorf("acquire operation lock: %w", err)
 		}
 		if acquired {
-			lock := &OperationLock{file: file, path: lockPath, directory: directory, stateDirectory: stateDirectory}
+			lock := &OperationLock{file: file, stateRoot: stateRoot, path: lockPath, directory: directory, stateDirectory: stateDirectory}
+			retained = true
 			err := lock.RequireHeld()
 			if err == nil && create {
 				err = lock.RequireWritable()
@@ -113,43 +127,40 @@ func acquireOperationLock(ctx context.Context, deploymentDir string, create bool
 	}
 }
 
-func prepareOperationLockPath(deploymentDir string, create bool) (string, error) {
-	info, err := os.Lstat(deploymentDir)
+func prepareOperationLockRoot(deploymentDir string, create bool) (*os.Root, os.FileInfo, os.FileInfo, error) {
+	root, owner, err := fsowner.OpenDirectory(deploymentDir)
 	if err != nil {
-		return "", fmt.Errorf("inspect deployment directory for operation lock: %w", err)
+		return nil, nil, nil, err
 	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return "", fmt.Errorf("operation lock deployment path must be a real directory: %s", deploymentDir)
+	defer root.Close()
+	directory, err := operationDirectoryInfo(root)
+	if err != nil {
+		return nil, nil, nil, err
 	}
-	stateDir := filepath.Join(deploymentDir, ".reploy")
-	info, err = os.Lstat(stateDir)
-	if os.IsNotExist(err) {
-		if !create {
-			return "", fmt.Errorf("operation lock state directory does not exist: %s", stateDir)
-		}
-		if mkdirErr := os.Mkdir(stateDir, 0o755); mkdirErr != nil && !os.IsExist(mkdirErr) {
-			return "", fmt.Errorf("create operation lock directory: %w", mkdirErr)
-		}
-		info, err = os.Lstat(stateDir)
+	var stateRoot *os.Root
+	if create {
+		stateRoot, err = owner.EnsureDirectory(root, ".reploy", 0o755)
+	} else {
+		stateRoot, err = fsowner.OpenChildDirectory(root, ".reploy")
 	}
 	if err != nil {
-		return "", fmt.Errorf("inspect operation lock directory: %w", err)
+		return nil, nil, nil, fmt.Errorf("prepare operation lock directory: %w", err)
 	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return "", fmt.Errorf("operation lock state path must be a real directory: %s", stateDir)
+	stateDirectory, err := operationDirectoryInfo(stateRoot)
+	if err != nil {
+		_ = stateRoot.Close()
+		return nil, nil, nil, err
 	}
-	lockPath := filepath.Join(stateDir, "operation.lock")
-	info, err = os.Lstat(lockPath)
-	if err == nil && (!info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0) {
-		return "", fmt.Errorf("operation lock path must be a regular file: %s", lockPath)
+	return stateRoot, directory, stateDirectory, nil
+}
+
+func operationDirectoryInfo(root *os.Root) (os.FileInfo, error) {
+	file, err := root.Open(".")
+	if err != nil {
+		return nil, err
 	}
-	if err != nil && !os.IsNotExist(err) {
-		return "", fmt.Errorf("inspect operation lock path: %w", err)
-	}
-	if os.IsNotExist(err) && !create {
-		return "", fmt.Errorf("operation lock does not exist: %s", lockPath)
-	}
-	return lockPath, nil
+	defer file.Close()
+	return file.Stat()
 }
 
 // Path returns the stable lock-file path for diagnostics and tests. It does
@@ -190,6 +201,9 @@ func (lock *OperationLock) unlockLocked() error {
 	lock.released = true
 	unlockErr := unlockOperationFile(lock.file)
 	closeErr := lock.file.Close()
+	if lock.stateRoot != nil {
+		closeErr = errors.Join(closeErr, lock.stateRoot.Close())
+	}
 	if unlockErr != nil {
 		return fmt.Errorf("release operation lock: %w", unlockErr)
 	}

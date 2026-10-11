@@ -147,7 +147,7 @@ func (store Store) writeArtifactVerification(
 		filepath.Join(store.root, artifactVerificationDir, "sha256"),
 		filepath.Join(store.root, artifactVerificationDir, "sha256", hex[:2]),
 	} {
-		if err := ensureRealDirectory(directory); err != nil {
+		if err := store.ensureDirectory(directory); err != nil {
 			return err
 		}
 	}

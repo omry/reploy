@@ -570,7 +570,7 @@ func (store Store) recordAcquisitionFailure(operationID string, artifact Artifac
 		filepath.Join(store.root, acquisitionFailureRecordDir, "sha256", hex[:2], hex),
 		filepath.Dir(finalPath),
 	} {
-		if err := ensureRealDirectory(directory); err != nil {
+		if err := store.ensureDirectory(directory); err != nil {
 			return err
 		}
 	}
