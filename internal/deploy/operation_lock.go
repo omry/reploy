@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/omry/reploy/internal/fsowner"
 )
 
 const operationLockRelativePath = ".reploy/operation.lock"
@@ -82,6 +84,20 @@ func acquireOperationLock(ctx context.Context, deploymentDir string, create bool
 	if err != nil {
 		return nil, fmt.Errorf("open operation lock: %w", err)
 	}
+	// Transfer a newly opened metadata file before waiting, so cancellation
+	// cannot strand an operator-owned deployment with a root-only lock.
+	owner := fsowner.FromInfo(stateDirectory)
+	if create && owner.Enabled() {
+		identity := &OperationLock{file: file, path: lockPath, directory: directory, stateDirectory: stateDirectory}
+		if err := identity.requireHeldLocked(); err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+		if err := owner.File(file); err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+	}
 	for {
 		acquired, err := tryLockOperationFile(file)
 		if err != nil {
@@ -122,13 +138,26 @@ func prepareOperationLockPath(deploymentDir string, create bool) (string, error)
 		return "", fmt.Errorf("operation lock deployment path must be a real directory: %s", deploymentDir)
 	}
 	stateDir := filepath.Join(deploymentDir, ".reploy")
+	owner := fsowner.FromInfo(info)
 	info, err = os.Lstat(stateDir)
 	if os.IsNotExist(err) {
 		if !create {
 			return "", fmt.Errorf("operation lock state directory does not exist: %s", stateDir)
 		}
-		if mkdirErr := os.Mkdir(stateDir, 0o755); mkdirErr != nil && !os.IsExist(mkdirErr) {
+		mkdirErr := os.Mkdir(stateDir, 0o755)
+		if mkdirErr != nil && !os.IsExist(mkdirErr) {
 			return "", fmt.Errorf("create operation lock directory: %w", mkdirErr)
+		}
+		if mkdirErr == nil && owner.Enabled() {
+			root, openErr := os.OpenRoot(deploymentDir)
+			if openErr != nil {
+				return "", openErr
+			}
+			ownerErr := owner.At(root, ".reploy")
+			_ = root.Close()
+			if ownerErr != nil {
+				return "", ownerErr
+			}
 		}
 		info, err = os.Lstat(stateDir)
 	}
