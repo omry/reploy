@@ -23,6 +23,7 @@ func TestProviderInstallEntryMapsPublicOptionsWithoutAccountState(t *testing.T) 
 	}
 	called := false
 	_, err := runProviderInstallEntryV1(t.Context(), want, providerInstallEntryBackendV1{
+		effectiveUID: func() int { return 0 },
 		run: func(_ context.Context, got providerInstallRunInputV1, backend providerInstallRunBackend) (deploy.StateV1, error) {
 			called = true
 			if got.SourceDeploymentDir != want.SourceDeploymentDir || got.DestinationDeploymentDir != want.DestinationDeploymentDir || !reflect.DeepEqual(got.Runtime, want.Runtime) || got.ControlMode != want.ControlMode {

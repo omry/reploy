@@ -168,6 +168,9 @@ func verifyLoadedCurrentBuildV1(
 }
 
 func verifyLockedRuntimeV1(lock deploy.BuildLockV1, runtime CurrentRuntimePlanV1) error {
+	if err := requireCurrentAccountCompatibilityV1(lock, runtime.Docker); err != nil {
+		return fmt.Errorf("%s", runtimeBuildRecoveryForPhaseV1(runtime.Docker.Phase, err.Error()))
+	}
 	plans, err := RuntimePlansV1(runtime.Document, runtime.Docker)
 	if err != nil {
 		return fmt.Errorf("verify current runtime plans: %w", err)
