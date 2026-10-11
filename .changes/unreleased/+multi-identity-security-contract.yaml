@@ -1,0 +1,2 @@
+kind: Docs
+body: Document the Podman-only security contract and conformance requirements for future isolated multi-identity workloads.
