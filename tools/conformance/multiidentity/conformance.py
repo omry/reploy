@@ -38,6 +38,8 @@ DECLARED_GID = 2001
 DECLARED_GROUPS = (3001, 3002)
 RUNTIME_GID = 5
 EXPECTED_SUPERVISOR_CAPS = 0x1C0  # SETGID, SETUID, SETPCAP
+OWNER_LABEL = "reploy.multiidentity.attempt"
+BOUNDED_ID_COUNT = 4096
 
 
 class ConformanceError(RuntimeError):
@@ -143,12 +145,14 @@ def inventory(runner: Runner, runtime: str) -> dict[str, list[str]]:
             "containers": ["podman", "ps", "-aq"],
             "images": ["podman", "images", "-aq"],
             "volumes": ["podman", "volume", "ls", "-q"],
+            "networks": ["podman", "network", "ls", "-q"],
         }
     else:
         commands = {
             "containers": ["docker", "ps", "-aq"],
             "images": ["docker", "images", "-q", "--no-trunc"],
             "volumes": ["docker", "volume", "ls", "-q"],
+            "networks": ["docker", "network", "ls", "-q"],
         }
     return {
         name: sorted(filter(None, runner.run(command).stdout.splitlines()))
@@ -211,6 +215,31 @@ def require_enumerable_subid_backend() -> list[str]:
     return ["files"]
 
 
+def effective_caller() -> tuple[int, str, set[str]]:
+    """Return the effective UID's canonical account and accepted aliases.
+
+    ``getpass.getuser`` may be selected from process environment variables.
+    It is useful as a consistency check, but it is never an authority source.
+    """
+    uid = os.getuid()
+    effective_uid = os.geteuid()
+    if uid != effective_uid:
+        raise ConformanceError(
+            f"rootless caller requires matching real/effective UIDs: {uid} != {effective_uid}"
+        )
+    try:
+        canonical = pwd.getpwuid(effective_uid).pw_name
+    except KeyError as exc:
+        raise ConformanceError(f"no passwd account for effective UID {uid}") from exc
+    reported = getpass.getuser()
+    if reported != canonical:
+        raise ConformanceError(
+            f"login identity {reported!r} disagrees with passwd account "
+            f"{canonical!r} for effective UID {uid}"
+        )
+    return uid, canonical, {canonical, str(uid)}
+
+
 def host_context(runner: Runner) -> dict[str, Any]:
     podman_version = runner.json(["podman", "version", "--format", "json"])
     podman_info = runner.json(["podman", "info", "--format", "json"])
@@ -223,7 +252,7 @@ def host_context(runner: Runner) -> dict[str, Any]:
     if not seccomp_path.is_file():
         raise ConformanceError(f"Podman seccomp profile is missing: {seccomp_path}")
     subid_sources = require_enumerable_subid_backend()
-    username = getpass.getuser()
+    _, username, _ = effective_caller()
     subuid = pathlib.Path("/etc/subuid").read_text(encoding="utf-8")
     subgid = pathlib.Path("/etc/subgid").read_text(encoding="utf-8")
     uname = os.uname()
@@ -267,12 +296,12 @@ def host_context(runner: Runner) -> dict[str, Any]:
     }
 
 
-def build_image(runner: Runner, output: pathlib.Path, tag: str) -> dict[str, Any]:
+def build_image(runner: Runner, output: pathlib.Path, tag: str, token: str) -> dict[str, Any]:
     staging = output / "build-context"
     staging.mkdir()
     probe = staging / "probe"
     posix_ipc_probe = staging / "posix-ipc-probe"
-    env = {"GOCACHE": str(output / "go-cache"), "CGO_ENABLED": "0"}
+    env = {"CGO_ENABLED": "0"}
     runner.run(
         [
             "go", "build", "-trimpath", "-buildvcs=false",
@@ -289,7 +318,12 @@ def build_image(runner: Runner, output: pathlib.Path, tag: str) -> dict[str, Any
     shutil.copy2(HERE / "Containerfile", staging / "Containerfile")
     build = runner.run(
         [
+            # Keep the disposable fixture atomic at the image-store boundary:
+            # a failed RUN must not leave unlabelled intermediate cache images
+            # or a retained build container outside attempt-owned cleanup.
             "podman", "build", "--network=none", "--pull=never",
+            "--layers=false", "--force-rm=true",
+            "--label", f"{OWNER_LABEL}={token}",
             "--file", staging / "Containerfile", "--tag", tag, staging,
         ],
         timeout=300,
@@ -427,6 +461,64 @@ def mapped_container_ids(mapping: list[tuple[int, int, int]]) -> set[int]:
     return result
 
 
+def assert_bounded_mapping_geometry(
+    mapping: list[tuple[int, int, int]],
+    *,
+    kind: str,
+    workload: int,
+) -> dict[str, int | list[int]]:
+    """Require the bounded map to be one ordered, contiguous affine range.
+
+    The kernel exposes mappings as ordered segments.  Set equality alone would
+    accept reordered or fragmented segments, so validate both the segment
+    sequence and its translation before any payload can be released.
+    """
+    next_container = 0
+    next_host: int | None = None
+    offset: int | None = None
+    for index, (container_start, host_start, count) in enumerate(mapping):
+        prefix = f"workload {workload} bounded {kind} mapping geometry"
+        if count <= 0:
+            raise ConformanceError(
+                f"{prefix} segment {index} has non-positive length: {count}"
+            )
+        if container_start != next_container:
+            raise ConformanceError(
+                f"{prefix} has a gap, overlap, or reordered segment at index {index}"
+            )
+        if next_host is not None and host_start != next_host:
+            raise ConformanceError(
+                f"{prefix} host range is not contiguous at segment {index}"
+            )
+        segment_offset = host_start - container_start
+        if offset is None:
+            offset = segment_offset
+        elif segment_offset != offset:
+            raise ConformanceError(
+                f"{prefix} changes affine offset at segment {index}"
+            )
+        next_container += count
+        next_host = host_start + count
+
+    if next_container != BOUNDED_ID_COUNT:
+        raise ConformanceError(
+            f"workload {workload} bounded {kind} mapping geometry covers "
+            f"{next_container} IDs, expected {BOUNDED_ID_COUNT}"
+        )
+    if next_host is None or offset is None:
+        raise ConformanceError(
+            f"workload {workload} bounded {kind} mapping geometry is empty"
+        )
+    return {
+        "container_start": 0,
+        "container_end": BOUNDED_ID_COUNT - 1,
+        "host_start": next_host - BOUNDED_ID_COUNT,
+        "host_end": next_host - 1,
+        "offset": offset,
+        "segments": len(mapping),
+    }
+
+
 def assert_mapping_profile(
     profile: str,
     uid_maps: list[list[tuple[int, int, int]]],
@@ -435,13 +527,18 @@ def assert_mapping_profile(
     expected_uids = (
         {0, SUPERVISOR_UID, DECLARED_UID}
         if profile == "exact"
-        else set(range(4096))
+        else set(range(BOUNDED_ID_COUNT))
     )
     expected_gids = (
         {0, RUNTIME_GID, SUPERVISOR_GID, DECLARED_GID, *DECLARED_GROUPS}
         if profile == "exact"
-        else set(range(4096))
+        else set(range(BOUNDED_ID_COUNT))
     )
+    if profile == "bounded":
+        for index, uid_map in enumerate(uid_maps):
+            assert_bounded_mapping_geometry(uid_map, kind="UID", workload=index)
+        for index, gid_map in enumerate(gid_maps):
+            assert_bounded_mapping_geometry(gid_map, kind="GID", workload=index)
     actual_uids = [mapped_container_ids(mapping) for mapping in uid_maps]
     actual_gids = [mapped_container_ids(mapping) for mapping in gid_maps]
     for index, values in enumerate(actual_uids):
@@ -555,13 +652,19 @@ def validate_host_authority(
         collisions = resolve_gids(values)
         if collisions:
             raise ConformanceError(f"GID mapping aliases NSS principals: {collisions}")
-    if uid_sets[0] & uid_sets[1] or gid_sets[0] & gid_sets[1]:
-        raise ConformanceError("workload mappings overlap")
+    if not uid_sets or len(uid_sets) != len(gid_sets):
+        raise ConformanceError("authority requires matching nonempty UID/GID maps")
+    for index in range(len(uid_sets)):
+        for previous in range(index):
+            if uid_sets[index] & uid_sets[previous] or gid_sets[index] & gid_sets[previous]:
+                raise ConformanceError("workload mappings overlap")
+    all_uids = set().union(*uid_sets)
+    all_gids = set().union(*gid_sets)
     for name, start, count in uid_ranges:
-        if name not in caller_names and any(start <= value < start + count for value in uid_sets[0] | uid_sets[1]):
+        if name not in caller_names and any(start <= value < start + count for value in all_uids):
             raise ConformanceError(f"UID mapping overlaps delegation for {name}")
     for name, start, count in gid_ranges:
-        if name not in caller_names and any(start <= value < start + count for value in gid_sets[0] | gid_sets[1]):
+        if name not in caller_names and any(start <= value < start + count for value in all_gids):
             raise ConformanceError(f"GID mapping overlaps delegation for {name}")
     return {
         "pass": True,
@@ -591,10 +694,11 @@ def assert_host_authority(
     runner: Runner,
     uid_maps: list[list[tuple[int, int, int]]],
     gid_maps: list[list[tuple[int, int, int]]],
+    *,
+    planned_pool: bool = False,
 ) -> dict[str, Any]:
     require_enumerable_subid_backend()
-    username = getpass.getuser()
-    caller_names = {username, str(os.getuid())}
+    uid, username, caller_names = effective_caller()
     uid_ranges = parse_subids(pathlib.Path("/etc/subuid"))
     gid_ranges = parse_subids(pathlib.Path("/etc/subgid"))
     own_uids = owned_subid_ranges(uid_ranges, caller_names)
@@ -620,11 +724,21 @@ def assert_host_authority(
             f"{own_gids} != {authoritative_gids}"
         )
 
+    # Cache only within this admission check. Synthetic negative cases repeat
+    # the same lookups; every later admission takes a fresh NSS snapshot.
+    principal_cache: dict[tuple[bool, frozenset[int]], dict[int, str]] = {}
+
+    def resolve(values: set[int], gids: bool) -> dict[int, str]:
+        key = (gids, frozenset(values))
+        if key not in principal_cache:
+            principal_cache[key] = resolved_principals(values, gids=gids)
+        return principal_cache[key]
+
     def resolve_uids(values: set[int]) -> dict[int, str]:
-        return resolved_principals(values, gids=False)
+        return resolve(values, False)
 
     def resolve_gids(values: set[int]) -> dict[int, str]:
-        return resolved_principals(values, gids=True)
+        return resolve(values, True)
 
     authority_args = {
         "caller_names": caller_names,
@@ -633,6 +747,11 @@ def assert_host_authority(
         "own_uids": own_uids,
         "own_gids": own_gids,
     }
+    if planned_pool:
+        # Automatic bounded allocation may select any ID in this delegation.
+        # Validate the entire pool before creating images, volumes or containers.
+        uid_maps = [[(0, start, count) for start, count in own_uids]]
+        gid_maps = [[(0, start, count) for start, count in own_gids]]
     positive = validate_host_authority(
         uid_maps,
         gid_maps,
@@ -710,7 +829,7 @@ def assert_host_authority(
         ),
     }
     numeric_owner_probe = owned_subid_ranges(
-        [(str(os.getuid()), own_uids[0][0], own_uids[0][1])],
+        [(str(uid), own_uids[0][0], own_uids[0][1])],
         caller_names,
     )
     if numeric_owner_probe != [own_uids[0]]:
@@ -720,6 +839,7 @@ def assert_host_authority(
         "caller_owner_aliases": sorted(caller_names),
         "numeric_owner_alias_supported": True,
         "negative_collision_cases": negative_cases,
+        "planned_pool": planned_pool,
     }
 
 
@@ -802,6 +922,56 @@ def require_pass(name: str, value: dict[str, Any]) -> None:
         raise ConformanceError(f"{name} failed: {json.dumps(value, sort_keys=True)}")
 
 
+def resource_exists(runner: Runner, kind: str, identity: str) -> bool:
+    result = runner.run(["podman", kind, "exists", identity], check=False)
+    if result.returncode not in (0, 1):
+        raise ConformanceError(f"cannot establish {kind} existence: {result.stderr}")
+    return result.returncode == 0
+
+
+def owned_resource(runner: Runner, kind: str, identity: str, token: str) -> dict[str, Any]:
+    values = runner.json(["podman", kind, "inspect", identity])
+    if not isinstance(values, list) or len(values) != 1:
+        raise ConformanceError(f"unexpected {kind} inspect: {identity}")
+    item = values[0]
+    labels = item.get("Labels") or item.get("Config", {}).get("Labels") or {}
+    if labels.get(OWNER_LABEL) != token:
+        raise ConformanceError(f"refusing foreign {kind} resource: {identity}")
+    return item
+
+
+def remove_owned_resource(runner: Runner, kind: str, identity: str, token: str) -> dict[str, Any]:
+    if not resource_exists(runner, kind, identity):
+        return {"pass": True, "already_absent": True}
+    owned_resource(runner, kind, identity, token)
+    result = runner.run(["podman", kind, "rm", "-f", identity], check=False)
+    return {"pass": result.returncode == 0 and not resource_exists(runner, kind, identity),
+            "returncode": result.returncode, "stderr": result.stderr}
+
+
+def wait_admission(runner: Runner, container: str, nonce: str) -> None:
+    for _ in range(40):
+        logs = runner.run(["podman", "logs", container])
+        if f"admission-ready {nonce}" in logs.stdout.splitlines():
+            return
+        time.sleep(0.1)
+    raise ConformanceError(f"container did not enter admission wait: {container}")
+
+
+def release_admission(runner: Runner, container: str, nonce: str) -> None:
+    runner.run(["podman", "exec", container, "/probe", "admission-release", nonce])
+
+
+def control_report(runner: Runner, container: str, nonce: str) -> dict[str, Any]:
+    release_admission(runner, container, nonce)
+    if runner.run(["podman", "wait", container]).stdout.strip() != "0":
+        raise ConformanceError(f"control payload failed: {container}")
+    lines = runner.run(["podman", "logs", container]).stdout.splitlines()
+    if not lines or lines[0] != f"admission-ready {nonce}":
+        raise ConformanceError(f"missing control admission record: {container}")
+    return json.loads("\n".join(lines[1:]))
+
+
 def run_trial(
     runner: Runner,
     output: pathlib.Path,
@@ -819,26 +989,56 @@ def run_trial(
     created_volumes: list[str] = []
     cleanup: dict[str, Any] = {"containers": {}, "volumes": {}}
     try:
+        planned_authority = assert_host_authority(runner, [], [], planned_pool=True)
         mountpoints = []
         for volume in volumes:
-            runner.run(["podman", "volume", "create", volume])
+            if resource_exists(runner, "volume", volume):
+                raise ConformanceError(f"volume name already exists: {volume}")
             created_volumes.append(volume)
-            mountpoint = runner.run(
-                ["podman", "volume", "inspect", "--format", "{{.Mountpoint}}", volume]
-            ).stdout.strip()
+            runner.run(["podman", "volume", "create", "--label", f"{OWNER_LABEL}={token}", volume])
+            mountpoint = owned_resource(runner, "volume", volume, token)["Mountpoint"]
             pathlib.Path(mountpoint).chmod(0o777)
             mountpoints.append(mountpoint)
-        for slot, (name, volume) in enumerate(zip(names, volumes)):
-            args = common_run_args(name, seccomp_path, profile, slot, volume=volume)
-            runner.run([*args, "--detach", image])
+        no_cap_name = f"reploy-mi-{token}-{profile}-{iteration}-nocap"
+        seccomp_control_name = f"reploy-mi-{token}-{profile}-{iteration}-seccomp-control"
+        all_names = [*names, no_cap_name, seccomp_control_name]
+        modes = ["supervisor", "supervisor", "cap-report", "seccomp-control"]
+        nonces = [secrets.token_hex(16) for _ in all_names]
+        for slot, name in enumerate(all_names):
+            if resource_exists(runner, "container", name):
+                raise ConformanceError(f"container name already exists: {name}")
+            args = common_run_args(
+                name, seccomp_path, profile, slot,
+                volume=volumes[slot] if slot < 2 else None,
+                capabilities=slot < 2,
+                seccomp_override="unconfined" if slot == 3 else None,
+            )
+            args[1] = "create"
             created_containers.append(name)
+            identity = runner.run([*args, "--label", f"{OWNER_LABEL}={token}", image,
+                                   "admission-wait", nonces[slot], modes[slot]]).stdout.strip()
+            if len(identity) != 64 or any(ch not in "0123456789abcdef" for ch in identity):
+                raise ConformanceError(f"invalid created container ID: {identity}")
+            created_containers[-1] = identity
+            owned_resource(runner, "container", identity, token)
+            runner.run(["podman", "start", identity])
+            wait_admission(runner, identity, nonces[slot])
+
+        all_inspections = [inspect_container(runner, identity) for identity in created_containers]
+        all_pids = [int(value["State"]["Pid"]) for value in all_inspections]
+        all_uid_maps = [parse_id_map(read_proc(pid, "uid_map")) for pid in all_pids]
+        all_gid_maps = [parse_id_map(read_proc(pid, "gid_map")) for pid in all_pids]
+        mapping_profile = assert_mapping_profile(profile, all_uid_maps, all_gid_maps)
+        authority = assert_host_authority(runner, all_uid_maps, all_gid_maps)
+        # No supervisor, application or control payload runs before this point.
+        for slot, name in enumerate(names):
+            release_admission(runner, created_containers[slot], nonces[slot])
             wait_ready(runner, name)
 
-        inspections = [inspect_container(runner, name) for name in names]
-        pids = [int(value["State"]["Pid"]) for value in inspections]
-        uid_maps = [parse_id_map(read_proc(pid, "uid_map")) for pid in pids]
-        gid_maps = [parse_id_map(read_proc(pid, "gid_map")) for pid in pids]
-        mapping_profile = assert_mapping_profile(profile, uid_maps, gid_maps)
+        inspections = all_inspections[:2]
+        pids = all_pids[:2]
+        uid_maps = all_uid_maps[:2]
+        gid_maps = all_gid_maps[:2]
         namespaces = [namespace_snapshot(pid) for pid in pids]
         mounts = [mount_snapshot(pid) for pid in pids]
         for namespace in ("pid", "ipc", "net", "mnt", "user"):
@@ -882,12 +1082,7 @@ def run_trial(
         raw = runner.json(["podman", "exec", names[0], "/probe", "raw-matrix", profile])
         require_pass("raw identity matrix", raw)
 
-        no_cap_name = f"reploy-mi-{token}-{profile}-{iteration}-nocap"
-        no_cap_args = common_run_args(
-            no_cap_name, seccomp_path, profile, 2, capabilities=False
-        )
-        created_containers.append(no_cap_name)
-        no_cap = runner.json([*no_cap_args, "--rm", image, "cap-report"])
+        no_cap = control_report(runner, created_containers[2], nonces[2])
         require_pass("no-capability default", no_cap)
 
         owners = [
@@ -897,22 +1092,9 @@ def run_trial(
             }
             for mountpoint in mountpoints
         ]
-        seccomp_control_name = f"reploy-mi-{token}-{profile}-{iteration}-seccomp-control"
-        seccomp_control_args = common_run_args(
-            seccomp_control_name,
-            seccomp_path,
-            profile,
-            3,
-            capabilities=False,
-            seccomp_override="unconfined",
-        )
-        created_containers.append(seccomp_control_name)
-        seccomp_control = runner.json(
-            [*seccomp_control_args, "--rm", image, "seccomp-control"]
-        )
+        seccomp_control = control_report(runner, created_containers[3], nonces[3])
         require_pass("unfiltered seccomp control", seccomp_control)
 
-        authority = assert_host_authority(runner, uid_maps, gid_maps)
         expected_owners = []
         for mapping_uid, mapping_gid in zip(uid_maps, gid_maps):
             uid_segment = next(item for item in mapping_uid if item[0] <= DECLARED_UID < item[0] + item[2])
@@ -938,6 +1120,13 @@ def run_trial(
             "gid_maps": gid_maps,
             "mapping_profile": mapping_profile,
             "authority": authority,
+            "planned_authority": planned_authority,
+            "pre_payload_admission": [
+                {"pass": True, "name": name, "identity": identity,
+                 "mode": mode, "uid_map": uid_map, "gid_map": gid_map}
+                for name, identity, mode, uid_map, gid_map in zip(
+                    all_names, created_containers, modes, all_uid_maps, all_gid_maps, strict=True)
+            ],
             "namespaces": namespaces,
             "mounts": mounts,
             "supervisor": supervisor,
@@ -959,27 +1148,27 @@ def run_trial(
         write_json(trial / "evidence.json", evidence)
         return evidence
     finally:
-        for name in reversed(created_containers):
-            result = runner.run(["podman", "rm", "-f", name], check=False, timeout=30)
-            cleanup["containers"][name] = {
-                "returncode": result.returncode,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-            }
-        for volume in reversed(created_volumes):
-            result = runner.run(["podman", "volume", "rm", "-f", volume], check=False)
-            cleanup["volumes"][volume] = {
-                "returncode": result.returncode,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-            }
+        for kind, identities, key in (("container", created_containers, "containers"),
+                                       ("volume", created_volumes, "volumes")):
+            for identity in reversed(identities):
+                try:
+                    cleanup[key][identity] = remove_owned_resource(runner, kind, identity, token)
+                except Exception as exc:
+                    cleanup[key][identity] = {"pass": False, "error": str(exc)}
         cleanup["remaining_containers"] = runner.run(
             ["podman", "ps", "-aq", "--filter", f"name=reploy-mi-{token}-"]
         ).stdout.splitlines()
         cleanup["remaining_volumes"] = runner.run(
             ["podman", "volume", "ls", "-q", "--filter", f"name=reploy-mi-{token}-"]
         ).stdout.splitlines()
-        cleanup["pass"] = not cleanup["remaining_containers"] and not cleanup["remaining_volumes"]
+        cleanup["remaining_networks"] = runner.run(
+            ["podman", "network", "ls", "-q", "--filter", f"name=reploy-mi-{token}-"]
+        ).stdout.splitlines()
+        cleanup["pass"] = (not cleanup["remaining_containers"]
+                           and not cleanup["remaining_volumes"]
+                           and not cleanup["remaining_networks"]
+                           and all(value["pass"] for key in ("containers", "volumes")
+                                   for value in cleanup[key].values()))
         write_json(trial / "cleanup.json", cleanup)
         if not cleanup["pass"] and sys.exc_info()[0] is None:
             raise ConformanceError(f"trial cleanup incomplete: {cleanup}")
@@ -1007,6 +1196,7 @@ def main() -> int:
     )
     image = f"localhost/reploy-local/multiidentity-conformance:{token}"
     baseline: dict[str, list[str]] | None = None
+    image_attempted = False
     summary: dict[str, Any] = {
         "schema": "reploy-private-multiidentity-conformance-v1",
         "started_at": timestamp,
@@ -1020,7 +1210,12 @@ def main() -> int:
         write_json(output / "host.json", host)
         negative = docker_negative(runner)
         write_json(output / "docker-negative.json", negative)
-        image_evidence = build_image(runner, output, image)
+        planned_authority = assert_host_authority(runner, [], [], planned_pool=True)
+        write_json(output / "planned-authority.json", planned_authority)
+        if resource_exists(runner, "image", image):
+            raise ConformanceError(f"image tag already exists: {image}")
+        image_attempted = True
+        image_evidence = build_image(runner, output, image, token)
         write_json(output / "image.json", image_evidence)
         trials = []
         seccomp_path = host["seccomp_profile"]["path"]
@@ -1054,12 +1249,16 @@ def main() -> int:
     except Exception as exc:
         summary["error"] = f"{type(exc).__name__}: {exc}"
     finally:
-        remove = runner.run(["podman", "image", "rm", "-f", image], check=False, timeout=60)
-        summary["image_cleanup"] = {
-            "returncode": remove.returncode,
-            "stdout": remove.stdout,
-            "stderr": remove.stderr,
-        }
+        try:
+            summary["image_cleanup"] = (
+                remove_owned_resource(runner, "image", image, token)
+                if image_attempted else {"pass": True, "not_attempted": True}
+            )
+        except Exception as exc:
+            summary["image_cleanup"] = {"pass": False, "error": str(exc)}
+        if not summary["image_cleanup"]["pass"]:
+            summary["pass"] = False
+            summary["error"] = "attempt-owned image cleanup failed"
         if baseline is not None:
             final = inventory(runner, "podman")
             summary["podman_inventory_before"] = baseline
