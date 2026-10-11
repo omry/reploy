@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve ordinary-user access to staging metadata, provider caches, retained build diagnostics, generated control scripts, and newly created managed directories during privileged installation. Keep source builds under the staging operator's account instead of rebuilding them as root.

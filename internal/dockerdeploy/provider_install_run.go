@@ -150,7 +150,7 @@ func runProviderInstallV1(
 	}
 	input.SourceDeploymentDir = sourceDir
 	if destinationDir != "" {
-		if err := preflightProviderInstallDestinationRoleV1(ctx, destinationDir, backend.acquire, backend.release); err != nil {
+		if err := preflightProviderInstallDestinationV1(destinationDir, ""); err != nil {
 			return deploy.StateV1{}, err
 		}
 	}
@@ -164,7 +164,45 @@ func runProviderInstallV1(
 			err = releaseErr
 		}
 	}()
+	sourceState, found, err := sourceOperation.ReadStateV1()
+	if err != nil {
+		return deploy.StateV1{}, fmt.Errorf("read install source state %s: %w", filepath.Join(sourceDir, StateFileName), err)
+	}
+	if !found || sourceState.Deployment != nil || sourceState.TerminalRemoval {
+		return deploy.StateV1{}, fmt.Errorf("install source %s must contain active staging state", filepath.Join(sourceDir, StateFileName))
+	}
+	sourceDocument, err := blueprint.DecodeResolvedDocumentV1(sourceState.Blueprint)
+	if err != nil {
+		return deploy.StateV1{}, fmt.Errorf("install source blueprint: %w", err)
+	}
+	if destinationDir == "" {
+		destinationDir, err = resolveProviderInstallDestinationV1(sourceDocument, input)
+		if err != nil {
+			return deploy.StateV1{}, fmt.Errorf("resolve provider install destination: %w", err)
+		}
+		if installPathsOverlap(sourceDir, destinationDir) {
+			return deploy.StateV1{}, fmt.Errorf("provider install source and destination must not overlap")
+		}
+	}
+	input.DestinationDeploymentDir = destinationDir
+	service, err := providerInstallServiceV1(sourceDocument.Environment.ID, input.Install.Service)
+	if err != nil {
+		return deploy.StateV1{}, err
+	}
+	if err := preflightProviderInstallDestinationV1(destinationDir, service); err != nil {
+		return deploy.StateV1{}, err
+	}
 	sourceStore, err := backend.newStore(sourceDir)
+	if err != nil {
+		return deploy.StateV1{}, err
+	}
+	sourceStore = sourceStore.WithWorkspaceOwnerRestoration()
+	defer func() {
+		if ownerErr := sourceStore.RestoreWorkspaceOwners(); ownerErr != nil {
+			err = errors.Join(err, fmt.Errorf("restore staged source workspace ownership: %w", ownerErr))
+		}
+	}()
+	input.Runtime, err = privilegedSourceRuntimeV1(sourceOperation, sourceDir, input.Runtime)
 	if err != nil {
 		return deploy.StateV1{}, err
 	}
@@ -187,6 +225,9 @@ func runProviderInstallV1(
 		return deploy.StateV1{}, err
 	}
 	sourceBuild := CurrentBuild{State: built.State, Generation: *built.State.Current, Lock: built.Lock}
+	if !reflect.DeepEqual(sourceBuild.State.Blueprint, sourceState.Blueprint) {
+		return deploy.StateV1{}, fmt.Errorf("install source blueprint changed after destination preflight")
+	}
 	document, err := blueprint.DecodeResolvedDocumentV1(sourceBuild.State.Blueprint)
 	if err != nil {
 		return deploy.StateV1{}, fmt.Errorf("provider install source blueprint: %w", err)
@@ -199,20 +240,6 @@ func runProviderInstallV1(
 		if len(groups) == 0 {
 			return deploy.StateV1{}, fmt.Errorf("portable installed publication is not yet supported for an unconsumed application request")
 		}
-	}
-	if destinationDir == "" {
-		destinationDir, err = resolveProviderInstallDestinationV1(document, input)
-		if err != nil {
-			return deploy.StateV1{}, fmt.Errorf("resolve provider install destination: %w", err)
-		}
-		if installPathsOverlap(sourceDir, destinationDir) {
-			return deploy.StateV1{}, fmt.Errorf("provider install source and destination must not overlap")
-		}
-	}
-	input.DestinationDeploymentDir = destinationDir
-	service, err := providerInstallServiceV1(document.Environment.ID, input.Install.Service)
-	if err != nil {
-		return deploy.StateV1{}, err
 	}
 
 	var destinationOperation *deploy.OperationLock
@@ -475,42 +502,6 @@ func runProviderInstallV1(
 		input.result.State = ready
 	}
 	return ready, nil
-}
-
-func preflightProviderInstallDestinationRoleV1(
-	ctx context.Context,
-	destinationDir string,
-	acquire func(context.Context, string) (*deploy.OperationLock, error),
-	release func(*deploy.OperationLock) error,
-) (err error) {
-	if ctx == nil {
-		return fmt.Errorf("preflight provider install destination requires a context")
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if destinationDir == "" || acquire == nil || release == nil {
-		return fmt.Errorf("preflight provider install destination requires a directory and lock backend")
-	}
-	if _, err := os.Lstat(filepath.Join(destinationDir, StateFileName)); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("inspect provider install destination state: %w", err)
-	}
-	operation, err := acquire(ctx, destinationDir)
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, release(operation)) }()
-	state, found, err := operation.ReadStateV1()
-	if err != nil {
-		return err
-	}
-	if found && state.Deployment == nil {
-		return fmt.Errorf("destination contains a staging deployment; choose a different install target")
-	}
-	return nil
 }
 
 func providerInstallDestinationExistsV1(destinationDir string) (bool, error) {

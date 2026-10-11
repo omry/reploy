@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/omry/reploy/internal/canonical"
+	"github.com/omry/reploy/internal/fsowner"
 	"github.com/omry/reploy/internal/providers"
 )
 
@@ -53,6 +54,9 @@ func (lock *OperationLock) PublishBuildLock(record BuildLockV1, validateProfileO
 	}()
 	if err := temporary.Chmod(0o600); err != nil {
 		return "", fmt.Errorf("protect temporary build lock: %w", err)
+	}
+	if err := fsowner.FromInfo(lock.stateDirectory).File(temporary); err != nil {
+		return "", fmt.Errorf("preserve build lock owner: %w", err)
 	}
 	if _, err := temporary.Write(content); err != nil {
 		return "", fmt.Errorf("write temporary build lock: %w", err)
@@ -279,6 +283,17 @@ func (lock *OperationLock) buildLockPathLocked(digest canonical.Digest, createDi
 			return "", fmt.Errorf("create build lock directory: %w", mkdirErr)
 		}
 		info, err = os.Lstat(directory)
+		if err == nil {
+			root, openErr := os.OpenRoot(filepath.Dir(lock.path))
+			if openErr != nil {
+				return "", openErr
+			}
+			ownerErr := fsowner.FromInfo(lock.stateDirectory).At(root, buildLockDirectoryName)
+			_ = root.Close()
+			if ownerErr != nil {
+				return "", fmt.Errorf("preserve build lock directory owner: %w", ownerErr)
+			}
+		}
 	}
 	if errors.Is(err, fs.ErrNotExist) {
 		return filepath.Join(directory, buildLockFilename(digest)), nil

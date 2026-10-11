@@ -3,7 +3,9 @@ package dockerdeploy
 import (
 	"context"
 	"fmt"
+	"os"
 
+	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 )
 
@@ -23,7 +25,8 @@ type ProviderInstallInputV1 struct {
 }
 
 type providerInstallEntryBackendV1 struct {
-	run func(context.Context, providerInstallRunInputV1, providerInstallRunBackend) (deploy.StateV1, error)
+	run          func(context.Context, providerInstallRunInputV1, providerInstallRunBackend) (deploy.StateV1, error)
+	effectiveUID func() int
 }
 
 func RunProviderInstallV1(ctx context.Context, input ProviderInstallInputV1) (deploy.StateV1, error) {
@@ -44,19 +47,9 @@ func runProviderInstallEntryV1(
 	if backend.run == nil {
 		return deploy.StateV1{}, fmt.Errorf("provider install requires a complete backend")
 	}
-	scope, err := ParseInstallScope(string(input.Scope))
+	scope, err := validateProviderInstallEntryV1(input.Scope, input.Runtime.Host, input.Service, backend.effectiveUID)
 	if err != nil {
 		return deploy.StateV1{}, err
-	}
-	platform, err := installHostPlatformV1(input.Runtime.Host)
-	if err != nil {
-		return deploy.StateV1{}, err
-	}
-	if err := validateInstallScopeForBackend(scope, platform.installBackendForScope(scope), platform); err != nil {
-		return deploy.StateV1{}, err
-	}
-	if input.Service != "" && !validServiceName(input.Service) {
-		return deploy.StateV1{}, fmt.Errorf("--service contains unsupported characters: %s", input.Service)
 	}
 	return backend.run(ctx, providerInstallRunInputV1{
 		SourceDeploymentDir:      input.SourceDeploymentDir,
@@ -74,6 +67,33 @@ func runProviderInstallEntryV1(
 		RunOptions: input.RunOptions,
 		result:     input.result,
 	}, newProviderInstallRunBackendV1())
+}
+
+// Privilege comes from the executing process, never the application runtime
+// account or a sudo/login environment variable. Direct install uses this same
+// gate before fetching or staging its source.
+func validateProviderInstallEntryV1(scopeInput InstallScope, host blueprint.HostOS, service string, effectiveUID func() int) (InstallScope, error) {
+	scope, err := ParseInstallScope(string(scopeInput))
+	if err != nil {
+		return "", err
+	}
+	platform, err := installHostPlatformV1(host)
+	if err != nil {
+		return "", err
+	}
+	if err := validateInstallScopeForBackend(scope, platform.installBackendForScope(scope), platform); err != nil {
+		return "", err
+	}
+	if service != "" && !validServiceName(service) {
+		return "", fmt.Errorf("--service contains unsupported characters: %s", service)
+	}
+	if effectiveUID == nil {
+		effectiveUID = os.Geteuid
+	}
+	if scope == InstallScopeSystem && effectiveUID() != 0 {
+		return "", fmt.Errorf("--scope system requires root privileges; rerun the original install command with sudo")
+	}
+	return scope, nil
 }
 
 // RunProviderInstallResultV1 installs one staged deployment and returns the
