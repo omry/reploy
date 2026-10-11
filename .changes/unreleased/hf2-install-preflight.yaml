@@ -1,0 +1,2 @@
+kind: Fixed
+body: Reject unprivileged system installs before source fetching, check incompatible install destinations before building, and report recorded runtime account mismatches consistently in verify and status.

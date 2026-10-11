@@ -30,10 +30,11 @@ type DirectProviderInstallResultV1 struct {
 }
 
 type directProviderInstallEntryBackendV1 struct {
-	withSource func(context.Context, directProviderInstallSourceInputV1, func(context.Context, string) error) error
-	readState  func(context.Context, string) (deploy.StateV1, error)
-	install    func(context.Context, ProviderInstallInputV1) (deploy.StateV1, error)
-	roots      func(string) (installTargetRootsV1, error)
+	effectiveUID func() int
+	withSource   func(context.Context, directProviderInstallSourceInputV1, func(context.Context, string) error) error
+	readState    func(context.Context, string) (deploy.StateV1, error)
+	install      func(context.Context, ProviderInstallInputV1) (deploy.StateV1, error)
+	roots        func(string) (installTargetRootsV1, error)
 }
 
 func RunDirectProviderInstallV1(ctx context.Context, input DirectProviderInstallInputV1) (DirectProviderInstallResultV1, error) {
@@ -59,6 +60,11 @@ func runDirectProviderInstallEntryV1(
 	if backend.withSource == nil || backend.readState == nil || backend.install == nil || backend.roots == nil {
 		return result, fmt.Errorf("direct provider install requires a complete backend")
 	}
+	scope, err := validateProviderInstallEntryV1(input.Scope, input.Runtime.Host, input.Service, backend.effectiveUID)
+	if err != nil {
+		return result, err
+	}
+	input.Scope = scope
 	err = backend.withSource(ctx, directProviderInstallSourceInputV1{
 		Pack: input.Pack, ExplicitPlatform: input.ExplicitPlatform,
 	}, func(ctx context.Context, sourceDir string) error {
