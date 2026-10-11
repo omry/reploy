@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/fsowner"
 )
 
 // PrepareStagedManagedBindPathsV1 ensures that every Reploy-owned bind source
@@ -50,11 +51,26 @@ func requireRealManagedPathDirectory(path string, create bool) error {
 	for {
 		info, err := os.Lstat(path)
 		if os.IsNotExist(err) && create {
+			owner, err := fsowner.Directory(filepath.Dir(path))
+			if err != nil {
+				return err
+			}
 			if err := os.Mkdir(path, 0o755); err != nil {
 				if os.IsExist(err) {
 					continue
 				}
 				return err
+			}
+			if owner.Enabled() {
+				root, err := os.OpenRoot(filepath.Dir(path))
+				if err != nil {
+					return err
+				}
+				err = owner.At(root, filepath.Base(path))
+				_ = root.Close()
+				if err != nil {
+					return err
+				}
 			}
 			continue
 		}
