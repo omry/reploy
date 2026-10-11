@@ -126,6 +126,9 @@ func runCurrentRuntimeObservationV1(
 		return fmt.Errorf("runtime current-build check: %w", err)
 	}
 	if !matched {
+		if err := requireCurrentAccountCompatibilityV1(current.Lock, planned.Docker); err != nil {
+			return fmt.Errorf("%s", currentBuildRecoveryMessageV1(state, err.Error()))
+		}
 		return fmt.Errorf("%s", currentBuildRecoveryMessageV1(state, "runtime build is missing or stale"))
 	}
 	if err := backend.requireInputs(operation, dir, planned); err != nil {
