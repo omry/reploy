@@ -168,6 +168,16 @@ func runProviderInstallV1(
 	if err != nil {
 		return deploy.StateV1{}, err
 	}
+	sourceStore = sourceStore.WithWorkspaceOwnerRestoration()
+	defer func() {
+		if ownerErr := sourceStore.RestoreWorkspaceOwners(); ownerErr != nil {
+			err = errors.Join(err, fmt.Errorf("restore staged source workspace ownership: %w", ownerErr))
+		}
+	}()
+	input.Runtime, err = privilegedSourceRuntimeV1(sourceOperation, sourceDir, input.Runtime)
+	if err != nil {
+		return deploy.StateV1{}, err
+	}
 	writeProviderBuildProgress(input.RunOptions.Progress, "preparing current staged environment")
 	built, err := backend.buildSource(ctx, LockedProviderBuildRunInputV1{
 		Operation: sourceOperation, Store: sourceStore, DeploymentDir: sourceDir,

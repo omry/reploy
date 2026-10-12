@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/omry/reploy/internal/canonical"
+	"github.com/omry/reploy/internal/fsowner"
 	"github.com/omry/reploy/internal/providers"
 )
 
@@ -53,6 +54,9 @@ func (lock *OperationLock) PublishBuildLock(record BuildLockV1, validateProfileO
 	}()
 	if err := temporary.Chmod(0o600); err != nil {
 		return "", fmt.Errorf("protect temporary build lock: %w", err)
+	}
+	if err := fsowner.FromInfo(lock.stateDirectory).File(temporary); err != nil {
+		return "", fmt.Errorf("preserve build lock owner: %w", err)
 	}
 	if _, err := temporary.Write(content); err != nil {
 		return "", fmt.Errorf("write temporary build lock: %w", err)
@@ -273,22 +277,23 @@ func (lock *OperationLock) buildLockPathLocked(digest canonical.Digest, createDi
 		return "", fmt.Errorf("build lock digest: %w", err)
 	}
 	directory := filepath.Join(filepath.Dir(lock.path), buildLockDirectoryName)
-	info, err := os.Lstat(directory)
-	if errors.Is(err, fs.ErrNotExist) && createDirectory {
-		if mkdirErr := os.Mkdir(directory, 0o700); mkdirErr != nil && !errors.Is(mkdirErr, fs.ErrExist) {
-			return "", fmt.Errorf("create build lock directory: %w", mkdirErr)
-		}
-		info, err = os.Lstat(directory)
+	if lock.stateRoot == nil {
+		return "", fmt.Errorf("build lock requires a held state directory")
 	}
-	if errors.Is(err, fs.ErrNotExist) {
+	var child *os.Root
+	var err error
+	if createDirectory {
+		child, err = fsowner.FromInfo(lock.stateDirectory).EnsureDirectory(lock.stateRoot, buildLockDirectoryName, 0o700)
+	} else {
+		child, err = fsowner.OpenChildDirectory(lock.stateRoot, buildLockDirectoryName)
+	}
+	if errors.Is(err, fs.ErrNotExist) && !createDirectory {
 		return filepath.Join(directory, buildLockFilename(digest)), nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("inspect build lock directory: %w", err)
+		return "", fmt.Errorf("build lock path must be a real directory %s: %w", directory, err)
 	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return "", fmt.Errorf("build lock path must be a real directory: %s", directory)
-	}
+	defer child.Close()
 	return filepath.Join(directory, buildLockFilename(digest)), nil
 }
 
