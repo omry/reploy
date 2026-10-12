@@ -1,5 +1,37 @@
 # Multi-identity Podman conformance evidence
 
+## Current A1 correction evidence
+
+A1 fixes atomic admission-release publication, fresh restart admission,
+independent volume failure results and acceptance of existing empty output directories.
+The six-trial exact/bounded campaign passed on 2026-10-12 in 567.866 seconds,
+including fixture setup and cleanup.
+All four roles passed map admission before payload execution.
+Docker was rejected before mutation, and the whole Podman inventory was restored.
+The current probe source SHA-256 is
+`ce0a74c171cc96232bb9be2ece432cd69bd8ba8632bf0da16c8f13b007c5f1a0`.
+
+The release-marker race regression passed 20 repetitions and verifies mode `0600`.
+Both Python routes ran 36 tests with one opt-in skip.
+The current-source live failed-`RUN` regression passed in 6.914 seconds.
+The complete fourteen-command product validation also passed.
+These are private fixture results; product integration and mail gates remain open.
+
+Current raw receipts are retained at:
+
+`~/.local/state/awd/reploy-mi-recovery/20261012-a1/proof/a1r1/`
+
+The 51-file `receipt-manifest.json` SHA-256 is
+`31c867dadc0d043494c31bb43b6ee7ead04a15e4ce0be9c96bbc9ddabb9d19c6`.
+`source-before.json` and `source-after.json` bind every runtime input.
+The tests ran against the pending A1 correction above revision
+`9b091c8da39b3ecb551e101ee6731566dfac5b73`; snapshots bind those pending bytes.
+Only four known compiled fixture binaries were removed.
+Their hashes and sizes are retained in `excluded-binaries.json`.
+The host and delegation match the approved 1B baseline below.
+
+## Approved 1B baseline
+
 The repaired 1B mechanism checkpoint passed on 2026-10-12.
 The six-trial campaign ran from 04:39:33 to 04:48:54 UTC and took 561 seconds.
 These results cover the private fixture on the recorded host.
@@ -9,7 +41,8 @@ Product integration and public identity policy remain separate gates.
 
 - Command: `tools/conformance/multiidentity/conformance.py --profiles exact,bounded --iterations 3`
 - Candidate base before the repair: `692193a9343251f4ef5e9097e95658e9c17a6a17`
-- Four-source SHA-256: `ed2cb818ed6cd253e1829d1112a60c5419f661ec9f2dce485f4cb55c3c185775`
+- Probe source SHA-256: `2bb097b216531269c0022bf9bda4eb41026e134d228b6b1a1a0e4831c4322e33`
+- External source-snapshot SHA-256: `ed2cb818ed6cd253e1829d1112a60c5419f661ec9f2dce485f4cb55c3c185775`
 - Host: Ubuntu 24.04, Linux 6.18.40.1 WSL2, x86_64
 - Operator: canonical account `omry`, effective UID/GID `1000:1000`
 - Delegation: UID and GID range `100000:65536`
@@ -20,6 +53,8 @@ Product integration and public identity policy remain separate gates.
 - Supervisor capabilities: `CAP_SETGID`, `CAP_SETUID`, `CAP_SETPCAP`
 
 The source identity covers `conformance.py`, `Containerfile`, `posix_ipc.c`, and `probe/main.go`.
+The probe hashes a trailing NUL after each file; the external snapshot does not.
+Both encodings bind the same four files, whose individual hashes match before and after.
 The before and after snapshots also bind `go.mod` and `go.sum`.
 The fixture used an offline `scratch` image and an explicitly selected disposable store.
 Its user-owned runtime paths were under `/tmp/reploy-mi-p69`.
@@ -100,4 +135,32 @@ Compiled build-context binaries are excluded; their hashes are recorded separate
 The earlier `99512c984...` and `882ecc0a...` campaigns remain historical observations.
 They do not prove the repaired source recorded here.
 A pre-reboot trial packet was lost and is not used as current evidence.
-The current campaign closes the missing controls with new executable checks.
+The 1B campaign closed those missing controls with executable checks.
+
+## Current A1 compatible-operation audit
+
+The audit command completed in 53.114 seconds on 2026-10-12.
+Its internal timer reported 15.123 seconds after host preparation.
+It used the same current probe bytes as the six mechanism trials.
+The audit-driver SHA-256 is
+`737036c829c3729f0365653bcc19e4a280c3ed805819299e0525cd2d023d3954`.
+The output directory already existed and was empty, exercising that corrected entry path.
+Source snapshots bind the driver, fixture, actual product preflight and module files.
+
+Nine operation observations were compatible; five remained blocked.
+The bounded automatic and fixed candidates, immutable local-image inspection,
+lifecycle commands, volume CRUD and network CRUD passed.
+Restart admission required a new exact-nonce ready line before release.
+The sparse projection returned HTTP 500, and the product build preflight rejected Podman 4.9.3.
+No product build was launched after that rejection.
+Supervisor/restart ownership and network-policy parity remain unproved.
+
+All eight owned-resource cleanup records passed.
+The full inventory matched its starting state; the API service stopped and its socket was removed.
+Native Podman built only the offline fixture and supplied independent observations.
+No native fallback converted a failed compatible operation to success.
+The current audit receipts are under `proof/a1r1/audit/` in the evidence directory above.
+
+The earlier audits and approved 1B six-trial packet remain baseline evidence.
+They do not prove the newer A1 bytes.
+The [readiness disposition](READINESS.md) owns the remaining product and stock-mail gates.
