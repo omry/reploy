@@ -107,6 +107,7 @@ func (parser *ResolveInstallParserV1) consumeLine(line []byte) error {
 		current = detail[1:end]
 		detail = detail[end+2:]
 	}
+	detail = strings.TrimSuffix(detail, " []")
 	if len(detail) < 5 || detail[0] != '(' || detail[len(detail)-1] != ')' {
 		return fmt.Errorf("APT install transaction record for package %q is malformed", name)
 	}
