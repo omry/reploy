@@ -130,3 +130,25 @@ Successful raw IPC syscalls must fail the denial assertion.
 The mount test checks both real state mounts as positive controls.
 It rejects peer state sources in every mount record, including a different target or a nested source.
 The network tests require successful TCP and UDP round trips in the producer workload.
+
+## Readiness operation audit
+
+After the mandatory mechanism campaign passes, run:
+
+```shell
+python3 tools/conformance/multiidentity/operation_audit.py \
+  --output-dir /tmp/reploy-multiidentity-operations
+```
+
+This starts an attempt-owned local compatibility service on a fresh socket and
+stops it afterward. Native Podman supplies only the offline fixture and independent
+observations; audited lifecycle operations use the scoped compatible endpoint.
+The audit invokes Reploy's actual read-only build preflight. It does not bypass
+that gate to launch a shared BuildKit builder. Each operation records compatibility
+or a blocker separately; zero exit establishes audit completion and cleanup,
+not that every operation is supported. Stock mail has its own readiness gate.
+
+```shell
+python3 -m unittest discover -s tools/conformance/multiidentity -p 'test_*.py'
+go test ./tools/conformance/multiidentity/probe -run Admission
+```
