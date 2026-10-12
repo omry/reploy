@@ -363,6 +363,7 @@ func TestResolveProviderInstallDestinationV1UsesBlueprintTarget(t *testing.T) {
 
 func TestRunProviderInstallV1BuildCancellationReleasesSourceAndNeverAcquiresDestination(t *testing.T) {
 	sourceDir := t.TempDir()
+	providerInstallRunBuildFixture(t, sourceDir)
 	destinationDir := t.TempDir()
 	want := context.Canceled
 	acquiredDestination := false
@@ -786,10 +787,10 @@ func TestPreflightProviderInstallDestinationRoleRejectsCrossedStagingTargets(t *
 
 	errors := make(chan error, 2)
 	go func() {
-		errors <- preflightProviderInstallDestinationRoleV1(t.Context(), second, deploy.AcquireOperationLock, func(lock *deploy.OperationLock) error { return lock.Unlock() })
+		errors <- preflightProviderInstallDestinationV1(second, "")
 	}()
 	go func() {
-		errors <- preflightProviderInstallDestinationRoleV1(t.Context(), first, deploy.AcquireOperationLock, func(lock *deploy.OperationLock) error { return lock.Unlock() })
+		errors <- preflightProviderInstallDestinationV1(first, "")
 	}()
 	for range 2 {
 		err := <-errors
@@ -801,7 +802,7 @@ func TestPreflightProviderInstallDestinationRoleRejectsCrossedStagingTargets(t *
 
 func TestPreflightProviderInstallDestinationRoleLeavesEmptyDestinationUntouched(t *testing.T) {
 	destinationDir := t.TempDir()
-	if err := preflightProviderInstallDestinationRoleV1(t.Context(), destinationDir, deploy.AcquireOperationLock, func(lock *deploy.OperationLock) error { return lock.Unlock() }); err != nil {
+	if err := preflightProviderInstallDestinationV1(destinationDir, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(filepath.Join(destinationDir, ".reploy")); !os.IsNotExist(err) {

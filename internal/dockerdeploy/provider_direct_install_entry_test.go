@@ -20,6 +20,7 @@ func TestDirectProviderInstallStagesPrivatelyAndResolvesBlueprintTarget(t *testi
 		ControlMode: ControlAdmissionWaitV1,
 		Scope:       InstallScopeSystem, Service: "demo-service", Replace: []string{"conf"}, Start: true,
 	}, directProviderInstallEntryBackendV1{
+		effectiveUID: func() int { return 0 },
 		withSource: func(ctx context.Context, input directProviderInstallSourceInputV1, run func(context.Context, string) error) error {
 			if input.Pack.Raw != "file:/demo" {
 				t.Fatalf("staged pack = %#v", input.Pack)
