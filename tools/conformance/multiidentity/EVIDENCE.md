@@ -101,3 +101,14 @@ The earlier `99512c984...` and `882ecc0a...` campaigns remain historical observa
 They do not prove the repaired source recorded here.
 A pre-reboot trial packet was lost and is not used as current evidence.
 The current campaign closes the missing controls with new executable checks.
+
+## A1 operation audit: refresh pending
+
+The preceding mechanism results cover the current repaired source.
+The operation audit must now use that same source.
+The earlier A1 audit completed in 12.787 seconds for older source `882ecc0a...`.
+Its raw receipts remain under `~/.local/state/awd/swe-review-authority/runs/run_75d70spapeq246zb8jbaryqb1q-full/proof/a1-geometry-fixed/`.
+The old `audit/summary.json` SHA-256 is `1b664c7270e0840f88a1c3cbaf7b8dee5b66b3fea9f1143a93d17d10348c5be7`.
+Those observations remain historical; they do not prove the current audit result.
+A1 retains the operation-audit driver, audit regression tests and readiness decisions.
+Product and stock-mail gates remain open.

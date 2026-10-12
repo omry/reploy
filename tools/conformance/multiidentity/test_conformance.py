@@ -12,6 +12,7 @@ import unittest
 from unittest import mock
 
 import conformance as c
+import operation_audit as audit
 
 
 class FakeRunner:
@@ -169,7 +170,29 @@ class AdmissionTests(unittest.TestCase):
                 # ownership must still be verified before removing it.
                 c.remove_owned_resource(runner, "image", image, token)
 
+    def test_audit_failure_remains_a_blocker_without_fallback(self):
+        results = {}
+        audit.observe(results, "unsupported", lambda: (_ for _ in ()).throw(c.ConformanceError("API unavailable")))
+        self.assertEqual(results["unsupported"]["disposition"], "blocked")
+        audit.observe(results, "supported", lambda: {"Id": "owned"})
+        self.assertEqual(results["supported"]["evidence"], {"Id": "owned"})
 
+    def test_audit_api_closes_connection_on_success_and_rejection(self):
+        for status, body in ((201, b'{"Id":"created"}'),
+                             (400, b'{"message":"unsupported"}'),
+                             (500, b'{"message":"backend mentions HTTP 404"}')):
+            with self.subTest(status=status), mock.patch.object(audit, "UnixHTTP") as factory:
+                connection = factory.return_value
+                response = connection.getresponse.return_value
+                response.status = status
+                response.read.return_value = body
+                if status == 201:
+                    self.assertEqual(audit.api("socket", "POST", "/containers/create", {"Image": "fixture"}), {"Id": "created"})
+                else:
+                    with self.assertRaises(audit.HTTPError) as raised:
+                        audit.api("socket", "POST", "/containers/create", {})
+                    self.assertEqual(raised.exception.status, status)
+                connection.close.assert_called_once()
 
     def test_main_cleans_only_an_attempted_image_after_build_failure(self):
         with tempfile.TemporaryDirectory() as root:
@@ -243,13 +266,135 @@ class AdmissionTests(unittest.TestCase):
             with self.assertRaisesRegex(c.ConformanceError, "matching real/effective UIDs"):
                 c.effective_caller()
 
+    def test_ambiguous_create_reconciles_server_side_resource_for_all_kinds(self):
+        token = "attempt"
+        for kind in ("network", "volume", "container"):
+            with self.subTest(kind=kind):
+                resources = []
+                attempts = []
+                name = f"reploy-mi-{kind}"
+                item = {"Labels": {c.OWNER_LABEL: token}}
 
+                def inspect(_path, method, route, _body=None):
+                    self.assertEqual(method, "GET")
+                    self.assertTrue(route.endswith(name) or route.endswith(f"{name}/json"))
+                    return item
 
+                with mock.patch.object(audit, "api", side_effect=inspect):
+                    with self.assertRaisesRegex(c.ConformanceError, "response lost"):
+                        audit.tracked_create(
+                            "socket", kind, name, token,
+                            lambda: (_ for _ in ()).throw(c.ConformanceError("response lost")),
+                            resources, attempts,
+                        )
+                self.assertEqual(resources, [(kind, name)])
+                self.assertEqual(attempts, [{"kind": kind, "name": name, "identity": name}])
 
+    def test_successful_create_failed_inspect_reconciles_deterministic_name_for_all_kinds(self):
+        token = "attempt"
+        for kind in ("network", "volume", "container"):
+            with self.subTest(kind=kind):
+                resources = []
+                attempts = []
+                name = f"reploy-mi-{kind}"
+                identity = f"{kind}-created-id"
+                item = {"Labels": {c.OWNER_LABEL: token}}
+                calls = []
 
+                def inspect(_path, method, route, _body=None):
+                    calls.append((method, route))
+                    if len(calls) == 1:
+                        raise c.ConformanceError("post-create inspect failed")
+                    self.assertEqual(method, "GET")
+                    self.assertTrue(route.endswith(name) or route.endswith(f"{name}/json"))
+                    return item
 
+                with mock.patch.object(audit, "api", side_effect=inspect):
+                    with self.assertRaisesRegex(c.ConformanceError, "post-create inspect failed"):
+                        audit.tracked_create(
+                            "socket", kind, name, token,
+                            lambda: {"Id": identity}, resources, attempts,
+                        )
+                self.assertEqual(resources, [(kind, name)])
+                self.assertEqual(attempts, [{"kind": kind, "name": name, "identity": name}])
 
+    def test_post_create_inspect_reconciles_deterministic_name_for_all_kinds(self):
+        token = "attempt"
+        for kind in ("network", "volume", "container"):
+            with self.subTest(kind=kind):
+                name = f"reploy-mi-{kind}"
+                identity = f"{kind}-created-id"
+                resources = [(kind, identity)]
+                attempts = [{"kind": kind, "name": name, "identity": identity}]
+                with mock.patch.object(audit, "api", return_value={"Labels": {c.OWNER_LABEL: token}}):
+                    with self.assertRaisesRegex(c.ConformanceError, "post-create inspect failed"):
+                        audit.tracked_post_create_step(
+                            "socket", kind, name, identity, token, resources, attempts,
+                            lambda: (_ for _ in ()).throw(c.ConformanceError("post-create inspect failed")),
+                        )
+                self.assertEqual(resources, [(kind, name)])
+                self.assertEqual(attempts, [{"kind": kind, "name": name, "identity": name}])
 
+    def test_ambiguous_foreign_collision_is_preserved(self):
+        resources = []
+        with mock.patch.object(audit, "api", return_value={"Labels": {c.OWNER_LABEL: "foreign"}}):
+            with self.assertRaisesRegex(c.ConformanceError, "refusing foreign"):
+                audit.tracked_create(
+                    "socket", "network", "collision", "attempt",
+                    lambda: (_ for _ in ()).throw(c.ConformanceError("response lost")),
+                    resources, [],
+                )
+        self.assertEqual(resources, [])
+
+    def test_reconcile_distinguishes_true_absence_from_engine_error(self):
+        resources = []
+        with mock.patch.object(audit, "api", side_effect=audit.HTTPError("GET", "/networks/missing", 404, {})):
+            self.assertFalse(audit.reconcile_ambiguous_create("socket", "network", "missing", "attempt", resources))
+        self.assertEqual(resources, [])
+        with mock.patch.object(audit, "api", side_effect=c.ConformanceError("engine unavailable")):
+            with self.assertRaisesRegex(c.ConformanceError, "engine unavailable"):
+                audit.reconcile_ambiguous_create("socket", "network", "unknown", "attempt", resources)
+
+    def test_reconcile_does_not_misclassify_deceptive_http_500_body(self):
+        resources = []
+        error = audit.HTTPError("GET", "/networks/object", 500, {"message": "HTTP 404 in backend text"})
+        with mock.patch.object(audit, "api", side_effect=error):
+            with self.assertRaises(audit.HTTPError) as raised:
+                audit.reconcile_ambiguous_create("socket", "network", "object", "attempt", resources)
+        self.assertIs(raised.exception, error)
+        self.assertEqual(resources, [])
+        with mock.patch.object(audit, "api", side_effect=c.ConformanceError("HTTP 404 in an engine error")):
+            with self.assertRaisesRegex(c.ConformanceError, "HTTP 404"):
+                audit.reconcile_ambiguous_create("socket", "network", "object", "attempt", resources)
+
+    def test_cleanup_targets_retries_unresolved_attempts_once(self):
+        resources = [("container", "created-id"), ("network", "network-id")]
+        attempts = [
+            {"kind": "container", "name": "container-name", "identity": "created-id"},
+            {"kind": "network", "name": "network-name", "identity": None},
+            {"kind": "volume", "name": "volume-name", "identity": None},
+        ]
+        self.assertEqual(
+            audit.cleanup_targets(resources, attempts),
+            [("container", "created-id"), ("network", "network-id"),
+             ("network", "network-name"), ("volume", "volume-name")],
+        )
+
+    def test_failed_reconciliation_keeps_deterministic_final_cleanup_target(self):
+        resources = [("network", "created-id")]
+        attempts = [{"kind": "network", "name": "network-name", "identity": "created-id"}]
+        with mock.patch.object(audit, "api", side_effect=c.ConformanceError("engine unavailable")):
+            with self.assertRaisesRegex(c.ConformanceError, "engine unavailable"):
+                audit.tracked_post_create_step(
+                    "socket", "network", "network-name", "created-id", "attempt",
+                    resources, attempts,
+                    lambda: (_ for _ in ()).throw(c.ConformanceError("post-create inspect failed")),
+                )
+        self.assertEqual(attempts[0]["identity"], None)
+        self.assertEqual(
+            audit.cleanup_targets(resources, attempts),
+            [("network", "created-id"), ("network", "network-name")],
+        )
 
     def test_all_four_payloads_stay_blocked_on_effective_collision(self):
         for slot in range(4):
@@ -395,6 +540,7 @@ class PeerMountVisibilityTests(unittest.TestCase):
         with mock.patch.object(c, "read_proc", return_value="malformed"):
             with self.assertRaisesRegex(c.ConformanceError, "invalid mountinfo"):
                 c.mount_snapshot(42)
+
 
 
 if __name__ == "__main__":
