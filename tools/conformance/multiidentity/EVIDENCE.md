@@ -9,7 +9,8 @@ Product integration and public identity policy remain separate gates.
 
 - Command: `tools/conformance/multiidentity/conformance.py --profiles exact,bounded --iterations 3`
 - Candidate base before the repair: `692193a9343251f4ef5e9097e95658e9c17a6a17`
-- Four-source SHA-256: `ed2cb818ed6cd253e1829d1112a60c5419f661ec9f2dce485f4cb55c3c185775`
+- Probe source SHA-256: `2bb097b216531269c0022bf9bda4eb41026e134d228b6b1a1a0e4831c4322e33`
+- External source-snapshot SHA-256: `ed2cb818ed6cd253e1829d1112a60c5419f661ec9f2dce485f4cb55c3c185775`
 - Host: Ubuntu 24.04, Linux 6.18.40.1 WSL2, x86_64
 - Operator: canonical account `omry`, effective UID/GID `1000:1000`
 - Delegation: UID and GID range `100000:65536`
@@ -20,6 +21,8 @@ Product integration and public identity policy remain separate gates.
 - Supervisor capabilities: `CAP_SETGID`, `CAP_SETUID`, `CAP_SETPCAP`
 
 The source identity covers `conformance.py`, `Containerfile`, `posix_ipc.c`, and `probe/main.go`.
+The probe hashes a trailing NUL after each file; the external snapshot does not.
+Both encodings bind the same four files, whose individual hashes match before and after.
 The before and after snapshots also bind `go.mod` and `go.sum`.
 The fixture used an offline `scratch` image and an explicitly selected disposable store.
 Its user-owned runtime paths were under `/tmp/reploy-mi-p69`.
@@ -101,3 +104,42 @@ The earlier `99512c984...` and `882ecc0a...` campaigns remain historical observa
 They do not prove the repaired source recorded here.
 A pre-reboot trial packet was lost and is not used as current evidence.
 The current campaign closes the missing controls with new executable checks.
+
+## A1 compatible-operation audit
+
+The audit completed on 2026-10-12 in 15.610 seconds.
+Its probe source SHA-256 is `2bb097b216531269c0022bf9bda4eb41026e134d228b6b1a1a0e4831c4322e33`.
+Its audit-driver SHA-256 is `adce0c650aa83e864cc693d3ef152114754383620c1bd90ff52b8283b7c1a23c`.
+The audit and all six mechanism trials use the same frozen probe bytes.
+
+The driver was read from A1 revision `105165b0c22a73212132181fb15ea9d86be24dcf`.
+It ran while the primary checkout remained on approved 1B revision `b6862f67661d5861b9b857fab55283291d815684`.
+Every audited source input matched A1 byte for byte, including the actual product build-preflight driver and module files.
+The before and after receipts prove that these inputs stayed unchanged.
+
+Nine operation observations were compatible; five remained blocked.
+The bounded automatic and fixed candidates, immutable local-image inspection, lifecycle commands, volume CRUD and network CRUD passed.
+The tested sparse projection returned HTTP 500.
+The actual product build preflight rejected Podman 4.9.3 under its Docker Engine version requirement.
+No product build was launched after that rejection.
+Supervisor/restart ownership and network-policy parity remain unproved.
+These dispositions do not establish a supported product backend or mail configuration.
+
+All eight owned-resource cleanup records passed.
+The complete engine inventory matched its starting state.
+The attempt-owned API service stopped, and its socket was removed.
+Native Podman built only the offline fixture and supplied independent observations.
+No native fallback converted a failed compatible operation to success.
+
+Raw receipts are retained at:
+
+`~/.local/state/awd/reploy-mi-recovery/20261012-a1/proof/a1-audit/`
+
+Its eleven-file `receipt-manifest.json` SHA-256 is `a580aa06bdd8a2f45eb1deb63dde82435a1dbfb848f4d64f5f737c59d6416460`.
+`audit-source-before.json` and `audit-source-after.json` are in the parent evidence directory.
+Only the two verified compiled fixture binaries were excluded from the retained packet.
+Their hashes and sizes are recorded in the packet's `excluded-binaries.json`.
+
+The earlier 12.787-second audit remains historical evidence for source `882ecc0a...`.
+The current [readiness disposition](READINESS.md) owns the remaining product and stock-mail gates.
+A1 retains the audit driver and its regression tests; 1B owns the mechanism repairs.
