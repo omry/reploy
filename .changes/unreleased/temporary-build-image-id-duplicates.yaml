@@ -1,0 +1,2 @@
+kind: Fixed
+body: Clean up temporary build image references when the Docker-compatible engine lists the same image ID more than once, while still rejecting distinct or unexpected image IDs.
