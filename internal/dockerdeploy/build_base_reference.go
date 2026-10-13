@@ -194,7 +194,12 @@ func removeTemporaryBuildReference(
 	if len(ids) == 0 {
 		return nil
 	}
-	if len(ids) != 1 || expectedConfigID != "" && ids[0] != expectedConfigID {
+	for _, id := range ids[1:] {
+		if id != ids[0] {
+			return fmt.Errorf("temporary build reference no longer names its expected config ID")
+		}
+	}
+	if expectedConfigID != "" && ids[0] != expectedConfigID {
 		return fmt.Errorf("temporary build reference no longer names its expected config ID")
 	}
 	if _, err := run(ctx, "image", "rm", reference); err != nil {
