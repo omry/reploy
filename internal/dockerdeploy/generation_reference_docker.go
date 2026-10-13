@@ -191,12 +191,10 @@ func removeLegacyEnvironmentGenerationReference(
 	if len(ids) == 0 {
 		return nil
 	}
-	if len(ids) != 1 {
-		return fmt.Errorf(
-			"legacy environment image reference %q resolved to %d images",
-			reference,
-			len(ids),
-		)
+	for _, id := range ids[1:] {
+		if id != ids[0] {
+			return fmt.Errorf("legacy environment image reference %q resolved to multiple image IDs", reference)
+		}
 	}
 	if _, err := run(ctx, "image", "rm", "--force", reference); err != nil {
 		return fmt.Errorf(
@@ -222,7 +220,12 @@ func removeExactEnvironmentImageReference(
 	if len(ids) == 0 {
 		return nil
 	}
-	if len(ids) != 1 || ids[0] != string(image.ConfigDigest) {
+	for _, id := range ids[1:] {
+		if id != ids[0] {
+			return fmt.Errorf("environment image reference %q no longer names expected config ID %s", reference, image.ConfigDigest)
+		}
+	}
+	if ids[0] != string(image.ConfigDigest) {
 		return fmt.Errorf("environment image reference %q no longer names expected config ID %s", reference, image.ConfigDigest)
 	}
 	// Docker rejects an ordinary untag when any container was created from
