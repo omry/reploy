@@ -77,6 +77,57 @@ func TestPrepareTemporaryBuildBaseReferenceCreatesVerifiesAndRemoves(t *testing.
 	}
 }
 
+func TestRemoveTemporaryBuildReferenceAcceptsOnlyOneDistinctImage(t *testing.T) {
+	expected := string(rendererDigest("2"))
+	other := string(rendererDigest("3"))
+	reference := temporaryBuildReferencePrefix + strings.Repeat("a", identityHashLength) + ":build-cleanup"
+	tests := []struct {
+		name       string
+		output     string
+		expectedID string
+		wantRemove bool
+		wantError  bool
+	}{
+		{name: "absent", expectedID: expected},
+		{name: "single expected", output: expected, expectedID: expected, wantRemove: true},
+		{name: "five identical expected", output: strings.Repeat(expected+"\n", 5), expectedID: expected, wantRemove: true},
+		{name: "identical without expected ID", output: strings.Repeat(expected+"\n", 5), wantRemove: true},
+		{name: "whitespace around identical IDs", output: " \n" + expected + "\t" + expected + "\n", expectedID: expected, wantRemove: true},
+		{name: "single wrong ID", output: other, expectedID: expected, wantError: true},
+		{name: "identical wrong IDs", output: strings.Repeat(other+"\n", 5), expectedID: expected, wantError: true},
+		{name: "distinct IDs", output: expected + "\n" + other, expectedID: expected, wantError: true},
+		{name: "distinct without expected ID", output: expected + "\n" + other, wantError: true},
+		{name: "expected ID after wrong ID", output: other + "\n" + expected, expectedID: expected, wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			removals := 0
+			run := func(_ context.Context, args ...string) (string, error) {
+				if reflect.DeepEqual(args, []string{"image", "ls", "--quiet", "--no-trunc", reference}) {
+					return test.output, nil
+				}
+				if reflect.DeepEqual(args, []string{"image", "rm", reference}) {
+					removals++
+					return "", nil
+				}
+				t.Fatalf("unexpected Docker call: %v", args)
+				return "", nil
+			}
+			err := removeTemporaryBuildReference(t.Context(), reference, test.expectedID, run)
+			if (err != nil) != test.wantError {
+				t.Fatalf("error = %v, want error = %t", err, test.wantError)
+			}
+			wantRemovals := 0
+			if test.wantRemove {
+				wantRemovals = 1
+			}
+			if removals != wantRemovals {
+				t.Fatalf("removals = %d, want %d", removals, wantRemovals)
+			}
+		})
+	}
+}
+
 func TestPrepareTemporaryBuildBaseReferenceCleansFailedVerification(t *testing.T) {
 	store, err := providerstore.NewStore(t.TempDir())
 	if err != nil {
