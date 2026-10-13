@@ -180,7 +180,7 @@ func releaseAdmission(dir string, args []string) error {
 	if string(ready) != nonce {
 		return errors.New("admission ready nonce mismatch")
 	}
-	return os.WriteFile(filepath.Join(dir, "probe-admission-release"), []byte(nonce), 0o600)
+	return publishAtomically(filepath.Join(dir, "probe-admission-release"), []byte(nonce), 0o600)
 }
 
 func must(err error) {
@@ -1313,6 +1313,10 @@ func runServiceServer(args []string) error {
 }
 
 func publishReady(path string, data []byte) error {
+	return publishAtomically(path, data, 0o644)
+}
+
+func publishAtomically(path string, data []byte, mode os.FileMode) error {
 	file, err := os.CreateTemp(filepath.Dir(path), ".service-ready-")
 	if err != nil {
 		return err
@@ -1322,7 +1326,7 @@ func publishReady(path string, data []byte) error {
 	if _, err := file.Write(data); err != nil {
 		return err
 	}
-	if err := file.Chmod(0o644); err != nil {
+	if err := file.Chmod(mode); err != nil {
 		return err
 	}
 	if err := file.Close(); err != nil {

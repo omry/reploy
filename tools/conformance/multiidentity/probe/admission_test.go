@@ -176,6 +176,54 @@ func TestAdmissionWaitRequiresMatchingRelease(t *testing.T) {
 	}
 }
 
+func TestAdmissionReleaseNeverExposesPartialNonce(t *testing.T) {
+	dir := t.TempDir()
+	nonce := strings.Repeat("a", 32)
+	ready := filepath.Join(dir, "probe-admission-ready")
+	release := filepath.Join(dir, "probe-admission-release")
+	if err := os.WriteFile(ready, []byte(nonce), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := releaseAdmission(dir, []string{nonce}); err != nil {
+		t.Fatal(err)
+	}
+	stop, result := make(chan struct{}), make(chan error, 1)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				result <- nil
+				return
+			default:
+			}
+			data, err := os.ReadFile(release)
+			if err != nil || string(data) != nonce {
+				result <- fmt.Errorf("partial admission nonce: %q, %v", data, err)
+				return
+			}
+		}
+	}()
+	for index := 0; index < 1000; index++ {
+		if err := releaseAdmission(dir, []string{nonce}); err != nil {
+			close(stop)
+			<-result
+			t.Fatal(err)
+		}
+	}
+	close(stop)
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(release)
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("release marker permission mismatch: %v, %v", info, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("temporary admission files remain: %v, %v", entries, err)
+	}
+}
+
 func TestAdmissionFailsClosed(t *testing.T) {
 	nonce := strings.Repeat("a", 32)
 	t.Run("timeout", func(t *testing.T) {
