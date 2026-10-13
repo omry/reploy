@@ -1,0 +1,2 @@
+kind: Fixed
+body: Fix environment image publication and recovery cleanup when Docker-compatible image listing repeats the same image ID for multiple tags. Remove only the selected deployment-owned tag, while still rejecting different image IDs or a changed expected image.
