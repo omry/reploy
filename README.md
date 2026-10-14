@@ -25,8 +25,19 @@ Reploy selects the compatible build API and checks local-image access, offline
 RUN, read-only mounts and result loading before generated builds. Users do not
 need to set `DOCKER_BUILDKIT`.
 
-Full Podman compatibility remains unqualified; image acceptance, healthcheck
-inspection and timer issues remain open. Existing image validation stays strict.
+When Podman's compatible inspection omits healthcheck metadata, Reploy reads
+its image export through the same local endpoint and verifies the actual config
+against the immutable image ID. Absent metadata is never treated as disabled.
+Verified metadata is reused only within the current invocation.
+
+This fallback streams the full image archive without extracting it. Client
+limits are 64 GiB, five minutes, 4 MiB for config JSON, 1 MiB for the manifest,
+and 10,000 archive entries. Podman first creates a full server-side temporary
+archive; client limits do not bound that disk cost. Large images can therefore
+make the first metadata check expensive. Docker uses normal inspection.
+
+Full Podman compatibility remains unqualified; image acceptance and timer
+issues remain open. Existing image validation stays strict.
 
 ## Install
 

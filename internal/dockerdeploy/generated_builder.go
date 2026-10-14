@@ -32,6 +32,9 @@ type generatedBuilderSession struct {
 	err             error
 	attempted       bool
 	qualified       map[string]bool
+	healthMu        sync.Mutex
+	healthchecks    map[string]*dockerHealthcheck
+	healthEngine    *generatedImageBuilder
 }
 
 // One invocation owns one selection and its feature evidence. No global cache.

@@ -136,5 +136,5 @@ func executeDockerOutputAtEndpoint(ctx context.Context, endpoint string, args ..
 		}
 		return "", fmt.Errorf("docker %s: %w", strings.Join(args, " "), err)
 	}
-	return string(output), nil
+	return restoreDockerInspectionHealthchecks(ctx, endpoint, args, string(output))
 }
