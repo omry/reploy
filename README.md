@@ -19,6 +19,19 @@ supported runtime.
 | macOS | Docker-compatible | ✅ | ✅ | — |
 | Windows | Docker Desktop | ✅ | ✅ | — |
 
+Generated builds use BuildKit by default. For experiments with a local Podman
+Docker-compatible socket, an explicit `DOCKER_BUILDKIT=0` selects that engine's
+build API through the same Docker CLI command:
+
+```bash
+DOCKER_CONTEXT= DOCKER_HOST=unix:///path/to/podman.sock DOCKER_BUILDKIT=0 reploy build
+```
+
+The builder must support the generated offline RUN and read-only mounts.
+Full Podman compatibility remains unqualified; healthcheck inspection and timer
+issues remain open. This is a diagnostic workaround; the builder-selection
+design is pending approval.
+
 ## Install
 
 Install the latest release binary:
