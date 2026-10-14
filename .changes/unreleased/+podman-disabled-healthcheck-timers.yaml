@@ -1,0 +1,2 @@
+kind: Fixed
+body: Prevent disabled image healthchecks from creating Podman timers by preparing new containers before startup. Preserve image validation and handle workload recreation without disabling existing timers in place.
