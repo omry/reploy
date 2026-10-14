@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -186,6 +187,90 @@ func TestBuildAndAcceptMaterializationLayerRunsEvidenceAfterInspection(t *testin
 	}
 	if !reflect.DeepEqual(order, []string{"build", "inspect", "evidence", "retain"}) || result.Image.Digest != rendererDigest("7") {
 		t.Fatalf("order = %#v; result = %#v", order, result)
+	}
+}
+
+func TestBuildAndAcceptMaterializationLayerKeepsOneBuilderAcrossAcceptanceSiblings(t *testing.T) {
+	store, request := materializationLayerFixture(t)
+	transaction := request.Transaction
+	transaction.Argv[2].RelativePath = transaction.Script.LogicalPath
+	bundle := acceptanceBundle(transaction, request.Platform)
+	wheel := providerstore.ArtifactDescriptor{LogicalPath: "hydra.whl", Kind: "wheel", Size: "10", SHA256: rendererDigest("6")}
+	bundle.Payload.Artifacts = []providerstore.ArtifactDescriptor{wheel, transaction.Script}
+	selected := &generatedImageBuilder{endpoint: "unix:///acceptance.sock", engine: "Docker", serverVersion: "29.8.1", clientVersion: "29.8.1"}
+	oldProbe := probeGeneratedImageBuilder
+	selectionCalls := 0
+	probeGeneratedImageBuilder = func(context.Context, RunOptions) (*generatedImageBuilder, error) {
+		selectionCalls++
+		return selected, nil
+	}
+	t.Cleanup(func() { probeGeneratedImageBuilder = oldProbe })
+	var progress bytes.Buffer
+	assertSelected := func(ctx context.Context) {
+		t.Helper()
+		if got := currentGeneratedImageBuilder(ctx); got != selected {
+			t.Fatalf("selected builder = %#v, want %p", got, selected)
+		}
+	}
+	base := BuiltImageCandidate{ImageID: rendererDigest("7"), builder: selected}
+	alias := BuiltImageCandidate{ImageID: rendererDigest("9"), builder: selected}
+	removed := 0
+	result, err := buildAndAcceptMaterializationLayerWithFinalizer(
+		context.Background(), store, transaction, bundle, request.Platform,
+		func(ctx context.Context, _ MaterializationEvidenceInput) ([]providers.RealizedGeneratedExecutable, []providers.RealizedOutput, error) {
+			assertSelected(ctx)
+			return []providers.RealizedGeneratedExecutable{acceptedGeneratedExecutable(transaction)}, nil, nil
+		}, nil, RunOptions{Progress: &progress},
+		func(_ providerstore.Store, _ MaterializationLayerRequest, options RunOptions) (MaterializationLayerCandidate, error) {
+			if _, err := selectGeneratedImageBuilder(options.Context, options); err != nil {
+				return MaterializationLayerCandidate{}, err
+			}
+			assertSelected(options.Context)
+			t.Setenv("DOCKER_HOST", "unix:///ambient-changed.sock")
+			key, digest, err := MaterializationAssemblyKey(transaction, request.Platform)
+			return MaterializationLayerCandidate{Built: base, AssemblyKey: key, AssemblyKeyDigest: digest}, err
+		},
+		func(ctx context.Context, candidate MaterializationLayerCandidate, _ MaterializationLayerRequest) (InspectedMaterializationLayerCandidate, error) {
+			assertSelected(ctx)
+			if candidate.Built.builder != selected {
+				t.Fatalf("typed materialization builder = %#v, want %p", candidate.Built.builder, selected)
+			}
+			accepted := acceptedMaterializationCandidate(t, transaction, request.Platform)
+			accepted.builder = selected
+			return accepted, nil
+		},
+		func(ctx context.Context, candidate BuiltImageCandidate, image providers.RealizedImageV1) error {
+			assertSelected(ctx)
+			if candidate != alias || image.ConfigDigest != alias.ImageID {
+				return errors.New("retention did not receive the finalized candidate")
+			}
+			return nil
+		},
+		func(ctx context.Context, candidate BuiltImageCandidate) error {
+			assertSelected(ctx)
+			if candidate != base {
+				return errors.New("cleanup did not receive the original candidate")
+			}
+			removed++
+			return nil
+		},
+		func(ctx context.Context, source InspectedImageCandidate, accepted providers.GraphNodeMaterializeResult, options RunOptions) (BuiltImageCandidate, InspectedImageCandidate, error) {
+			assertSelected(ctx)
+			assertSelected(options.Context)
+			if source.Image.ConfigDigest != base.ImageID || len(accepted.GeneratedExecutables) != 1 {
+				return BuiltImageCandidate{}, InspectedImageCandidate{}, errors.New("finalizer ran before accepted evidence")
+			}
+			image := source
+			image.Image.ConfigDigest = alias.ImageID
+			image.Image.Digest = alias.ImageID
+			return alias, image, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Image.ConfigDigest != alias.ImageID || removed != 1 || selectionCalls != 1 || strings.Count(progress.String(), "Using Docker") != 1 {
+		t.Fatalf("result=%#v removed=%d selections=%d progress=%q", result, removed, selectionCalls, progress.String())
 	}
 }
 

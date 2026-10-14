@@ -19,6 +19,15 @@ supported runtime.
 | macOS | Docker-compatible | ✅ | ✅ | — |
 | Windows | Docker Desktop | ✅ | ✅ | — |
 
+Generated builds select their builder from the chosen local engine. Docker uses
+BuildKit. For experiments with a local Linux Podman Docker-compatible socket,
+Reploy selects the compatible build API and checks local-image access, offline
+RUN, read-only mounts and result loading before generated builds. Users do not
+need to set `DOCKER_BUILDKIT`.
+
+Full Podman compatibility remains unqualified; image acceptance, healthcheck
+inspection and timer issues remain open. Existing image validation stays strict.
+
 ## Install
 
 Install the latest release binary:

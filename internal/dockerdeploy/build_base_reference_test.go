@@ -227,6 +227,7 @@ func TestCleanupTemporaryBuildBaseReferencePreservesWorkspaceForRecovery(t *test
 
 func stubMaterializationBuildBaseReference(t *testing.T, expected canonical.Digest) {
 	t.Helper()
+	stubGeneratedImageBuilder(t)
 	original := runMaterializationBuildReferenceDocker
 	runMaterializationBuildReferenceDocker = statefulTemporaryBuildReferenceRunner(t, expected, nil)
 	t.Cleanup(func() { runMaterializationBuildReferenceDocker = original })
@@ -234,6 +235,7 @@ func stubMaterializationBuildBaseReference(t *testing.T, expected canonical.Dige
 
 func stubFinalizationBuildBaseReference(t *testing.T, expected canonical.Digest) {
 	t.Helper()
+	stubGeneratedImageBuilder(t)
 	original := runFinalizationBuildReferenceDocker
 	runFinalizationBuildReferenceDocker = statefulTemporaryBuildReferenceRunner(t, expected, nil)
 	t.Cleanup(func() { runFinalizationBuildReferenceDocker = original })

@@ -120,6 +120,7 @@ func buildAndAcceptMaterializationLayerWithFinalizer(
 	if ctx == nil {
 		return providers.GraphNodeMaterializeResult{}, fmt.Errorf("materialization acceptance requires a context")
 	}
+	ctx = withGeneratedBuilderSession(ctx)
 	if err := ctx.Err(); err != nil {
 		return providers.GraphNodeMaterializeResult{}, err
 	}
@@ -164,7 +165,9 @@ func buildAndAcceptMaterializationLayerWithFinalizer(
 	retainedCandidate := built.Built
 	if finalize != nil {
 		finalizeCtx, endFinalize := buildprofile.Start(ctx, "Publish provider aliases")
-		aliasCandidate, aliasImage, finalizeErr := finalize(finalizeCtx, inspected.Image, accepted, options)
+		finalizeOptions := options
+		finalizeOptions.Context = finalizeCtx
+		aliasCandidate, aliasImage, finalizeErr := finalize(finalizeCtx, inspected.Image, accepted, finalizeOptions)
 		endFinalize(finalizeErr)
 		if finalizeErr != nil {
 			if aliasCandidate.ImageID.Validate() == nil {
@@ -221,6 +224,11 @@ func RemoveBuiltImageCandidate(ctx context.Context, candidate BuiltImageCandidat
 func removeBuiltImageCandidate(ctx context.Context, candidate BuiltImageCandidate, run dockerOutputRunner) error {
 	if ctx == nil {
 		return fmt.Errorf("remove built image candidate requires a context")
+	}
+	var err error
+	ctx, err = bindGenericMaterializationBuilderContext(ctx, candidate.builder)
+	if err != nil {
+		return err
 	}
 	if err := candidate.ImageID.Validate(); err != nil {
 		return fmt.Errorf("remove built image candidate image ID: %w", err)
@@ -300,6 +308,10 @@ func AcceptMaterializationLayer(
 	if err := ctx.Err(); err != nil {
 		return providers.GraphNodeMaterializeResult{}, err
 	}
+	ctx, bindErr := bindMaterializationBuilderContext(ctx, input.Candidate.builder)
+	if bindErr != nil {
+		return providers.GraphNodeMaterializeResult{}, bindErr
+	}
 	if err := validateMaterializationEvidenceInput(input); err != nil {
 		return providers.GraphNodeMaterializeResult{}, err
 	}
@@ -344,7 +356,7 @@ func validateMaterializationEvidenceInput(input MaterializationEvidenceInput) er
 	if err := validateMaterializationBuildBinding(input.Transaction, input.Bundle, input.Candidate.AssemblyKey.Platform); err != nil {
 		return err
 	}
-	expectedKey, expectedDigest, err := MaterializationAssemblyKey(input.Transaction, input.Bundle.Payload.Platform)
+	expectedKey, expectedDigest, err := materializationAssemblyKey(input.Transaction, input.Bundle.Payload.Platform, input.Candidate.builder)
 	if err != nil {
 		return err
 	}

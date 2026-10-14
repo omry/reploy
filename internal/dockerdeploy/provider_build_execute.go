@@ -73,11 +73,14 @@ func ExecuteLockedProviderBuildV1(
 	ctx context.Context,
 	input LockedProviderBuildExecutionInputV1,
 ) (LockedProviderBuildExecutionResultV1, error) {
+	if ctx == nil {
+		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("provider build requires a context")
+	}
 	if input.RunValidation == nil {
 		runner := ProviderFullImageValidationRunner{Store: input.Preparation.Store}
 		input.RunValidation = runner.Run
 	}
-	return executeLockedProviderBuildV1(ctx, input, providerBuildExecutionBackend{
+	return executeLockedProviderBuildV1(withGeneratedBuilderSession(ctx), input, providerBuildExecutionBackend{
 		executeGraph:          ExecutePreparedPythonGraph,
 		prepareValidation:     PrepareProviderGraphValidation,
 		complete:              CompleteProviderBuild,

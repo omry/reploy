@@ -10,6 +10,7 @@ import (
 )
 
 func TestMaterializationBuildCommandUsesOrdinaryDockerBuild(t *testing.T) {
+	t.Setenv("DOCKER_BUILDKIT", "")
 	platform, err := blueprint.ParsePlatform("linux/arm/v7")
 	if err != nil {
 		t.Fatal(err)
@@ -43,6 +44,38 @@ func TestMaterializationBuildCommandUsesOrdinaryDockerBuild(t *testing.T) {
 	joined := strings.Join(command.Args, " ")
 	if strings.Contains(joined, "buildx") {
 		t.Fatalf("command introduced Buildx: %s", joined)
+	}
+}
+
+func TestMaterializationBuildCommandUsesSelectedEngineRegardlessOfAmbientVariable(t *testing.T) {
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	plan := MaterializationBuildPlan{BaseReference: "sha256:" + strings.Repeat("b", 64), OutputReference: temporaryBuildReferencePrefix + "12345678:build-output", Platform: platform, DockerfilePath: filepath.Join(root, "Dockerfile"), ContextDir: root, IIDFile: filepath.Join(root, "result.iid"), NoCache: true}
+	for _, mode := range []generatedBuilderMode{generatedBuildKit, generatedPodmanAPI} {
+		plan.builder = &generatedImageBuilder{mode: mode, endpoint: "unix:///private/selected.sock"}
+		want := "1"
+		if mode == generatedPodmanAPI {
+			want = "0"
+		}
+		for _, value := range []string{"", "0", "1", "false", "invalid"} {
+			t.Setenv("DOCKER_BUILDKIT", value)
+			t.Setenv("DOCKER_HOST", "unix:///private/other.sock")
+			t.Setenv("DOCKER_CONTEXT", "other-context")
+			spec, err := MaterializationBuildCommand(plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if commandEnvironmentValueV1(spec, "DOCKER_BUILDKIT") != want || commandEnvironmentValueV1(spec, "DOCKER_HOST") != plan.builder.endpoint || commandEnvironmentValueV1(spec, "DOCKER_CONTEXT") != "" || !reflect.DeepEqual(spec.Args[:2], []string{"build", "--no-cache"}) {
+				t.Fatalf("selection escaped pinned engine: %#v", spec)
+			}
+		}
+	}
+	plan.builder.mode = generatedBuilderMode(99)
+	if _, err := MaterializationBuildCommand(plan); err == nil {
+		t.Fatal("unknown builder mode accepted")
 	}
 }
 

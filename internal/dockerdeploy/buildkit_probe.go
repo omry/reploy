@@ -108,7 +108,10 @@ func minimumDockerVersion(value string, minimumMajor int, minimumMinor int) bool
 }
 
 func executeDockerOutput(ctx context.Context, args ...string) (string, error) {
-	spec := CommandSpec{Name: "docker", Args: args}
+	if builder := currentGeneratedImageBuilder(ctx); builder != nil {
+		return executeDockerOutputAtEndpoint(ctx, builder.endpoint, args...)
+	}
+	spec := CommandSpec{Name: "docker", Args: args, Env: []string{"DOCKER_BUILDKIT=1"}}
 	endpoint, err := verifiedLocalDockerEndpointV1(ctx, spec, defaultDockerPreflightTimeout)
 	if err != nil {
 		return "", err
@@ -117,7 +120,7 @@ func executeDockerOutput(ctx context.Context, args ...string) (string, error) {
 }
 
 func executeDockerOutputAtEndpoint(ctx context.Context, endpoint string, args ...string) (string, error) {
-	spec := CommandSpec{Name: "docker", Args: args}
+	spec := CommandSpec{Name: "docker", Args: args, Env: []string{"DOCKER_BUILDKIT=1"}}
 	spec = pinDockerEndpointV1(spec, endpoint)
 	ctx, end := buildprofile.Start(ctx, dockerProfileOperation(args))
 	command := exec.CommandContext(ctx, spec.Name, spec.Args...)

@@ -280,9 +280,7 @@ func detectDockerRuntime(ctx context.Context, spec CommandSpec, timeout time.Dur
 
 	command := exec.CommandContext(probeCtx, spec.Name, "info", "--format", "{{json .}}")
 	command.Dir = spec.Dir
-	if len(spec.Env) > 0 {
-		command.Env = append(os.Environ(), spec.Env...)
-	}
+	command.Env = append(append(os.Environ(), "DOCKER_BUILDKIT=1"), spec.Env...)
 	var output bytes.Buffer
 	command.Stdout = &output
 	command.Stderr = &output
