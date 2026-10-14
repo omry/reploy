@@ -1,0 +1,2 @@
+kind: Fixed
+body: Read omitted Podman healthcheck metadata from a digest-verified image export through the selected local endpoint, preserving strict distinction between disabled and active healthchecks.
