@@ -12,6 +12,16 @@ import (
 const MaterializationRendererProfile = "docker-materialization-v1"
 
 func MaterializationAssemblyKey(transaction providers.MaterializationTransaction, platform blueprint.Platform) (providers.AssemblyKeyV1, canonical.Digest, error) {
+	buildKit, err := materializationBuildKitSetting()
+	if err != nil {
+		return providers.AssemblyKeyV1{}, "", err
+	}
+	rendererProfile := MaterializationRendererProfile
+	if buildKit == "0" {
+		// The syntax digest remains a rendered input, not evidence that the
+		// Docker-compatible API builder executed that frontend.
+		rendererProfile += "-docker-api"
+	}
 	transactionDigest, err := providers.MaterializationTransactionDigest(transaction)
 	if err != nil {
 		return providers.AssemblyKeyV1{}, "", fmt.Errorf("materialization assembly transaction: %w", err)
@@ -24,7 +34,7 @@ func MaterializationAssemblyKey(transaction providers.MaterializationTransaction
 		Schema:             providers.AssemblyKeySchemaV1,
 		Parent:             transaction.Upstream,
 		TransactionDigest:  transactionDigest,
-		RendererProfile:    MaterializationRendererProfile,
+		RendererProfile:    rendererProfile,
 		DockerfileFrontend: canonical.Digest(frontend),
 		Platform:           platform,
 	}
