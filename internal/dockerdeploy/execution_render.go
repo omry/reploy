@@ -35,6 +35,8 @@ type DockerControlInput struct {
 	HasWorkload bool
 }
 
+const composeWorkloadService = "environment"
+
 type composePlanDocument struct {
 	Name     string                        `yaml:"name"`
 	Services map[string]composePlanService `yaml:"services"`
@@ -187,7 +189,7 @@ func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerR
 		}
 	}
 	document := composePlanDocument{
-		Name: plan.NetworkName, Services: map[string]composePlanService{"environment": service},
+		Name: plan.NetworkName, Services: map[string]composePlanService{composeWorkloadService: service},
 		Networks: map[string]composePlanNetwork{"default": {Name: plan.NetworkName}}, Volumes: volumes,
 	}
 	compose, err := yaml.Marshal(document)

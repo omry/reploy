@@ -192,6 +192,13 @@ func runCommandWithoutDockerPreflight(spec CommandSpec, options RunOptions) (res
 	if dockerCommandExecutableV1(spec.Name) && !pinnedDockerEndpointV1(spec) {
 		return fmt.Errorf("Docker command %q requires a verified pinned local endpoint", spec.Name)
 	}
+	if handled, err := runPodmanHealthcheckCompatibility(spec, options, runCommandRaw); handled {
+		return err
+	}
+	return runCommandRaw(spec, options)
+}
+
+func runCommandRaw(spec CommandSpec, options RunOptions) (resultErr error) {
 	ctx := options.Context
 	if ctx == nil {
 		ctx = context.Background()

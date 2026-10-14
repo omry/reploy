@@ -36,8 +36,16 @@ and 10,000 archive entries. Podman first creates a full server-side temporary
 archive; client limits do not bound that disk cost. Large images can therefore
 make the first metadata check expensive. Docker uses normal inspection.
 
-Full Podman compatibility remains unqualified; image acceptance and timer
-issues remain open. Existing image validation stays strict.
+For Podman, Reploy prepares newly created containers through the same local
+engine's native update API before initialization/start, so disabled image
+healthchecks cannot create timers. Image metadata and validation stay intact.
+Compose startup prepares each new container, including replacements. An old
+container with a disabled check and a positive timer interval is removed before
+recreation, while Podman can still clean up its existing timer. No global timer
+setting or separately installed Podman CLI is required.
+
+This is a temporary compatibility path for disabled-check scheduling. Full
+Podman compatibility remains unqualified.
 
 ## Install
 
