@@ -10,6 +10,7 @@ import (
 )
 
 func TestMaterializationBuildCommandUsesOrdinaryDockerBuild(t *testing.T) {
+	t.Setenv("DOCKER_BUILDKIT", "")
 	platform, err := blueprint.ParsePlatform("linux/arm/v7")
 	if err != nil {
 		t.Fatal(err)
@@ -43,6 +44,43 @@ func TestMaterializationBuildCommandUsesOrdinaryDockerBuild(t *testing.T) {
 	joined := strings.Join(command.Args, " ")
 	if strings.Contains(joined, "buildx") {
 		t.Fatalf("command introduced Buildx: %s", joined)
+	}
+}
+
+func TestMaterializationBuildCommandHonorsExplicitBuilderSelection(t *testing.T) {
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	plan := MaterializationBuildPlan{
+		BaseReference:   "sha256:" + strings.Repeat("b", 64),
+		OutputReference: temporaryBuildReferencePrefix + "12345678:build-output",
+		Platform:        platform, DockerfilePath: filepath.Join(root, "Dockerfile"),
+		ContextDir: root, IIDFile: filepath.Join(root, "result.iid"), NoCache: true,
+	}
+	for _, test := range []struct{ value, want string }{
+		{"", "1"}, {"1", "1"}, {"0", "0"}, {"true", "1"}, {"false", "0"},
+	} {
+		t.Run("selection="+test.value, func(t *testing.T) {
+			t.Setenv("DOCKER_BUILDKIT", test.value)
+			command, err := MaterializationBuildCommand(plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			command = pinDockerEndpointV1(command, "unix:///private/podman.sock")
+			if got := commandEnvironmentValueV1(command, "DOCKER_BUILDKIT"); got != test.want {
+				t.Fatalf("selected builder = %q, want %q", got, test.want)
+			}
+			if commandEnvironmentValueV1(command, "DOCKER_HOST") != "unix:///private/podman.sock" ||
+				!reflect.DeepEqual(command.Args[:2], []string{"build", "--no-cache"}) {
+				t.Fatalf("builder selection changed endpoint or force flag: %#v", command)
+			}
+		})
+	}
+	t.Setenv("DOCKER_BUILDKIT", "invalid")
+	if _, err := MaterializationBuildCommand(plan); err == nil || !strings.Contains(err.Error(), "DOCKER_BUILDKIT") {
+		t.Fatalf("invalid selection error = %v", err)
 	}
 }
 

@@ -2,7 +2,9 @@ package dockerdeploy
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
@@ -20,6 +22,10 @@ type MaterializationBuildPlan struct {
 }
 
 func MaterializationBuildCommand(plan MaterializationBuildPlan) (CommandSpec, error) {
+	buildKit, err := materializationBuildKitSetting()
+	if err != nil {
+		return CommandSpec{}, err
+	}
 	if err := validateDockerBuildBaseReference(plan.BaseReference); err != nil {
 		return CommandSpec{}, err
 	}
@@ -57,7 +63,24 @@ func MaterializationBuildCommand(plan MaterializationBuildPlan) (CommandSpec, er
 		"--iidfile", plan.IIDFile,
 		plan.ContextDir,
 	)
-	return CommandSpec{Name: "docker", Args: args, Env: []string{"DOCKER_BUILDKIT=1"}}, nil
+	return CommandSpec{Name: "docker", Args: args, Env: []string{"DOCKER_BUILDKIT=" + buildKit}}, nil
+}
+
+// Keep BuildKit as the default, but preserve an explicit Docker CLI opt-out.
+// This selects the existing Docker-compatible build API, not a new backend.
+func materializationBuildKitSetting() (string, error) {
+	value := os.Getenv("DOCKER_BUILDKIT")
+	if value == "" {
+		return "1", nil
+	}
+	enabled, err := strconv.ParseBool(value)
+	if err != nil {
+		return "", fmt.Errorf("DOCKER_BUILDKIT must be a boolean (use 0 or 1): %w", err)
+	}
+	if enabled {
+		return "1", nil
+	}
+	return "0", nil
 }
 
 func validateDockerBuildBaseReference(reference string) error {
