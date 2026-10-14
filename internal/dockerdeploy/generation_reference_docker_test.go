@@ -190,6 +190,79 @@ func TestRemoveEnvironmentGenerationReferenceRejectsRetargetedReference(t *testi
 	}
 }
 
+func TestRemoveEnvironmentReferencesRequireOneDistinctImage(t *testing.T) {
+	dir, references, image := generationReferenceFixture(t)
+	expected, other := string(image.ConfigDigest), string(rendererDigest("9"))
+	for _, mode := range []string{"temporary", "generation", "recorded", "legacy"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Run("foreign-deployment", func(t *testing.T) {
+				calls := 0
+				run := func(context.Context, ...string) (string, error) {
+					calls++
+					return expected, nil
+				}
+				var err error
+				switch mode {
+				case "temporary", "generation":
+					err = removeEnvironmentImageReference(context.Background(), image, references, EnvironmentReferenceKind(mode), "demo", t.TempDir(), run)
+				case "recorded":
+					err = removeEnvironmentGenerationReference(context.Background(), image, references.Generation, "demo", t.TempDir(), run)
+				case "legacy":
+					err = removeLegacyEnvironmentGenerationReference(context.Background(), references.Generation, "demo", t.TempDir(), run)
+				}
+				if err == nil || calls != 0 {
+					t.Fatalf("foreign reference: error = %v, calls = %d", err, calls)
+				}
+			})
+			for _, test := range []struct {
+				name, output          string
+				wantError, wantRemove bool
+			}{
+				{name: "absent"},
+				{name: "single", output: expected, wantRemove: true},
+				{name: "repeated", output: expected + "\n" + expected + "\n" + expected, wantRemove: true},
+				{name: "whitespace", output: " \t" + expected + "\n\n" + expected + "\r\n ", wantRemove: true},
+				{name: "wrong", output: other, wantError: mode != "legacy", wantRemove: mode == "legacy"},
+				{name: "repeated-wrong", output: other + "\n" + other, wantError: mode != "legacy", wantRemove: mode == "legacy"},
+				{name: "distinct", output: expected + "\n" + other, wantError: true},
+				{name: "distinct-reversed", output: other + "\n" + expected, wantError: true},
+				{name: "repeated-then-distinct", output: expected + "\n" + expected + "\n" + other, wantError: true},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					reference := references.Generation
+					if mode == "temporary" {
+						reference = references.Temporary
+					}
+					var calls [][]string
+					run := func(_ context.Context, args ...string) (string, error) {
+						calls = append(calls, append([]string{}, args...))
+						return test.output, nil
+					}
+					var err error
+					switch mode {
+					case "temporary", "generation":
+						err = removeEnvironmentImageReference(context.Background(), image, references, EnvironmentReferenceKind(mode), "demo", dir, run)
+					case "recorded":
+						err = removeEnvironmentGenerationReference(context.Background(), image, reference, "demo", dir, run)
+					case "legacy":
+						err = removeLegacyEnvironmentGenerationReference(context.Background(), reference, "demo", dir, run)
+					}
+					if (err != nil) != test.wantError {
+						t.Fatalf("error = %v, wantError = %v", err, test.wantError)
+					}
+					want := [][]string{{"image", "ls", "--quiet", "--no-trunc", reference}}
+					if test.wantRemove {
+						want = append(want, []string{"image", "rm", "--force", reference})
+					}
+					if !reflect.DeepEqual(calls, want) {
+						t.Fatalf("Docker calls = %#v, want %#v", calls, want)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestRemoveLegacyEnvironmentGenerationReferenceUsesOwnedTagWithoutBuildRecord(t *testing.T) {
 	dir, references, _ := generationReferenceFixture(t)
 	var calls [][]string
