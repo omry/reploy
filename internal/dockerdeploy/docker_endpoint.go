@@ -108,9 +108,8 @@ func inspectDockerContextEndpointV1(ctx context.Context, spec CommandSpec, timeo
 	}
 	command := exec.CommandContext(probeCtx, spec.Name, args...)
 	command.Dir = spec.Dir
-	if len(spec.Env) > 0 {
-		command.Env = append(os.Environ(), spec.Env...)
-	}
+	// Docker parses this ambient variable even for context inspection.
+	command.Env = append(append(os.Environ(), "DOCKER_BUILDKIT=1"), spec.Env...)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	command.Stdout = &stdout
@@ -140,9 +139,8 @@ func inspectDockerContextTargetV1(ctx context.Context, spec CommandSpec, timeout
 	}
 	command := exec.CommandContext(probeCtx, spec.Name, args...)
 	command.Dir = spec.Dir
-	if len(spec.Env) > 0 {
-		command.Env = append(os.Environ(), spec.Env...)
-	}
+	// Docker parses this ambient variable even for context inspection.
+	command.Env = append(append(os.Environ(), "DOCKER_BUILDKIT=1"), spec.Env...)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	command.Stdout = &stdout

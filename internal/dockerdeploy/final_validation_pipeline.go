@@ -64,6 +64,8 @@ func validateAndFinalizeBuild(
 	if buildRuntime == nil || inspectRuntime == nil || retainRuntime == nil || build == nil || inspect == nil || remove == nil {
 		return FinalizedBuildValidationResult{}, fmt.Errorf("final validation pipeline requires build and inspection backends")
 	}
+	ctx = withGeneratedBuilderSession(ctx)
+	options.Context = ctx
 	runtimeRequest := ApplicationRuntimeLayerBuildRequest{
 		Source: final.Image, Verifier: verifier, Account: account, Platform: final.Image.Descriptor.Platform,
 	}

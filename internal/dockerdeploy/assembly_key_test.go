@@ -9,6 +9,7 @@ import (
 )
 
 func TestMaterializationAssemblyKeyUsesPinnedRendererInputs(t *testing.T) {
+	t.Setenv("DOCKER_BUILDKIT", "")
 	platform, err := blueprint.ParsePlatform("linux/amd64")
 	if err != nil {
 		t.Fatal(err)
@@ -34,6 +35,39 @@ func TestMaterializationAssemblyKeyUsesPinnedRendererInputs(t *testing.T) {
 	}
 	if digest != wantDigest {
 		t.Fatalf("assembly digest = %q, want %q", digest, wantDigest)
+	}
+}
+
+func TestMaterializationAssemblyKeySeparatesBuilderModes(t *testing.T) {
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction := rendererTransaction()
+	t.Setenv("DOCKER_BUILDKIT", "1")
+	buildKit, first, err := MaterializationAssemblyKey(transaction, platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DOCKER_BUILDKIT", "0")
+	api, second, err := materializationAssemblyKey(transaction, platform, &generatedImageBuilder{mode: generatedPodmanAPI})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second || buildKit.RendererProfile == api.RendererProfile {
+		t.Fatal("Docker API builder reused the BuildKit assembly identity")
+	}
+	api.RendererProfile = buildKit.RendererProfile
+	if api != buildKit {
+		t.Fatalf("builder choice changed unrelated assembly inputs: %#v", api)
+	}
+	t.Setenv("DOCKER_BUILDKIT", "invalid")
+	_, unchanged, err := MaterializationAssemblyKey(transaction, platform)
+	if err != nil || unchanged != first {
+		t.Fatalf("ambient variable changed default assembly identity: %s %v", unchanged, err)
+	}
+	if _, _, err := materializationAssemblyKey(transaction, platform, &generatedImageBuilder{mode: generatedBuilderMode(99)}); err == nil {
+		t.Fatal("unknown builder mode accepted")
 	}
 }
 

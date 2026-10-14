@@ -805,6 +805,12 @@ func buildSourceBuilderLayer(
 	dockerfile []byte,
 	options RunOptions,
 ) (result BuiltImageCandidate, resultErr error) {
+	ctx = withGeneratedBuilderSession(ctx)
+	options.Context = ctx
+	builder, err := selectGeneratedImageBuilder(ctx, options)
+	if err != nil {
+		return BuiltImageCandidate{}, err
+	}
 	image, err := realizedImageFromDescriptor(upstream)
 	if err != nil {
 		return BuiltImageCandidate{}, err
@@ -858,9 +864,12 @@ func buildSourceBuilderLayer(
 		return BuiltImageCandidate{}, fmt.Errorf("write source-builder Dockerfile: %w", err)
 	}
 	iidPath := filepath.Join(workspace, "result.iid")
+	if err := qualifyGeneratedImageBuilder(ctx, store, baseReference, upstream.Platform, options, builder); err != nil {
+		return BuiltImageCandidate{}, err
+	}
 	command, err := MaterializationBuildCommand(MaterializationBuildPlan{
 		BaseReference: baseReference, OutputReference: outputReference, Platform: upstream.Platform,
-		DockerfilePath: dockerfilePath, ContextDir: contextDir, IIDFile: iidPath, NoCache: options.NoCache,
+		DockerfilePath: dockerfilePath, ContextDir: contextDir, IIDFile: iidPath, NoCache: options.NoCache, builder: builder,
 	})
 	if err != nil {
 		return BuiltImageCandidate{}, err
@@ -877,5 +886,5 @@ func buildSourceBuilderLayer(
 		return BuiltImageCandidate{}, fmt.Errorf("source-builder image ID: %w", err)
 	}
 	preserveWorkspace = true
-	return BuiltImageCandidate{ImageID: imageDigest, TemporaryReference: outputReference, Workspace: workspace}, nil
+	return BuiltImageCandidate{ImageID: imageDigest, TemporaryReference: outputReference, Workspace: workspace, builder: builder}, nil
 }

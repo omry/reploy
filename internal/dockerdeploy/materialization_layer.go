@@ -27,6 +27,7 @@ type BuiltImageCandidate struct {
 	ImageID            canonical.Digest
 	TemporaryReference string
 	Workspace          string
+	builder            *generatedImageBuilder
 }
 
 type dockerImageNotFoundError struct {
@@ -56,6 +57,7 @@ type InspectedMaterializationLayerCandidate struct {
 	AssemblyKey       providers.AssemblyKeyV1
 	AssemblyKeyDigest canonical.Digest
 	Image             InspectedImageCandidate
+	builder           *generatedImageBuilder
 }
 
 // InspectedImageCandidate records Docker's immutable observation of a built
@@ -71,7 +73,15 @@ var runMaterializationBuildCommand = runDockerBuildWithFrontendRetry
 var runMaterializationBuildReferenceDocker = runDockerOutput
 
 func BuildMaterializationLayer(store providerstore.Store, request MaterializationLayerRequest, options RunOptions) (result MaterializationLayerCandidate, resultErr error) {
-	assemblyKey, assemblyKeyDigest, err := MaterializationAssemblyKey(request.Transaction, request.Platform)
+	if _, _, err := MaterializationAssemblyKey(request.Transaction, request.Platform); err != nil {
+		return MaterializationLayerCandidate{}, err
+	}
+	options.Context = withGeneratedBuilderSession(options.Context)
+	builder, err := selectGeneratedImageBuilder(options.Context, options)
+	if err != nil {
+		return MaterializationLayerCandidate{}, err
+	}
+	assemblyKey, assemblyKeyDigest, err := materializationAssemblyKey(request.Transaction, request.Platform, builder)
 	if err != nil {
 		return MaterializationLayerCandidate{}, err
 	}
@@ -135,9 +145,12 @@ func BuildMaterializationLayer(store providerstore.Store, request Materializatio
 		return MaterializationLayerCandidate{}, fmt.Errorf("write materialization Dockerfile: %w", err)
 	}
 	iidPath := filepath.Join(workspace, "result.iid")
+	if err := qualifyGeneratedImageBuilder(ctx, store, baseReference, request.Platform, options, builder); err != nil {
+		return MaterializationLayerCandidate{}, err
+	}
 	command, err := MaterializationBuildCommand(MaterializationBuildPlan{
 		BaseReference: baseReference, OutputReference: outputReference, Platform: request.Platform,
-		DockerfilePath: dockerfilePath, ContextDir: prepared.Dir, IIDFile: iidPath, NoCache: options.NoCache,
+		DockerfilePath: dockerfilePath, ContextDir: prepared.Dir, IIDFile: iidPath, NoCache: options.NoCache, builder: builder,
 	})
 	if err != nil {
 		return MaterializationLayerCandidate{}, err
@@ -165,7 +178,7 @@ func BuildMaterializationLayer(store providerstore.Store, request Materializatio
 	preserveWorkspace = true
 	return MaterializationLayerCandidate{
 		Built: BuiltImageCandidate{
-			ImageID: imageDigest, TemporaryReference: outputReference, Workspace: workspace,
+			ImageID: imageDigest, TemporaryReference: outputReference, Workspace: workspace, builder: builder,
 		},
 		AssemblyKey: assemblyKey, AssemblyKeyDigest: assemblyKeyDigest,
 	}, nil
@@ -180,7 +193,12 @@ func InspectMaterializationLayerCandidate(ctx context.Context, candidate Materia
 }
 
 func inspectMaterializationLayerCandidate(ctx context.Context, candidate MaterializationLayerCandidate, request MaterializationLayerRequest, run dockerOutputRunner) (InspectedMaterializationLayerCandidate, error) {
-	expectedKey, expectedDigest, err := MaterializationAssemblyKey(request.Transaction, request.Platform)
+	builder := candidate.Built.builder
+	ctx, err := bindMaterializationBuilderContext(ctx, builder)
+	if err != nil {
+		return InspectedMaterializationLayerCandidate{}, err
+	}
+	expectedKey, expectedDigest, err := materializationAssemblyKey(request.Transaction, request.Platform, builder)
 	if err != nil {
 		return InspectedMaterializationLayerCandidate{}, err
 	}
@@ -195,11 +213,16 @@ func inspectMaterializationLayerCandidate(ctx context.Context, candidate Materia
 		return InspectedMaterializationLayerCandidate{}, err
 	}
 	return InspectedMaterializationLayerCandidate{
-		AssemblyKey: candidate.AssemblyKey, AssemblyKeyDigest: candidate.AssemblyKeyDigest, Image: image,
+		AssemblyKey: candidate.AssemblyKey, AssemblyKeyDigest: candidate.AssemblyKeyDigest, Image: image, builder: builder,
 	}, nil
 }
 
 func inspectBuiltImageCandidate(ctx context.Context, candidate BuiltImageCandidate, platform blueprint.Platform, run dockerOutputRunner) (InspectedImageCandidate, error) {
+	var err error
+	ctx, err = bindGenericMaterializationBuilderContext(ctx, candidate.builder)
+	if err != nil {
+		return InspectedImageCandidate{}, err
+	}
 	if err := candidate.ImageID.Validate(); err != nil {
 		return InspectedImageCandidate{}, fmt.Errorf("inspect materialization candidate image ID: %w", err)
 	}

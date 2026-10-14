@@ -122,6 +122,8 @@ func runProviderInstallV1(
 	if err := ctx.Err(); err != nil {
 		return deploy.StateV1{}, err
 	}
+	ctx = withGeneratedBuilderSession(ctx)
+	input.RunOptions.Context = ctx
 	if input.SourceDeploymentDir == "" {
 		return deploy.StateV1{}, fmt.Errorf("run provider install requires a source deployment directory")
 	}

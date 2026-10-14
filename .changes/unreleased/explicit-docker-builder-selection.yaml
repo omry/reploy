@@ -1,0 +1,2 @@
+kind: Fixed
+body: Select the generated-image builder automatically from the chosen local engine. Docker retains BuildKit; experimental local Linux Podman builds use the compatible build API after feature checks, without requiring DOCKER_BUILDKIT. Full Podman image acceptance and lifecycle compatibility remain unqualified.

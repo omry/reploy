@@ -17,9 +17,18 @@ type MaterializationBuildPlan struct {
 	ContextDir      string
 	IIDFile         string
 	NoCache         bool
+	builder         *generatedImageBuilder
 }
 
 func MaterializationBuildCommand(plan MaterializationBuildPlan) (CommandSpec, error) {
+	buildKit := "1"
+	switch generatedBuilderModeOf(plan.builder) {
+	case generatedBuildKit:
+	case generatedPodmanAPI:
+		buildKit = "0"
+	default:
+		return CommandSpec{}, fmt.Errorf("unknown generated-image builder mode")
+	}
 	if err := validateDockerBuildBaseReference(plan.BaseReference); err != nil {
 		return CommandSpec{}, err
 	}
@@ -57,7 +66,11 @@ func MaterializationBuildCommand(plan MaterializationBuildPlan) (CommandSpec, er
 		"--iidfile", plan.IIDFile,
 		plan.ContextDir,
 	)
-	return CommandSpec{Name: "docker", Args: args, Env: []string{"DOCKER_BUILDKIT=1"}}, nil
+	spec := CommandSpec{Name: "docker", Args: args, Env: []string{"DOCKER_BUILDKIT=" + buildKit}}
+	if plan.builder != nil {
+		spec = pinDockerEndpointV1(spec, plan.builder.endpoint)
+	}
+	return spec, nil
 }
 
 func validateDockerBuildBaseReference(reference string) error {

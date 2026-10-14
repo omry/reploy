@@ -110,7 +110,10 @@ func RunProviderBuildV1(
 	ctx context.Context,
 	input ProviderBuildRunInputV1,
 ) (LockedProviderBuildExecutionResultV1, error) {
-	return runProviderBuildV1(ctx, input, providerBuildRunBackend{
+	if ctx == nil {
+		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("provider build requires a context")
+	}
+	return runProviderBuildV1(withGeneratedBuilderSession(ctx), input, providerBuildRunBackend{
 		acquire:        deploy.AcquireOperationLock,
 		newStore:       providerstore.NewStore,
 		prepare:        PrepareLockedProviderBuildV1,
@@ -184,7 +187,10 @@ func RunLockedProviderBuildV1(
 	ctx context.Context,
 	input LockedProviderBuildRunInputV1,
 ) (LockedProviderBuildExecutionResultV1, error) {
-	return runLockedProviderBuildV1(ctx, input, providerBuildRunBackend{
+	if ctx == nil {
+		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("provider build requires a context")
+	}
+	return runLockedProviderBuildV1(withGeneratedBuilderSession(ctx), input, providerBuildRunBackend{
 		prepare:        PrepareLockedProviderBuildV1,
 		execute:        ExecuteLockedProviderBuildV1,
 		planCurrent:    PlanCurrentRuntimeV1,

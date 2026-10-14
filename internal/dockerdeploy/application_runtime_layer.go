@@ -126,9 +126,11 @@ func BuildApplicationRuntimeLayerCandidate(
 			_ = os.RemoveAll(workspace)
 		}
 	}()
-	ctx := options.Context
-	if ctx == nil {
-		ctx = context.Background()
+	ctx := withGeneratedBuilderSession(options.Context)
+	options.Context = ctx
+	builder, err := selectGeneratedImageBuilder(ctx, options)
+	if err != nil {
+		return BuiltImageCandidate{}, err
 	}
 	contextDir := filepath.Join(workspace, "context")
 	if err := os.Mkdir(contextDir, 0o700); err != nil {
@@ -182,9 +184,12 @@ func BuildApplicationRuntimeLayerCandidate(
 		return BuiltImageCandidate{}, fmt.Errorf("write application runtime Dockerfile: %w", err)
 	}
 	iidPath := filepath.Join(workspace, "result.iid")
+	if err := qualifyGeneratedImageBuilder(ctx, store, baseReference, request.Platform, options, builder); err != nil {
+		return BuiltImageCandidate{}, err
+	}
 	command, err := MaterializationBuildCommand(MaterializationBuildPlan{
 		BaseReference: baseReference, OutputReference: outputReference, Platform: request.Platform,
-		DockerfilePath: dockerfilePath, ContextDir: contextDir, IIDFile: iidPath, NoCache: options.NoCache,
+		DockerfilePath: dockerfilePath, ContextDir: contextDir, IIDFile: iidPath, NoCache: options.NoCache, builder: builder,
 	})
 	if err != nil {
 		return BuiltImageCandidate{}, err
@@ -201,7 +206,7 @@ func BuildApplicationRuntimeLayerCandidate(
 		return BuiltImageCandidate{}, fmt.Errorf("application runtime image ID: %w", err)
 	}
 	preserveWorkspace = true
-	return BuiltImageCandidate{ImageID: imageID, TemporaryReference: outputReference, Workspace: workspace}, nil
+	return BuiltImageCandidate{ImageID: imageID, TemporaryReference: outputReference, Workspace: workspace, builder: builder}, nil
 }
 
 func InspectApplicationRuntimeLayerCandidate(

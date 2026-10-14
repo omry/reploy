@@ -203,7 +203,9 @@ func runCommandWithoutDockerPreflight(spec CommandSpec, options RunOptions) (res
 	}
 	command := exec.CommandContext(ctx, spec.Name, spec.Args...)
 	command.Dir = spec.Dir
-	if len(spec.Env) > 0 {
+	if dockerCommandExecutableV1(spec.Name) {
+		command.Env = append(append(os.Environ(), "DOCKER_BUILDKIT=1"), spec.Env...)
+	} else if len(spec.Env) > 0 {
 		command.Env = append(os.Environ(), spec.Env...)
 	}
 	command.Stdin = options.Stdin
@@ -316,9 +318,7 @@ func checkDockerResponsive(ctx context.Context, spec CommandSpec, timeout time.D
 
 	command := exec.CommandContext(preflightCtx, spec.Name, "version", "--format", "{{.Server.Version}}")
 	command.Dir = spec.Dir
-	if len(spec.Env) > 0 {
-		command.Env = append(os.Environ(), spec.Env...)
-	}
+	command.Env = append(append(os.Environ(), "DOCKER_BUILDKIT=1"), spec.Env...)
 	var output bytes.Buffer
 	command.Stdout = &output
 	command.Stderr = &output

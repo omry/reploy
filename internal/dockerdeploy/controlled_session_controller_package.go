@@ -63,7 +63,7 @@ func prepareControlledSessionControllerPackageV1(
 	if err != nil {
 		return nil, err
 	}
-	return buildControlledSessionControllerPackageV1(ctx, store, current, controlledSessionControllerPackageBackendV1{
+	return buildControlledSessionControllerPackageV1(withGeneratedBuilderSession(ctx), store, current, controlledSessionControllerPackageBackendV1{
 		locateExecutable: locateControlledSessionControllerExecutableV1,
 		buildCommand:     runDockerBuildWithFrontendRetry,
 		docker:           runDockerOutput,
@@ -95,6 +95,12 @@ func buildControlledSessionControllerPackageV1(
 	}
 	if err := probearchive.ValidateReleaseV1(backend.hostRelease); err != nil {
 		return nil, fmt.Errorf("prepare controlled-session controller package host release: %w", err)
+	}
+	ctx = withGeneratedBuilderSession(ctx)
+	options := RunOptions{Context: ctx}
+	builder, err := selectGeneratedImageBuilder(ctx, options)
+	if err != nil {
+		return nil, err
 	}
 	source, err := inspectControlledSessionControllerSourceV1(ctx, current, backend.docker)
 	if err != nil {
@@ -159,9 +165,12 @@ func buildControlledSessionControllerPackageV1(
 		}
 	}()
 	iidPath := filepath.Join(workspace, "result.iid")
+	if err := qualifyGeneratedImageBuilder(ctx, store, baseReference, platform, options, builder); err != nil {
+		return nil, err
+	}
 	command, err := MaterializationBuildCommand(MaterializationBuildPlan{
 		BaseReference: baseReference, OutputReference: outputReference, Platform: platform,
-		DockerfilePath: dockerfilePath, ContextDir: contextDir, IIDFile: iidPath,
+		DockerfilePath: dockerfilePath, ContextDir: contextDir, IIDFile: iidPath, builder: builder,
 	})
 	if err != nil {
 		return nil, err
@@ -177,7 +186,7 @@ func buildControlledSessionControllerPackageV1(
 	if err := imageID.Validate(); err != nil {
 		return nil, fmt.Errorf("controlled-session controller package image ID: %w", err)
 	}
-	candidate := BuiltImageCandidate{ImageID: imageID, TemporaryReference: outputReference, Workspace: workspace}
+	candidate := BuiltImageCandidate{ImageID: imageID, TemporaryReference: outputReference, Workspace: workspace, builder: builder}
 	candidateEstablished = true
 	accepted := false
 	defer func() {

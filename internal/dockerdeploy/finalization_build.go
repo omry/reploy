@@ -65,9 +65,11 @@ func BuildFinalizedImageCandidate(store providerstore.Store, request Finalizatio
 			_ = os.RemoveAll(workspace)
 		}
 	}()
-	ctx := options.Context
-	if ctx == nil {
-		ctx = context.Background()
+	ctx := withGeneratedBuilderSession(options.Context)
+	options.Context = ctx
+	builder, err := selectGeneratedImageBuilder(ctx, options)
+	if err != nil {
+		return BuiltImageCandidate{}, err
 	}
 	baseReference, cleanupBaseReference, err := prepareTemporaryBuildBaseReference(
 		ctx, store.Root(), workspace, request.Source.Image, runFinalizationBuildReferenceDocker,
@@ -114,9 +116,12 @@ func BuildFinalizedImageCandidate(store providerstore.Store, request Finalizatio
 		return BuiltImageCandidate{}, fmt.Errorf("write finalization Dockerfile: %w", err)
 	}
 	iidPath := filepath.Join(workspace, "result.iid")
+	if err := qualifyGeneratedImageBuilder(ctx, store, baseReference, request.Platform, options, builder); err != nil {
+		return BuiltImageCandidate{}, err
+	}
 	command, err := MaterializationBuildCommand(MaterializationBuildPlan{
 		BaseReference: baseReference, OutputReference: outputReference, Platform: request.Platform,
-		DockerfilePath: dockerfilePath, ContextDir: contextDir, IIDFile: iidPath, NoCache: options.NoCache,
+		DockerfilePath: dockerfilePath, ContextDir: contextDir, IIDFile: iidPath, NoCache: options.NoCache, builder: builder,
 	})
 	if err != nil {
 		return BuiltImageCandidate{}, err
@@ -134,7 +139,7 @@ func BuildFinalizedImageCandidate(store providerstore.Store, request Finalizatio
 	}
 	preserveWorkspace = true
 	return BuiltImageCandidate{
-		ImageID: imageID, TemporaryReference: outputReference, Workspace: workspace,
+		ImageID: imageID, TemporaryReference: outputReference, Workspace: workspace, builder: builder,
 	}, nil
 }
 

@@ -236,6 +236,104 @@ func TestValidateAndFinalizeBuildRemovesCandidateAfterInspectionFailure(t *testi
 	}
 }
 
+func TestValidateAndFinalizeBuildKeepsOneBuilderAcrossSiblingPhases(t *testing.T) {
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := fullValidationInput(t, "9")
+	verifier, runtimeCandidate, runtimeImage := finalValidationRuntimeFixture(t, final)
+	originalEndpoint := "unix:///original-final-validation.sock"
+	oldProbe := probeGeneratedImageBuilder
+	selectionCalls := 0
+	probeGeneratedImageBuilder = func(context.Context, RunOptions) (*generatedImageBuilder, error) {
+		selectionCalls++
+		return &generatedImageBuilder{
+			mode: generatedPodmanAPI, endpoint: originalEndpoint, engine: "Podman",
+			serverVersion: "6.1.4", clientVersion: "29.8.1",
+		}, nil
+	}
+	t.Cleanup(func() { probeGeneratedImageBuilder = oldProbe })
+	t.Setenv("DOCKER_HOST", "unix:///ambient-original.sock")
+	t.Setenv("DOCKER_CONTEXT", "ambient-original")
+	var selected *generatedImageBuilder
+	var finalCandidate BuiltImageCandidate
+	observedEndpoints := []string{}
+	observe := func(ctx context.Context) {
+		got := currentGeneratedImageBuilder(ctx)
+		if got == nil {
+			t.Fatal("sibling phase lost the generated builder session")
+		}
+		if selected == nil {
+			selected = got
+		} else if got != selected {
+			t.Fatalf("sibling phase selected a different builder: %#v", got)
+		}
+		observedEndpoints = append(observedEndpoints, got.endpoint)
+	}
+	want := errors.New("final inspection failed")
+	_, err = validateAndFinalizeBuild(
+		t.Context(), store, []FullImageValidationInput{}, final, acceptFullValidationProfile,
+		func(context.Context, FullImageValidationInput) ([]providers.ValidationEvidence, []providers.ExecutableEvidence, error) {
+			return []providers.ValidationEvidence{}, []providers.ExecutableEvidence{}, nil
+		}, verifier, testApplicationLocalAccountV1(), RunOptions{},
+		func(_ providerstore.Store, _ ApplicationRuntimeLayerBuildRequest, options RunOptions) (BuiltImageCandidate, error) {
+			builder, selectErr := selectGeneratedImageBuilder(options.Context, options)
+			if selectErr != nil {
+				t.Fatal(selectErr)
+			}
+			selected = builder
+			return BuiltImageCandidate{ImageID: runtimeCandidate.ImageID, builder: builder}, nil
+		},
+		func(ctx context.Context, _ BuiltImageCandidate, _ ApplicationRuntimeLayerBuildRequest) (InspectedImageCandidate, error) {
+			observe(ctx)
+			t.Setenv("DOCKER_HOST", "unix:///ambient-drifted.sock")
+			t.Setenv("DOCKER_CONTEXT", "ambient-drifted")
+			return runtimeImage, nil
+		},
+		func(context.Context, BuiltImageCandidate, providers.RealizedImageV1) error { return nil },
+		func(_ providerstore.Store, _ FinalizationBuildRequest, options RunOptions) (BuiltImageCandidate, error) {
+			builder, selectErr := selectGeneratedImageBuilder(options.Context, options)
+			if selectErr != nil {
+				t.Fatal(selectErr)
+			}
+			observe(options.Context)
+			finalCandidate = BuiltImageCandidate{ImageID: rendererDigest("e"), builder: builder}
+			return finalCandidate, nil
+		},
+		func(ctx context.Context, got BuiltImageCandidate, _ FinalizationBuildRequest) (InspectedImageCandidate, error) {
+			if got != finalCandidate {
+				t.Fatalf("final inspection candidate = %#v, want %#v", got, finalCandidate)
+			}
+			observe(ctx)
+			return InspectedImageCandidate{}, want
+		},
+		func(ctx context.Context, got BuiltImageCandidate) error {
+			if got != finalCandidate {
+				t.Fatalf("cleanup candidate = %#v, want %#v", got, finalCandidate)
+			}
+			return removeBuiltImageCandidate(ctx, got, func(runCtx context.Context, _ ...string) (string, error) {
+				observe(runCtx)
+				return "", nil
+			})
+		},
+	)
+	if !errors.Is(err, want) {
+		t.Fatalf("error = %v, want %v", err, want)
+	}
+	if selectionCalls != 1 {
+		t.Fatalf("builder selection calls = %d, want one", selectionCalls)
+	}
+	if len(observedEndpoints) != 4 {
+		t.Fatalf("observed endpoints = %v, want runtime inspection, final build, final inspection, cleanup", observedEndpoints)
+	}
+	for _, endpoint := range observedEndpoints {
+		if endpoint != originalEndpoint {
+			t.Fatalf("observed ambient endpoint after selection: %v", observedEndpoints)
+		}
+	}
+}
+
 func finalValidationRuntimeFixture(
 	t *testing.T,
 	final FullImageValidationInput,

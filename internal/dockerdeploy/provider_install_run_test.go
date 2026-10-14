@@ -14,6 +14,7 @@ import (
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providerstore"
 )
 
@@ -21,6 +22,13 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 	sourceDir := t.TempDir()
 	destinationDir := t.TempDir()
 	want, build := providerInstallRunBuildFixture(t, sourceDir)
+	oldProbe := probeGeneratedImageBuilder
+	selectionCalls := 0
+	probeGeneratedImageBuilder = func(context.Context, RunOptions) (*generatedImageBuilder, error) {
+		selectionCalls++
+		return &generatedImageBuilder{endpoint: "unix:///provider-install.sock", engine: "Podman", mode: generatedPodmanAPI, serverVersion: "6.1.4", clientVersion: "29.8.1"}, nil
+	}
+	t.Cleanup(func() { probeGeneratedImageBuilder = oldProbe })
 	order := []string{}
 	locks := map[string]*deploy.OperationLock{}
 	backend := providerInstallRunBackend{
@@ -62,6 +70,9 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 		},
 		buildSource: func(_ context.Context, input LockedProviderBuildRunInputV1) (LockedProviderBuildExecutionResultV1, error) {
 			order = append(order, "build-source")
+			if _, err := selectGeneratedImageBuilder(input.RunOptions.Context, input.RunOptions); err != nil {
+				t.Fatalf("select source builder: %v", err)
+			}
 			if err := input.Operation.RequireHeld(); err != nil {
 				t.Fatal(err)
 			}
@@ -90,8 +101,11 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 			input.Install.SystemGID = 992
 			return input, nil
 		},
-		buildInstallRuntime: func(_ context.Context, _ providerstore.Store, source CurrentBuild, plan DockerExecutionPlan, _ RunOptions) (installedRuntimeIdentityBuildV1, error) {
+		buildInstallRuntime: func(_ context.Context, _ providerstore.Store, source CurrentBuild, plan DockerExecutionPlan, options RunOptions) (installedRuntimeIdentityBuildV1, error) {
 			order = append(order, "build-install-runtime")
+			if _, err := selectGeneratedImageBuilder(options.Context, options); err != nil {
+				t.Fatalf("select installed-runtime builder: %v", err)
+			}
 			account, err := applicationLocalAccountV1(plan.Sandbox)
 			if err != nil {
 				return installedRuntimeIdentityBuildV1{}, err
@@ -261,6 +275,9 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 	if !reflect.DeepEqual(order, wantOrder) {
 		t.Fatalf("order=%v want=%v", order, wantOrder)
 	}
+	if selectionCalls != 1 || strings.Count(progress.String(), "Using Podman") != 1 {
+		t.Fatalf("builder selection calls=%d progress=%q", selectionCalls, progress.String())
+	}
 	if details.Environment != "demo" || details.TargetDir != destinationDir ||
 		details.ControlScript != "democtl" || details.Service != "demo" ||
 		!details.Updated || !details.ImageReused || !details.Started ||
@@ -290,6 +307,95 @@ func TestRunProviderInstallV1HoldsSourceBeforeDestinationAndReleasesInReverse(t 
 	}
 	if _, err := os.Stat(filepath.Join(destinationDir, ".prepared-candidate")); !os.IsNotExist(err) {
 		t.Fatalf("prepared candidate was not cleaned: %v", err)
+	}
+}
+
+func TestProviderInstallAdaptationAllowsLegacyNilMarker(t *testing.T) {
+	current, _ := currentBuildReuseFixture(t)
+	current.Lock.Base.AuthorReference = "debian:bookworm-slim"
+	current.Lock.Base.ImmutableReference = "debian@" + string(rendererDigest("a"))
+	current.Lock.Base.ManifestDigest = rendererDigest("a")
+	baseImage, err := realizedImageFromDescriptor(current.Lock.Base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Lock.RuntimeLayer.Upstream = baseImage
+	current.Lock.RuntimeLayer.TransactionDigest, err = deploy.ApplicationRuntimeLayerTransactionDigestV1(
+		current.Lock.RuntimeLayer.Verifier,
+		current.Lock.RuntimeLayer.Account,
+		baseImage,
+		current.Lock.Platform,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := providerstore.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantAccount, err := applicationLocalAccountV1(testApplicationSandboxPlanV1(2000, 3000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCandidate := BuiltImageCandidate{ImageID: rendererDigest("e")}
+	selected := &generatedImageBuilder{endpoint: "unix:///install-adaptation.sock", engine: "Docker", serverVersion: "29.8.1", clientVersion: "29.8.1"}
+	oldProbe := probeGeneratedImageBuilder
+	selectionCalls := 0
+	probeGeneratedImageBuilder = func(context.Context, RunOptions) (*generatedImageBuilder, error) {
+		selectionCalls++
+		return selected, nil
+	}
+	t.Cleanup(func() { probeGeneratedImageBuilder = oldProbe })
+	var progress bytes.Buffer
+	ctx := withGeneratedBuilderSession(t.Context())
+	if _, err := selectGeneratedImageBuilder(ctx, RunOptions{Progress: &progress}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := buildInstalledRuntimeIdentityWithV1(
+		ctx, store, current,
+		DockerExecutionPlan{Sandbox: testApplicationSandboxPlanV1(2000, 3000)},
+		RunOptions{Progress: &progress},
+		installedRuntimeIdentityBackendV1{
+			inspect: func(inspectCtx context.Context, candidate BuiltImageCandidate, platform blueprint.Platform) (InspectedImageCandidate, error) {
+				if candidate.builder != nil || currentGeneratedImageBuilder(inspectCtx) != selected {
+					t.Fatalf("legacy adaptation inspection binding = %#v / %#v", candidate, currentGeneratedImageBuilder(inspectCtx))
+				}
+				return inspectBuiltImageCandidate(inspectCtx, candidate, platform, func(runCtx context.Context, args ...string) (string, error) {
+					if currentGeneratedImageBuilder(runCtx) != selected || !reflect.DeepEqual(args, []string{"image", "inspect", string(candidate.ImageID)}) {
+						t.Fatalf("legacy Docker inspection binding = %#v / %v", currentGeneratedImageBuilder(runCtx), args)
+					}
+					diffID := current.Lock.Base.RootFSDiffIDs[0]
+					return fmt.Sprintf(`[ {"Id":%q,"RepoDigests":[],"Os":"linux","Architecture":"amd64","RootFS":{"Layers":[%q]},"Config":{}} ]`, string(candidate.ImageID), string(diffID)), nil
+				})
+			},
+			finalize: func(finalizeCtx context.Context, gotStore providerstore.Store, layers []FullImageValidationInput, final FullImageValidationInput, validate providers.RequirementProfileOwnerValidator, run FullImageValidationRunner, verifier deploy.ApplicationStartupVerifierV1, account deploy.ApplicationLocalAccountV1, options RunOptions) (FinalizedBuildValidationResult, error) {
+				if currentGeneratedImageBuilder(finalizeCtx) != selected || currentGeneratedImageBuilder(options.Context) != selected || gotStore.Root() != store.Root() || len(layers) != 0 || validate == nil || run == nil || verifier != current.Lock.RuntimeLayer.Verifier || account != wantAccount {
+					t.Fatalf("legacy adaptation finalization binding = %p / %p / %#v", currentGeneratedImageBuilder(finalizeCtx), currentGeneratedImageBuilder(options.Context), account)
+				}
+				if !reflect.DeepEqual(final.Image.Descriptor, current.Lock.Base) || final.Image.Image != current.Lock.RuntimeLayer.Upstream || !reflect.DeepEqual(final.Outputs, current.Lock.Catalog) || !reflect.DeepEqual(final.RuntimePolicy, current.Lock.RuntimePolicy) {
+					t.Fatalf("final validation input = %#v", final)
+				}
+				layer := current.Lock.RuntimeLayer
+				layer.Account = account
+				layer.TransactionDigest, err = deploy.ApplicationRuntimeLayerTransactionDigestV1(verifier, account, layer.Upstream, current.Lock.Platform)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return FinalizedBuildValidationResult{
+					RuntimeLayer: layer,
+					Validation:   BuildValidationResult{Final: PublishedImageValidation{Reference: current.Lock.ValidationRecord}},
+					Image:        InspectedImageCandidate{Image: current.Lock.FinalImage},
+					Candidate:    wantCandidate,
+				}, nil
+			},
+			remove: func(context.Context, BuiltImageCandidate) error {
+				t.Fatal("successful adapted candidate was removed early")
+				return nil
+			},
+		},
+	)
+	if err != nil || !result.Adapted || result.Candidate != wantCandidate || result.Lock.RuntimeLayer.Account != wantAccount || selectionCalls != 1 || strings.Count(progress.String(), "Using Docker") != 1 {
+		t.Fatalf("legacy adaptation result = %#v, error=%v selections=%d progress=%q", result, err, selectionCalls, progress.String())
 	}
 }
 
