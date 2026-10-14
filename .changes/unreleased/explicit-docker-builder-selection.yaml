@@ -1,0 +1,2 @@
+kind: Fixed
+body: Honor explicit DOCKER_BUILDKIT selection for generated image builds while retaining BuildKit by default. The experimental Docker-compatible API route can use Podman-local build images; full Podman healthcheck and lifecycle compatibility remains unqualified.
