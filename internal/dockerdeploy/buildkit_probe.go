@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -123,6 +124,18 @@ func executeDockerOutputAtEndpoint(ctx context.Context, endpoint string, args ..
 	spec := CommandSpec{Name: "docker", Args: args, Env: []string{"DOCKER_BUILDKIT=1"}}
 	spec = pinDockerEndpointV1(spec, endpoint)
 	ctx, end := buildprofile.Start(ctx, dockerProfileOperation(args))
+	var compatibleOutput bytes.Buffer
+	var compatibleError dockerBuildOutputTail
+	if handled, err := runPodmanHealthcheckCompatibility(spec, RunOptions{Context: ctx, Stdout: &compatibleOutput, Stderr: &compatibleError}, runCommandRaw); handled {
+		end(nil)
+		if err != nil {
+			if diagnostic := compatibleError.String(); diagnostic != "" {
+				err = fmt.Errorf("%w\ncommand output:\n%s", err, diagnostic)
+			}
+			return "", err
+		}
+		return compatibleOutput.String() + compatibleError.String(), nil
+	}
 	command := exec.CommandContext(ctx, spec.Name, spec.Args...)
 	command.Env = append(os.Environ(), spec.Env...)
 	output, err := command.CombinedOutput()

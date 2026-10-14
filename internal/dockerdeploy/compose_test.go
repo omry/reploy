@@ -271,6 +271,7 @@ func TestRunDockerCommandPinsVerifiedEndpoint(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture requires a POSIX host")
 	}
+	stubDockerHealthcheckProbe(t, "unix:///verified/docker.sock")
 	dir := t.TempDir()
 	versionEnvironmentPath := filepath.Join(dir, "version.env")
 	commandEnvironmentPath := filepath.Join(dir, "command.env")
@@ -312,6 +313,7 @@ func TestBindDockerCommandRunnerPinsOneEndpointForEveryCommand(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture requires a POSIX host")
 	}
+	stubDockerHealthcheckProbe(t, "unix:///first/docker.sock")
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "commands.log")
 	dockerPath := writeFakeCommand(

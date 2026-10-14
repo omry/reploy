@@ -58,6 +58,7 @@ func TestStartProviderInstallHostV1RunsOneCommandWithoutPreflight(t *testing.T) 
 }
 
 func TestStartProviderInstallHostV1PreflightsDockerBackend(t *testing.T) {
+	stubDockerHealthcheckProbe(t, "unix:///var/run/docker.sock")
 	destinationDir := t.TempDir()
 	dockerPath := writeFakeCommand(
 		t,
