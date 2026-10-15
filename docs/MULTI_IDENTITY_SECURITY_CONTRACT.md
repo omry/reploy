@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-08-15
+updated: 2026-10-19
 summary: Podman-gated security contract and acceptance ledger for future isolated multi-identity Linux workloads.
 ---
 
@@ -35,6 +35,12 @@ slice; milestone 1B does not test limits that have not been defined.
 
 ## Terms
 
+**Composition installation**
+: One installed service cluster, such as a mail system. Its composition
+  blueprint supplies the initial mapping for each service. Durable installation
+  state records the accepted mappings and their retained ownership obligations.
+  Grouping services does not merge their private mappings or authorize sharing.
+
 **Workload**
 : One independently isolated Linux-container application unit. A workload is
   not an entire future multi-workload composition.
@@ -43,8 +49,8 @@ slice; milestone 1B does not test limits that have not been defined.
 : The installed deployment: Reploy's durable record for one installed copy of
   a workload. It survives restarts and generation changes and owns the
   workload's private mapping. This is not an installation of the Reploy
-  program itself. A future composition-level blueprint may own or reference
-  this record without changing its stability requirements.
+  program itself. A composition installation owns or references this service
+  record without changing its stability requirements.
 
 **Generation**
 : One immutable, image-locked revision of a workload installation. An update
@@ -131,8 +137,10 @@ slice; milestone 1B does not test limits that have not been defined.
 **Delegation**
 : Host-admin authorization that makes a bounded subordinate UID/GID facility
   or another narrowly scoped identity mechanism available for Reploy-managed
-  workloads. A later design must choose the delegation recipient: an OS user,
-  a Reploy installation identity, or a narrow broker. Delegation does not give
+  workloads. The initial model uses existing host delegation to the operating
+  OS user; the administrator coordinates assignments across installations and
+  other services. Reploy introduces no enrollment service or privileged broker.
+  Delegation does not give
   the workload host root, a named host account, arbitrary host IDs, or general
   runtime authority. The delegated host IDs must be exclusive to that
   recipient: they must not alias any local or NSS-provided host principal or
@@ -188,6 +196,15 @@ an explicit profile property, not exact identity allowlisting.
 The protected assets are host authority, other workloads and their data,
 stable persistent ownership, delegated subordinate-ID space, and the accuracy
 of Reploy's installation state.
+
+The initial model relies on the trusted administrator to coordinate host-ID
+reservations across separate installations and unmanaged services, including
+concurrent administrative changes. Reploy checks the selected mappings against
+host delegation, host identity information and its installation state; known
+conflicts or insufficient evidence for a required check cause rejection. It
+does not provide an automatic system-wide allocation or coordination guarantee.
+Administrator coordination remains a required operating condition, including
+while an installation is inactive but its owned data remains.
 
 ## Required Security Properties
 
@@ -321,6 +338,22 @@ image-local account name does not grant or revoke filesystem authority.
 
 ### Mapping ownership
 
+#### Approved initial coordination model — 2026-10-16
+
+The maintainer approved composition-scoped initial mappings with manual,
+cooperative host coordination. A composition blueprint may supply explicit
+subordinate host-ID assignments for each service. Such assignments are
+host-specific inputs, not portable authority grants or bindings to named host
+accounts. Reploy validates them against existing delegation before use and
+records accepted mappings in durable installation state.
+
+There is no initial Reploy system-wide enrollment, automatic global allocator
+or mandatory shared registry across installations. System-level configuration
+may later strengthen coordination under a separately reviewed design.
+Within a composition, mappings must be disjoint and state changes must be
+serialized; coordination outside that composition belongs to the administrator.
+The detailed blueprint syntax and state protocol still require design review.
+
 One workload installation owns one stable private mapping. Its generations
 reference that mapping rather than receiving new mappings. Removal releases
 the mapping only after all owned live resources and retained storage are gone
@@ -329,9 +362,10 @@ or their ownership has been explicitly migrated.
 For the exact profile, the active mapping is generated from the current
 generation, but every previously established identity assignment remains part
 of the installation's reserved allocation while the installation or its
-retained storage exists. A newly declared numeric identity receives a new
-non-overlapping assignment; removing it makes that assignment dormant rather
-than reusable. The bounded profile keeps its fixed private range while the
+retained storage exists. A newly declared numeric identity requires an explicit,
+validated non-overlapping assignment; a missing assignment fails before start.
+Removing an identity makes its assignment dormant rather than reusable.
+The bounded profile keeps its fixed private range while the
 generation-specific supervisor policy changes. Reploy conservatively reserves
 the installation's allocation based on retained managed storage; it does not
 need to discover or repair every stale owner in that storage.
@@ -346,11 +380,12 @@ mount fails before workload mutation. A future input contract may admit a
 filtered copy that contains only accepted inert filesystem objects rather than
 exposing a live external directory.
 
-A future composition-level model may become the durable parent for workload
-installations and shared interface declarations. For this isolated profile,
-literal host IDs remain private Reploy allocation state rather than portable
-blueprint values. Future explicit host-ID bindings for mixed systems require a
-separate security design and validation path.
+A composition installation is the durable parent for service installations.
+Its initial mapping inputs do not override recorded mappings on later updates,
+recreation or rollback, and do not cause automatic ownership migration. Shared
+interfaces still require explicit declarations and the existing isolation proof.
+Explicit bindings to host root or named host accounts remain outside this
+isolated subordinate-ID profile and require a separate security design.
 
 ### Mapping profiles and backend boundary
 
@@ -483,7 +518,7 @@ each path. Private supervisor probes do not complete this product evidence.
 
 | ID | Required result | Owning milestone | Minimum evidence | Current state |
 | --- | --- | --- | --- | --- |
-| ID-01 | Every mapped identity, including the dedicated supervisor identity, has exclusively delegated subordinate host authority only; it does not alias host root, a local or NSS-provided host principal, or a subordinate range delegated to another host principal. | 1 | Resolved-state and host-side mapping inspection for exactly one dedicated supervisor UID/GID plus per-ID NSS resolution, fail-closed subordinate-backend enumeration, active-libsubid agreement, checks against every other subordinate UID/GID delegation, injected UID and GID collision cases that must fail for both NSS principals and another delegation, and an in-container identity probe for each profile. | Private 1B conformance passed 3 exact and 3 bounded trials; product integration pending |
+| ID-01 | Every mapped identity, including the dedicated supervisor identity, has exclusively delegated subordinate host authority only; it does not alias host root, a local or NSS-provided host principal, or a subordinate range delegated to another host principal. | 1 | Resolved-state and host-side mapping inspection for exactly one dedicated supervisor UID/GID plus complete authoritative bounded bulk UID/GID principal inventory and interval collision checks refreshed before every execution admission, fail-closed subordinate-backend enumeration, active-libsubid agreement, checks against every other subordinate UID/GID delegation, injected UID and GID collision cases that must fail for both NSS principals and another delegation, and an in-container identity probe for each profile. | Historical private 1B trials passed the earlier per-ID checks; product bulk collision/admission evidence pending |
 | ID-02 | The trusted supervisor can perform every required declared transition and rejects mapped-but-undeclared UIDs, GIDs, and supplementary groups; every application child's real, effective, saved-set, and filesystem UIDs and GIDs match its declared application identities, and its final supplementary-group vector contains exactly its declared groups; a separate raw bounded-range mechanism probe permits representative other in-range transitions. | 1 | Positive declared-identity and negative mapped-but-undeclared tests through the production supervisor policy, all four `/proc/<pid>/status` `Uid:` and `Gid:` fields matching the declared application IDs, final `Groups:` inspection that excludes inherited privileged, runtime-required, and otherwise undeclared groups, plus an independently identified raw range-mechanism probe. | Private 1B conformance passed 3 exact and 3 bounded trials; product integration pending |
 | ID-03 | Exact mappings reject every unmapped transition; bounded ranges reject every out-of-range transition; capability-dropped children cannot change identity, inherit supervisor or undeclared descriptors, regain authority through set-ID or file-capability execution, or signal, inspect, or control the capability-bearing supervisor. | 1 | Profile-specific boundary and post-drop tests for `setuid`, `setreuid`, `setresuid`, `setfsuid`, `setgid`, `setregid`, `setresgid`, `setfsgid`, `setgroups`, execution of a mapped supervisor-owned set-user/group-ID fixture, and file-capability execution; pre-exec trusted-launcher enumeration against an exact descriptor allowlist plus adversarial non-`CLOEXEC` supervisor control-file, socket, pidfd, and private-data canaries, followed by application confirmation; all four supervisor `Uid:` and `Gid:` fields using its dedicated child-disjoint UID and GID; a final supervisor `Groups:` vector containing no GID other than its dedicated GID; a supervisor `PR_GET_DUMPABLE` result of zero; supervisor/child POSIX session-ID inspection proving separation; and negative same-workload child-to-supervisor `kill` and `pidfd_send_signal` probes that explicitly include `SIGCONT`, plus negative `ptrace`, `/proc/<pid>/mem`, `process_vm_readv`, and `process_vm_writev` probes. | Private 1B conformance passed 3 exact and 3 bounded trials; product integration pending |
 | ID-04 | Two installations using the same container IDs have distinct host mappings, PID, IPC, network, and mount namespaces, private mount propagation, and private `/dev/shm` and `/dev/mqueue` mounts; they cannot observe, signal, or ptrace each other's processes, see each other's mounts, use each other's System V or named POSIX shared-memory, semaphore, or message-queue objects, connect to each other's Linux abstract Unix sockets, or read each other's private state. | 1 | Concurrent two-workload probe with host mapping, PID-namespace, IPC-namespace, network-namespace, mount-namespace, mount-propagation, `/dev/shm`, and `/dev/mqueue` inspection plus negative cross-workload mount visibility, process visibility, signaling, ptrace, System V IPC, POSIX `shm_open`/`sem_open`, POSIX `mq_open`/send/receive, abstract Unix-socket connection, and private-state access tests. | Private 1B conformance passed 3 exact and 3 bounded trials; product integration pending |
@@ -492,9 +527,9 @@ each path. Private supervisor probes do not complete this product evidence.
 | LC-01 | Files created by declared identities have expected subordinate ownership; ordinary restart and recreation preserve both the stored allocation and host ownership. | 2 | Stored-allocation and host-ownership inspection before and after ordinary stop/start and recreation through Reploy. | Unproven; deferred to lifecycle work |
 | LC-02 | Generation updates may add, remove, or renumber application identities without rewriting persistent ownership. Exact mappings contain only the current accepted set while removed assignments remain reserved and reactivate on rollback; bounded mappings retain their fixed geometry while the supervisor admits only the current set. Mapping-profile, supervisor-identity, and bounded-geometry changes fail before mutation. | 2 | Lifecycle tests across identity addition, removal, renumbering, and rollback for both profiles; host ownership inspection proving no automatic rewrite; exact-map and supervisor-policy inspection for each generation; dormant-assignment reservation and reactivation checks; and pre-mutation rejection tests for mechanism changes. | Unproven; deferred to lifecycle work |
 | LC-03 | Backup and restore preserve ownership or use an explicit checked translation. Before writing archived ownership, restore validates the destination allocation and exclusive delegation. Restore uses collision-safe staging or checked translation. Unsafe or unproved destination mappings fail before ownership is written. | 2 | Checksummed offline export/import with no workload attached. Test cross-host UID/GID collisions with local/NSS accounts and another principal's delegation. Prove checks occur before archived ownership is written. Prove failed restore leaves destination state unchanged. | Unproven; deferred to storage work |
-| AL-01 | Concurrent allocations cannot overlap, mappings remain reserved while live or retained managed storage uses them, and all external `bind` mounts are rejected before mutation. | 1 | Contended allocation, crash recovery, retention, removal, safe-reuse, and pre-mutation mount-rejection tests. | Unproven; allocator not designed |
+| AL-01 | Accepted service mappings within a composition cannot overlap; concurrent changes to its mapping state are serialized. The administrator coordinates reservations outside the composition. Mappings remain reserved while live or retained managed storage uses them, and all external `bind` mounts are rejected before mutation. | 1 | Duplicate/overlapping input rejection, concurrent installation-state operations, crash recovery, retention, removal, safe-reuse and pre-mutation mount-rejection tests; explicit operator responsibility for cross-installation reservations. | Unproven; manual-coordination direction approved, state protocol not designed |
 | RV-01 | Revocation stops and removes live workload resources, prevents service-manager or other autonomous restart, and makes further operations fail closed without mutating retained storage or releasing its mapping. | 1 | Active-workload revocation with runtime-resource absence and restart-prevention inspection, followed by recovery tests with retained owned data and its mapping still reserved. | Unproven; revocation not designed |
-| HB-01 | Host bootstrap is explicit, auditable, idempotent, validates that its delegated IDs are exclusive and non-overlapping, and enables later user-level operation without host root. | 1 | Repeated bootstrap, successful user operation, and failures for absent or inconsistent preparation, collisions with local or NSS-provided host principals, overlap with another principal's subordinate delegation, and an identity inventory whose completeness cannot be established. | Unproven; bootstrap not designed |
+| HB-01 | The administrator supplies existing host delegation and coordinated assignments. Reploy checks these before user-level operation without modifying host accounts, delegation or system-wide Reploy configuration. | 1 | Repeated read-only preflight with unchanged host state, successful user operation, and failures for absent or inconsistent preparation, collisions with local or NSS-provided host principals, overlap with another principal's subordinate delegation, and an identity inventory whose completeness cannot be established. | Unproven; existing-delegation direction approved, product preflight pending |
 | SB-01 | No workload uses privileged mode or gains host-root authority. | 1 | Runtime inspection plus negative host-authority tests. | Private 1B conformance passed 3 exact and 3 bounded trials; product integration pending |
 | SB-02 | The approved seccomp profile is explicitly selected and identifiable in the resolved and effective runtime policy; application processes have `NoNewPrivs: 1` and seccomp filter mode (`Seccomp: 2`); syscalls the approved profile must block fail while the same valid operation succeeds in an unfiltered control; the container root filesystem is read-only except for declared writable storage; namespaces, mounts, and network attachment match declared policy, with distinct network namespaces and no host control socket, undeclared path, or peer-reachable network; and host-device grants are rejected before workload mutation. | 1 and 2 | Resolved-policy and host/runtime inspection through the supported Podman path; host-device grant rejection tests with unchanged workload state; and paired filtered-denial and unfiltered-success syscall evidence, negative path checks, and cross-workload TCP, UDP, and Linux abstract Unix-socket tests through supported Reploy interfaces. | Private 1B sandbox conformance passed; supported Reploy integration pending |
 | FS-01 | Trusted filesystem preparation cannot follow symlinks, accept unexpected object types, escape the declared root, recursively rewrite application data, or execute application-provided code. | 2 | Adversarial descriptor-safe preparation tests plus executable and hook canaries proving that trusted preparation never invokes application-provided code; process tracing verifies that any later application-provided execution begins only after entering its final child credentials and capability set. | Unproven; deferred to filesystem design |
