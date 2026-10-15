@@ -23,6 +23,7 @@ func finalizeResolvedRequestV1(
 	document blueprint.Document,
 	overlay deploy.RequestOverlayV1,
 	packageOverrides deploy.PackageOverrideIntentV1,
+	baseImage string,
 	candidateRequest providers.ResolvedRequestV1,
 	graph providers.GraphExecutionResult,
 	applicationTools ...*ApplicationPortableToolPlanV1,
@@ -38,7 +39,7 @@ func finalizeResolvedRequestV1(
 		return providers.ResolvedRequestV1{}, deploy.PackageOverrideIntentV1{}, fmt.Errorf("finalize resolved request selected sources must use an array")
 	}
 	expectedCandidates, err := resolvedRequestWithApplicationToolsV1(
-		document, overlay, packageOverrides, candidateRequest.Platform,
+		document, overlay, packageOverrides, baseImage, candidateRequest.Platform,
 		append([]providers.ResolvedSourceInput{}, candidateRequest.Sources...),
 		selected,
 	)
@@ -124,11 +125,11 @@ func providerDocumentWithoutApplicationToolsV1(document blueprint.Document) (blu
 
 func resolvedRequestWithApplicationToolsV1(
 	document blueprint.Document, overlay deploy.RequestOverlayV1,
-	packageOverrides deploy.PackageOverrideIntentV1, platform blueprint.Platform,
+	packageOverrides deploy.PackageOverrideIntentV1, baseImage string, platform blueprint.Platform,
 	sources []providers.ResolvedSourceInput, selected *ApplicationPortableToolPlanV1,
 ) (providers.ResolvedRequestV1, error) {
 	if selected == nil {
-		return BuildResolvedRequestWithPackageOverridesV1(document, overlay, packageOverrides, platform, sources)
+		return BuildResolvedRequestWithOverridesV1(document, overlay, packageOverrides, baseImage, platform, sources)
 	}
 	if selected.sealed == nil {
 		return providers.ResolvedRequestV1{}, fmt.Errorf("application request requires sealed selection")
@@ -141,7 +142,9 @@ func resolvedRequestWithApplicationToolsV1(
 	if err != nil {
 		return providers.ResolvedRequestV1{}, err
 	}
-	request, err := BuildResolvedRequestWithPackageOverridesV1(ordinary, overlay, packageOverrides, platform, sources)
+	// Check the sealed selection against the original blueprint above. Apply
+	// the separately selected base only while deriving provider requests.
+	request, err := BuildResolvedRequestWithOverridesV1(ordinary, overlay, packageOverrides, baseImage, platform, sources)
 	if err != nil {
 		return providers.ResolvedRequestV1{}, err
 	}
@@ -238,6 +241,7 @@ func resolvedRequestForLockedBuildV1(
 	document blueprint.Document,
 	overlay deploy.RequestOverlayV1,
 	packageOverrides deploy.PackageOverrideIntentV1,
+	baseImage string,
 	candidateRequest providers.ResolvedRequestV1,
 	lockedSources []providers.ResolvedSourceInput,
 	lock deploy.BuildLockV1,
@@ -283,7 +287,7 @@ func resolvedRequestForLockedBuildV1(
 		bundles = append(bundles, bundle)
 	}
 	request, relevant, err := finalizeResolvedRequestV1(
-		document, overlay, packageOverrides, candidateRequest,
+		document, overlay, packageOverrides, baseImage, candidateRequest,
 		providers.GraphExecutionResult{
 			Plan: plan, Bundles: bundles,
 			SelectedSources: append([]providers.ResolvedSourceInput{}, lockedSources...),

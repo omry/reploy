@@ -307,7 +307,7 @@ func prepareLockedProviderBuildV1(
 					return LockedProviderBuildPreparationV1{}, err
 				}
 				lockedRequest, relevantOverrides, exactSources, err := resolvedRequestForLockedBuildV1(
-					loaded.Document, loaded.State.Overlay, loaded.PackageOverrides, loaded.Request,
+					loaded.Document, loaded.State.Overlay, loaded.PackageOverrides, loaded.BaseImage, loaded.Request,
 					lockedSources, current.Lock, input.Store,
 				)
 				if err != nil {
@@ -413,7 +413,7 @@ func prepareLockedProviderBuildV1(
 				return LockedProviderBuildPreparationV1{}, err
 			}
 			lockedRequest, relevantOverrides, exactSources, err := resolvedRequestForLockedBuildV1(
-				loaded.Document, loaded.State.Overlay, loaded.PackageOverrides, loaded.Request,
+				loaded.Document, loaded.State.Overlay, loaded.PackageOverrides, loaded.BaseImage, loaded.Request,
 				lockedSources, candidate.Lock, input.Store,
 			)
 			if err != nil {

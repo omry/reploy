@@ -558,6 +558,14 @@ func applicationPortableBuildAcceptanceForTest(t *testing.T, reuse preparedPytho
 }
 
 func TestApplicationPortableRequestRequiresExactSealedConsumptionV1(t *testing.T) {
+	for _, baseImage := range []string{"", "python:3.13-slim"} {
+		t.Run(baseImage, func(t *testing.T) {
+			testApplicationPortableRequestRequiresExactSealedConsumptionV1(t, baseImage)
+		})
+	}
+}
+
+func testApplicationPortableRequestRequiresExactSealedConsumptionV1(t *testing.T, baseImage string) {
 	input := applicationPortableInputForTest(t, "[{tool: playwright, version: 1.61.0, binding: python, select: {browser: [chromium]}}]")
 	overlay := deploy.EmptyRequestOverlayV1()
 	overrides := deploy.EmptyPackageOverrideIntentV1("demo")
@@ -565,7 +573,7 @@ func TestApplicationPortableRequestRequiresExactSealedConsumptionV1(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := loadBuildRequestWithInputsV1(nil, overrides, "", []providers.ResolvedSourceInput{}, deploy.StateV1{Platform: input.Platform, Overlay: overlay}, input.Document)
+	loaded, err := loadBuildRequestWithInputsV1(nil, overrides, baseImage, []providers.ResolvedSourceInput{}, deploy.StateV1{Platform: input.Platform, Overlay: overlay}, input.Document)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -579,7 +587,7 @@ func TestApplicationPortableRequestRequiresExactSealedConsumptionV1(t *testing.T
 	if !strings.Contains(fmt.Sprint(baseExports), "/usr/local/bin/python") {
 		t.Fatalf("binding-only application lost its default interpreter export: %#v", input.Components)
 	}
-	if _, err := resolvedRequestWithApplicationToolsV1(input.Document, overlay, overrides, input.Platform, loaded.Request.Sources, nil); err == nil || !strings.Contains(err.Error(), "unresolved") {
+	if _, err := resolvedRequestWithApplicationToolsV1(input.Document, overlay, overrides, baseImage, input.Platform, loaded.Request.Sources, nil); err == nil || !strings.Contains(err.Error(), "unresolved") {
 		t.Fatalf("unconsumed application request = %v", err)
 	}
 	observations := 0
@@ -588,7 +596,7 @@ func TestApplicationPortableRequestRequiresExactSealedConsumptionV1(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	consumed, err := resolvedRequestWithApplicationToolsV1(input.Document, overlay, overrides, input.Platform, loaded.Request.Sources, selected)
+	consumed, err := resolvedRequestWithApplicationToolsV1(input.Document, overlay, overrides, baseImage, input.Platform, loaded.Request.Sources, selected)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -601,12 +609,12 @@ func TestApplicationPortableRequestRequiresExactSealedConsumptionV1(t *testing.T
 	}
 	changed := input.Document
 	changed.Environment.ID = "other"
-	if _, err := resolvedRequestWithApplicationToolsV1(changed, deploy.EmptyRequestOverlayV1(), deploy.EmptyPackageOverrideIntentV1("other"), input.Platform, loaded.Request.Sources, selected); err == nil || !strings.Contains(err.Error(), "exact blueprint") {
+	if _, err := resolvedRequestWithApplicationToolsV1(changed, deploy.EmptyRequestOverlayV1(), deploy.EmptyPackageOverrideIntentV1("other"), baseImage, input.Platform, loaded.Request.Sources, selected); err == nil || !strings.Contains(err.Error(), "exact blueprint") {
 		t.Fatalf("foreign selection consumption = %v", err)
 	}
 	tampered := *selected
 	tampered.sealed = nil
-	if _, err := resolvedRequestWithApplicationToolsV1(input.Document, overlay, overrides, input.Platform, loaded.Request.Sources, &tampered); err == nil || !strings.Contains(err.Error(), "sealed") {
+	if _, err := resolvedRequestWithApplicationToolsV1(input.Document, overlay, overrides, baseImage, input.Platform, loaded.Request.Sources, &tampered); err == nil || !strings.Contains(err.Error(), "sealed") {
 		t.Fatalf("unsealed selection consumption = %v", err)
 	}
 }

@@ -24,6 +24,7 @@ type ProviderBuildCompletionInput struct {
 	ResolvedRequest      providers.ResolvedRequestV1
 	Overlay              deploy.RequestOverlayV1
 	PackageOverrides     deploy.PackageOverrideIntentV1
+	BaseImage            string
 	Base                 deploy.ImageDescriptor
 	BaseCatalog          []providers.RealizedOutput
 	Graph                providers.GraphExecutionResult
@@ -260,7 +261,7 @@ func validateProviderBuildCompletionInput(input ProviderBuildCompletionInput, po
 		return err
 	}
 	candidateRequest, err := resolvedRequestWithApplicationToolsV1(
-		input.Document, input.Overlay, input.PackageOverrides, input.ResolvedRequest.Platform,
+		input.Document, input.Overlay, input.PackageOverrides, input.BaseImage, input.ResolvedRequest.Platform,
 		append([]providers.ResolvedSourceInput{}, input.ResolvedRequest.Sources...),
 		input.ApplicationTools,
 	)
@@ -268,7 +269,7 @@ func validateProviderBuildCompletionInput(input ProviderBuildCompletionInput, po
 		return fmt.Errorf("provider build derive resolved request: %w", err)
 	}
 	expectedRequest, expectedOverrides, err := finalizeResolvedRequestV1(
-		input.Document, input.Overlay, input.PackageOverrides, candidateRequest, input.Graph, input.ApplicationTools,
+		input.Document, input.Overlay, input.PackageOverrides, input.BaseImage, candidateRequest, input.Graph, input.ApplicationTools,
 	)
 	if err != nil {
 		return fmt.Errorf("provider build resolved request does not match the completed graph: %w", err)
@@ -310,6 +311,13 @@ func validateProviderBuildCompletionInput(input ProviderBuildCompletionInput, po
 	}
 	if input.Base.Platform != input.ResolvedRequest.Platform {
 		return fmt.Errorf("provider build base platform does not match the resolved request")
+	}
+	baseImage, err := resolvedRequestBaseReference(expectedRequest)
+	if err != nil {
+		return err
+	}
+	if input.Base.AuthorReference != baseImage {
+		return fmt.Errorf("provider build base image does not match the selected base input")
 	}
 	if err := validateProviderGraphValidationShape(input.Base, input.BaseCatalog, input.Graph, policy); err != nil {
 		return err

@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve explicit base-image overrides through provider request finalization, validation, and cached-build reuse without changing the original blueprint authority.

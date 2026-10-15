@@ -91,8 +91,12 @@ func TestRunPublishedRuntimeContainerV1NeverRunsForStaleBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	current.Lock.Base.AuthorReference = "debian:changed"
-	refreshCurrentBuildReuseGeneration(t, &current)
+	changed := buildInput.Document
+	changed.Environment.Base.Image = "debian:changed"
+	if err := changed.Environment.RebuildProviderContributions(); err != nil {
+		t.Fatal(err)
+	}
+	current.State.Blueprint = testResolvedBlueprintV1(t, changed)
 	runs := 0
 	err = runPublishedRuntimeContainerV1(t.Context(), PublishedRuntimeContainerInput{
 		Operation: operation, Environment: "demo", DeploymentDir: "/srv/demo", DockerPlan: buildInput.DockerPlan, Invocation: invocation,
@@ -107,6 +111,37 @@ func TestRunPublishedRuntimeContainerV1NeverRunsForStaleBuild(t *testing.T) {
 	}
 	if runs != 0 {
 		t.Fatalf("runner called %d times", runs)
+	}
+}
+
+func TestRunPublishedRuntimeContainerV1RejectsTamperedLockedBase(t *testing.T) {
+	for _, field := range []string{"author reference", "immutable config"} {
+		t.Run(field, func(t *testing.T) {
+			current, input := runtimeCurrentBuildFixture(t)
+			if field == "author reference" {
+				current.Lock.Base.AuthorReference = "debian:changed"
+			} else {
+				current.Lock.Base.ConfigDigest = registryDigest("f")
+			}
+			// Keep the published generation unchanged. Recomputing it would
+			// replace the authority whose integrity this gate must validate.
+			invocation, err := ShellRuntimeInvocationV1(input.DockerPlan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runs := 0
+			err = runPublishedRuntimeContainerV1(t.Context(), PublishedRuntimeContainerInput{
+				Operation: runtimeExecutionOperationV1(t), DockerPlan: input.DockerPlan, Invocation: invocation,
+			}, func(context.Context, *deploy.OperationLock, providerstore.Store, string, string) (CurrentBuild, bool, error) {
+				return current, true, nil
+			}, func(context.Context, CurrentBuild) error {
+				runs++
+				return nil
+			})
+			if err == nil || runs != 0 {
+				t.Fatalf("tampered base runs=%d err=%v", runs, err)
+			}
+		})
 	}
 }
 

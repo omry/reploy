@@ -38,7 +38,7 @@ func TestProviderBuildCompletionPreservesCanonicalFrozenGraphIdentity(t *testing
 	}
 	input.Graph.Plan = frozen
 	input.ResolvedRequest, input.PackageOverrides, err = finalizeResolvedRequestV1(
-		input.Document, input.Overlay, input.PackageOverrides, input.ResolvedRequest, input.Graph,
+		input.Document, input.Overlay, input.PackageOverrides, input.BaseImage, input.ResolvedRequest, input.Graph,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -433,6 +433,7 @@ func TestValidateProviderBuildCompletionRejectsBaseOnlyRuntimePolicyDrift(t *tes
 func providerBuildCompletionFixture(t *testing.T) (ProviderBuildCompletionInput, *deploy.OperationLock, providerstore.Store) {
 	t.Helper()
 	fixture := newPreparedPythonGraphReuseFixture(t)
+	fixture.lock.Base.AuthorReference = "debian:bookworm-slim"
 	bundle, err := providers.LoadResolvedBundleManifest(fixture.store, fixture.lock.Nodes[0].BundleManifest, pythonprovider.ValidateResolvedBundlePayloadV1)
 	if err != nil {
 		t.Fatal(err)
