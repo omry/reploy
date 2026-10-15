@@ -269,7 +269,7 @@ func TestFinalizeResolvedRequestV1RecordsGraphSelectedSources(t *testing.T) {
 	}
 	graph := providers.GraphExecutionResult{Plan: plan, Bundles: []providers.ResolvedBundle{}, SelectedSources: []providers.ResolvedSourceInput{selected}}
 	finalized, relevant, err := finalizeResolvedRequestV1(
-		document, deploy.EmptyRequestOverlayV1(), packageOverrides, candidateRequest,
+		document, deploy.EmptyRequestOverlayV1(), packageOverrides, "", candidateRequest,
 		graph,
 	)
 	if err != nil {
@@ -284,7 +284,7 @@ func TestFinalizeResolvedRequestV1RecordsGraphSelectedSources(t *testing.T) {
 	built := selected
 	built.OutputArtifactDigest = registryDigest("5")
 	graph.SelectedSources = []providers.ResolvedSourceInput{built}
-	finalized, _, err = finalizeResolvedRequestV1(document, deploy.EmptyRequestOverlayV1(), packageOverrides, candidateRequest, graph)
+	finalized, _, err = finalizeResolvedRequestV1(document, deploy.EmptyRequestOverlayV1(), packageOverrides, "", candidateRequest, graph)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +294,7 @@ func TestFinalizeResolvedRequestV1RecordsGraphSelectedSources(t *testing.T) {
 	invalid := built
 	invalid.Component = "missing"
 	graph.SelectedSources = []providers.ResolvedSourceInput{invalid}
-	if _, _, err := finalizeResolvedRequestV1(document, deploy.EmptyRequestOverlayV1(), packageOverrides, candidateRequest, graph); err == nil || !strings.Contains(err.Error(), "missing or unsupported") {
+	if _, _, err := finalizeResolvedRequestV1(document, deploy.EmptyRequestOverlayV1(), packageOverrides, "", candidateRequest, graph); err == nil || !strings.Contains(err.Error(), "missing or unsupported") {
 		t.Fatalf("invalid selected source error = %v", err)
 	}
 	changed := selected
@@ -354,7 +354,7 @@ func TestResolvedRequestForLockedBuildIgnoresUnrelatedPackageOverride(t *testing
 		t.Fatal(err)
 	}
 	request, relevant, exact, err := resolvedRequestForLockedBuildV1(
-		document, deploy.EmptyRequestOverlayV1(), fullIntent, candidate,
+		document, deploy.EmptyRequestOverlayV1(), fullIntent, "", candidate,
 		lockedSources, fixture.lock, fixture.store,
 	)
 	if err != nil {

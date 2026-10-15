@@ -212,9 +212,9 @@ func CurrentBuildMatchesRuntimeV1(current CurrentBuild, dockerPlan DockerExecuti
 	if document.Environment.Base.Image == "" {
 		return false, nil
 	}
-	if document.Environment.Base.Image != current.Lock.Base.AuthorReference {
-		return false, nil
-	}
+	// The published lock owns the effective base, including an explicit build
+	// override. Its generation binding and the original blueprint digest were
+	// checked above; the blueprint's author base need not equal the selection.
 
 	plans, err := RuntimePlansV1(document, dockerPlan)
 	if err != nil {
