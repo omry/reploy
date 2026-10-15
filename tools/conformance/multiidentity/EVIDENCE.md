@@ -90,6 +90,150 @@ Before/after snapshots and every receipt hash were rechecked during this repair.
 The older 1B baseline below remains historical evidence for its own source.
 Audit-only behavior remains in A1.
 
+## Current A1 compatible-operation audit
+
+Independent-failure corrections were validated on 2026-10-14. Driver SHA-256 is
+`2c5306490ac6a30c9e0c76a2a15af04f1db80009c29d24ecd089a911040e0f0b`; the unchanged reviewed 1B probe is
+`c975a2c83dec68efb133932159332e4ae912e6cb65d61724dbbff15a2e6b0310`.
+The fresh audit records nine compatible observations and five explicit blockers.
+Its command took 50.432 seconds; its internal timer, including preflight,
+reported 50.380 seconds. All nine cleanup records passed, complete inventories
+were restored and the attempt-owned API service stopped. Immediate retirement
+now also verifies absence for a create whose response or outcome was uncertain.
+
+Raw receipts and exact runtime inputs are retained at
+`~/.local/state/awd/reploy-mi-recovery/20261013-bottom-up/a1-audit-receipt-fix/independent-failures-correction/live/`.
+Receipt manifest SHA-256 is
+`d6cf0fd1dabfff37e667a561d30794ffbe5d576a017a19c2836f5c3c614baea9`.
+Only two known fixture binaries were removed after their hashes and sizes were recorded.
+These remain private Podman 4.9.3 observations, not supported product acceptance.
+
+[Cleanup finding](https://github.com/omry/reploy/pull/239#discussion_r4265098841)
+identified an immediate cleanup exception that suppressed later audit results.
+The fix records that failure, blocks dependent mapping candidates and retains
+owned final-cleanup obligations while continuing the independent network audit.
+The mandatory cleanup result still fails when a removal or absence check fails.
+[Diagnostic finding](https://github.com/omry/reploy/pull/239#discussion_r4265098851)
+identified a skipped-build reason that falsely asserted every probe was rejected.
+The builder-safety blocker now describes its own requirements and leaves the
+actual capability observation separate. Production build support remains open.
+
+The fifteen-outcome regression separately fails with either fix absent and
+passes with both restored. It covers cleanup deletion/absence failures and both
+successful and rejected capability observations as well as prior lifecycle cases.
+The complete private suite passes 45 tests with one established opt-in skip.
+Focused before/after receipts are retained in `independent-failures-correction/`.
+No production code, core probe, capability policy or backend was changed.
+
+## Earlier A1 lifecycle-result correction
+
+The lifecycle-result correction was validated on 2026-10-14. Driver SHA-256 is
+`2c82f9124e1fb5934b87ecbe37f34a38dbf58fd39168170d83b5bcfd33ffb400`; the unchanged 1B probe source remains
+`c975a2c83dec68efb133932159332e4ae912e6cb65d61724dbbff15a2e6b0310`.
+The fresh audit recorded nine compatible observations and five explicit blockers.
+Its command took 51.812 seconds; its internal timer, including preflight,
+reported 51.762 seconds. All eight cleanup records passed, inventories were
+restored and the attempt-owned API service stopped.
+
+Raw receipts and exact runtime-input snapshots are retained at
+`~/.local/state/awd/reploy-mi-recovery/20261013-bottom-up/a1-audit-receipt-fix/lifecycle-correction/live/`.
+Receipt manifest SHA-256 is
+`ee15f6907ad3fee82f9968af66566c0651fb769ae8d95c56431abd0332ab89de`.
+Only the two known fixture binaries were removed after recording hashes and sizes.
+These are private Podman 4.9.3 observations, not product or Podman 6.1.4 acceptance.
+
+[PR review finding](https://github.com/omry/reploy/pull/239#discussion_r4264835177)
+identified missing restart/exec results after failed bounded prerequisites.
+The twelve-case regression covers create, start, admission, inspect, initial map,
+restart, changed-map and stale-readiness failures, plus exec, wait and logs failures
+and a compatible control. Eleven failure cases fail on the old driver; all twelve
+pass on this correction. Missing dependent results become explicitly blocked;
+already-verified restart success remains intact when a later operation fails.
+The full private suite still runs 45 tests with one established opt-in skip.
+Before/after regressions are retained in `a1-audit-receipt-fix/lifecycle-correction/`.
+No production code, core probe, capability policy or backend changed.
+
+## Earlier A1 failure-receipt correction
+
+The failure-receipt repair was validated on 2026-10-14. The corrected driver
+SHA-256 is `5e6da63a837c4173212590345b80f4591e6bcfd2fc561cc3f10cea8dcb21f3fd`.
+It uses the unchanged corrected 1B probe source
+`c975a2c83dec68efb133932159332e4ae912e6cb65d61724dbbff15a2e6b0310`.
+The fresh audit recorded nine observed-compatible operations and five blockers.
+Its command took 55.003 seconds; its internal timer, now including preflight,
+reported 54.943 seconds. All eight cleanup records passed, the full engine
+inventory was restored, and the attempt-owned API service stopped.
+
+Raw receipts and exact runtime-input snapshots are retained at
+`~/.local/state/awd/reploy-mi-recovery/20261013-bottom-up/a1-audit-receipt-fix/live-short-socket/`.
+The receipt manifest SHA-256 is
+`4cd25c4ecaf797223b85aa251304d56beebca591fc880ab20dd214c9436adb97`.
+The two known fixture binaries were removed only after recording hashes and sizes.
+These remain private Podman 4.9.3 observations; no supported production build,
+exact-map acceptance, stock-mail conformance or Podman 6.1.4 acceptance is claimed.
+
+The new failure regressions fail on the previous audit. With the repair, all
+45 private tests pass; one existing opt-in live build-failure test is skipped.
+An original audit error survives final-inventory and service-stop failures.
+Image cleanup and durable summary/command receipts continue after those failures;
+unknown inventory cannot establish restoration. Initial-inventory failures also
+produce a receipt. The first live retry used an overlong Unix socket path and
+failed before any compatible operation. Its original failure, restored inventory
+and command transcript are retained under `a1-audit-receipt-fix/live/`.
+A fresh short socket produced the passing audit above. No live installation changed.
+
+## Earlier A1 audit before failure-receipt repair
+
+The audit completed on 2026-10-14 on the corrected 1B probe source
+`c975a2c83dec68efb133932159332e4ae912e6cb65d61724dbbff15a2e6b0310`.
+It recorded nine observed-compatible operations and five explicit blockers.
+The command took 52.77 seconds; its internal timer reported 14.654 seconds.
+All eight cleanup records passed, and the full engine inventory was restored.
+The audit driver SHA-256 was
+`d9db6c7ad1f1d53fb5237b47dc549975f51880ff6cbf5ab1683d076b0b5c0db7`.
+These are private Podman 4.9.3 compatibility observations, not supported product
+builds, exact-map acceptance, or stock-mail conformance.
+
+Raw receipts and before/after runtime-input snapshots are retained at
+`~/.local/state/awd/reploy-mi-recovery/20261013-bottom-up/a1-cap-audit/`.
+The receipt manifest SHA-256 is
+`f45a6f08e0bbdaa7eca49260161cd01c0a61fb8fd469c79b6206d1ab107afb47`.
+Only the two known compiled fixture binaries were removed after recording
+their hashes and sizes. No host delegation or live installation changed.
+
+## Earlier A1 correction evidence
+
+1B supplies atomic admission-release publication. A1 adds fresh restart admission and
+verified restart classification, independent volume failure results and acceptance
+of existing empty output directories.
+The six-trial exact/bounded campaign passed on 2026-10-12 in 567.866 seconds,
+including fixture setup and cleanup.
+All four roles passed map admission before payload execution.
+Docker was rejected before mutation, and the whole Podman inventory was restored.
+The probe source SHA-256 for the 2026-10-12 campaign was
+`ce0a74c171cc96232bb9be2ece432cd69bd8ba8632bf0da16c8f13b007c5f1a0`.
+
+The release-marker race regression passed 20 repetitions and verifies mode `0600`.
+The private Python suite ran 37 tests with one opt-in skip.
+The CI bridge ran the same 37 private tests plus five tooling tests.
+The 2026-10-12 live failed-`RUN` regression passed in 6.914 seconds.
+Earlier A1 heads passed the complete fourteen-command product validation.
+Current-head validation remains part of the final PR gate.
+These are private fixture results; product integration and mail gates remain open.
+
+Those earlier raw receipts are retained at:
+
+`~/.local/state/awd/reploy-mi-recovery/20261012-a1/proof/a1r1/`
+
+The 51-file `receipt-manifest.json` SHA-256 is
+`31c867dadc0d043494c31bb43b6ee7ead04a15e4ce0be9c96bbc9ddabb9d19c6`.
+`source-before.json` and `source-after.json` bind every runtime input.
+The tests ran against the pending A1 correction above revision
+`9b091c8da39b3ecb551e101ee6731566dfac5b73`; snapshots bind those pending bytes.
+Only four known compiled fixture binaries were removed.
+Their hashes and sizes are retained in `excluded-binaries.json`.
+The host and delegation match the approved 1B baseline below.
+
 ## Earlier 1B baseline
 
 The repaired 1B mechanism checkpoint passed on 2026-10-12.
@@ -196,3 +340,40 @@ The earlier `99512c984...` and `882ecc0a...` campaigns remain historical observa
 They do not prove the repaired source recorded here.
 A pre-reboot trial packet was lost and is not used as current evidence.
 The 1B campaign closed those missing controls with executable checks.
+
+## Earlier A1 restart audit (2026-10-12)
+
+The audit command completed in 57.405 seconds on 2026-10-12.
+Its internal timer reported 17.929 seconds after host preparation.
+It used the same probe bytes as that day's six mechanism trials.
+The audit-driver SHA-256 is
+`d9db6c7ad1f1d53fb5237b47dc549975f51880ff6cbf5ab1683d076b0b5c0db7`.
+The output directory already existed and was empty, exercising that corrected entry path.
+Source snapshots bind the driver, fixture, exported capability probe and module files.
+
+Nine operation observations were compatible; five remained blocked.
+The bounded automatic and fixed candidates, immutable local-image inspection,
+lifecycle commands, volume CRUD and network CRUD passed.
+Restart admission required a new exact-nonce ready line before release.
+The sparse projection returned HTTP 500, and the exported BuildKit capability probe rejected Podman 4.9.3.
+No product build was launched after that rejection.
+Supervisor/restart ownership and network-policy parity remain unproved.
+
+All eight owned-resource cleanup records passed.
+The full inventory matched its starting state; the API service stopped and its socket was removed.
+Native Podman built only the offline fixture and supplied independent observations.
+No native fallback converted a failed compatible operation to success.
+The latest audit receipts are under `proof/a1r3/audit/` in the evidence directory above.
+Its 16-file receipt manifest SHA-256 is
+`e73a3345fcef6d245b267ce61cb691d43cb96354a6d3930946ddc37fab970004`.
+The before/after snapshots bind the pending repair above local revision
+`235df75d9ed0fc077dfd9ffcca778fbaf04f10e0`, including the inherited dev3 version.
+Only the two known compiled fixture binaries were removed; their hashes and
+sizes remain in `proof/a1r3/excluded-binaries.json`.
+The regression reproduced false compatibility for mapping changes and stale
+admission logs, plus the missing restart-command failure record, before the fix.
+All four success/failure subcases now pass through the actual audit entry point.
+
+The earlier audits and approved 1B six-trial packet remain baseline evidence.
+They do not prove the newer A1 bytes.
+The [readiness disposition](READINESS.md) owns the remaining product and stock-mail gates.

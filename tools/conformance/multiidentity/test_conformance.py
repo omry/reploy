@@ -8,12 +8,14 @@ import pathlib
 import secrets
 import shutil
 import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest import mock
 
 import conformance as c
+import operation_audit as audit
 
 
 class FakeRunner:
@@ -194,7 +196,238 @@ class AdmissionTests(unittest.TestCase):
                 # ownership must still be verified before removing it.
                 c.remove_owned_resource(runner, "image", image, token)
 
+    def test_audit_failure_remains_a_blocker_without_fallback(self):
+        results = {}
+        audit.observe(results, "unsupported", lambda: (_ for _ in ()).throw(c.ConformanceError("API unavailable")))
+        self.assertEqual(results["unsupported"]["disposition"], "blocked")
+        audit.observe(results, "supported", lambda: {"Id": "owned"})
+        self.assertEqual(results["supported"]["evidence"], {"Id": "owned"})
 
+    def test_audit_api_closes_connection_on_success_and_rejection(self):
+        for status, body in ((201, b'{"Id":"created"}'),
+                             (400, b'{"message":"unsupported"}'),
+                             (500, b'{"message":"backend mentions HTTP 404"}')):
+            with self.subTest(status=status), mock.patch.object(audit, "UnixHTTP") as factory:
+                connection = factory.return_value
+                response = connection.getresponse.return_value
+                response.status = status
+                response.read.return_value = body
+                if status == 201:
+                    self.assertEqual(audit.api("socket", "POST", "/containers/create", {"Image": "fixture"}), {"Id": "created"})
+                else:
+                    with self.assertRaises(audit.HTTPError) as raised:
+                        audit.api("socket", "POST", "/containers/create", {})
+                    self.assertEqual(raised.exception.status, status)
+                connection.close.assert_called_once()
+
+    def test_audit_accepts_empty_existing_directory_and_rejects_nonempty(self):
+        with tempfile.TemporaryDirectory() as root:
+            output = pathlib.Path(root)
+            audit.prepare_output(output)
+            audit.prepare_output(output / "fresh")
+            (output / "foreign").write_text("keep")
+            with mock.patch.object(c, "Runner") as runner, \
+                    mock.patch.object(sys, "argv", ["audit", "--output-dir", str(output)]):
+                with self.assertRaisesRegex(c.ConformanceError, "must be empty"):
+                    audit.main()
+            runner.assert_not_called()
+            self.assertEqual((output / "foreign").read_text(), "keep")
+
+    def test_restart_admission_requires_a_new_exact_nonce_line(self):
+        runner = mock.Mock()
+        nonce = "a" * 32
+        old = f"admission-ready {nonce}\n" * 2
+        runner.run.side_effect = [mock.Mock(stdout=old),
+                                  mock.Mock(stdout=old + "admission-ready foreign\n"),
+                                  mock.Mock(stdout=old + f"admission-ready {nonce}\n")]
+        with mock.patch.object(audit.time, "sleep"):
+            audit.wait_restarted_admission(runner, "owned", nonce, 2)
+        self.assertEqual(runner.run.call_count, 3)
+        runner.run.assert_called_with(["podman", "logs", "owned"])
+
+    def test_restart_admission_rejects_persistent_old_logs(self):
+        runner = mock.Mock()
+        nonce = "a" * 32
+        runner.run.return_value.stdout = f"admission-ready {nonce}\n"
+        with mock.patch.object(audit.time, "sleep"):
+            with self.assertRaisesRegex(c.ConformanceError, "did not re-enter"):
+                audit.wait_restarted_admission(runner, "owned", nonce, 1)
+        self.assertEqual(runner.run.call_count, 40)
+
+    def test_audit_restart_compatibility_requires_all_postconditions(self):
+        cleanup_failures = ("cleanup-api-error", "cleanup-absence-error")
+        compatible_lifecycle = ("compatible", "preflight-error", *cleanup_failures)
+        post_restart_failures = ("exec-error", "wait-error", "logs-error")
+        for outcome in ("compatible", "mapping-change", "stale-admission", "restart-error",
+                        "create-error", "start-error", "admission-error", "inspect-error",
+                        "initial-mapping-error", "preflight-error", *cleanup_failures, *post_restart_failures):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as root:
+                output = pathlib.Path(root) / "audit"
+                runner, service = mock.Mock(), mock.Mock()
+                service.poll.return_value = None
+                state = {"restarted": False, "removed": False, "cleanup_failed": False, "mapping_attempts": 0, "network_attempts": 0}
+                identity = "a" * 64
+
+                def start_service(argv, **_kwargs):
+                    pathlib.Path(argv[-1].removeprefix("unix://")).touch()
+                    return service
+
+                def create(_path, kind, name, token, _action, resources, _attempts):
+                    if kind == "container":
+                        state["mapping_attempts"] += 1
+                    if kind == "network":
+                        state["network_attempts"] += 1
+                    if kind != "container" or not name.endswith("bounded-auto"):
+                        raise c.ConformanceError("independent seam unsupported")
+                    if outcome == "create-error":
+                        raise c.ConformanceError("create failed")
+                    state["token"] = token
+                    state["nonce"] = json.loads((output / "bounded-auto-request.json").read_text())["Cmd"][1]
+                    resources.append((kind, identity))
+                    return {"Id": identity}
+
+                def api(_socket, method, route, _body=None):
+                    if route == "/version":
+                        return {"Components": [{"Name": "Podman"}]}
+                    if method == "DELETE":
+                        if outcome == "cleanup-api-error" and not state["cleanup_failed"]:
+                            state["cleanup_failed"] = True
+                            raise audit.HTTPError(method, route, 503, {})
+                        state["removed"] = True
+                        return {}
+                    if route == f"/containers/{identity}/json" and state["removed"] and outcome == "cleanup-absence-error" and not state["cleanup_failed"]:
+                        state["cleanup_failed"] = True
+                        raise c.ConformanceError("removal confirmation unavailable")
+                    if route == f"/containers/{identity}/json" and not state["removed"]:
+                        return {"Config": {"Labels": {c.OWNER_LABEL: state["token"]}}}
+                    raise audit.HTTPError(method, route, 404, {})
+
+                def command(argv, **_kwargs):
+                    if argv[:2] == ["go", "run"] and outcome == "preflight-error":
+                        raise c.ConformanceError("capability probe unsupported")
+                    if argv[:3] == ["docker", "image", "inspect"]:
+                        return mock.Mock(stdout='[{"Id":"fixture"}]')
+                    if argv[:2] == ["podman", "logs"]:
+                        count = 2 if state["restarted"] and outcome != "stale-admission" else 1
+                        return mock.Mock(stdout=f"admission-ready {state['nonce']}\n" * count)
+                    if argv[:2] == ["docker", "start"] and outcome == "start-error":
+                        raise c.ConformanceError("start failed")
+                    if argv[:2] == ["docker", "restart"]:
+                        if outcome == "restart-error":
+                            raise c.ConformanceError("restart command failed")
+                        state["restarted"] = True
+                    if argv[:2] == ["docker", "inspect"]:
+                        if outcome == "inspect-error":
+                            raise c.ConformanceError("inspect failed")
+                        return mock.Mock(stdout=json.dumps([{"State": {"Pid": 2 if state["restarted"] else 1}}]))
+                    if argv[:2] == ["docker", "exec"] and outcome == "exec-error":
+                        raise c.ConformanceError("exec failed")
+                    if argv[:2] == ["docker", "wait"]:
+                        return mock.Mock(stdout="1" if outcome == "wait-error" else "0")
+                    if argv[:2] == ["docker", "logs"] and outcome == "logs-error":
+                        raise c.ConformanceError("logs failed")
+                    return mock.Mock(stdout="fixture evidence")
+
+                def read_map(pid, _name):
+                    if outcome == "initial-mapping-error":
+                        return "1 100000 4096\n"
+                    return "0 104096 4096\n" if pid == 2 and outcome == "mapping-change" else "0 100000 4096\n"
+
+                runner.run.side_effect = command
+                with mock.patch.object(sys, "argv", ["audit", "--output-dir", str(output)]), \
+                        mock.patch.object(c, "Runner", return_value=runner), \
+                        mock.patch.object(c, "inventory", return_value={}), \
+                        mock.patch.object(c, "assert_host_authority", return_value={
+                            "uid_host_ids": [(100000, 65536)], "gid_host_ids": [(100000, 65536)]}), \
+                        mock.patch.object(c, "resource_exists", return_value=False), \
+                        mock.patch.object(c, "build_image", return_value={"inspect": [{"Id": "fixture"}]}), \
+                        mock.patch.object(c, "remove_owned_resource", return_value={"pass": True}), \
+                        mock.patch.object(c, "wait_admission", side_effect=c.ConformanceError("admission failed") if outcome == "admission-error" else None), \
+                        mock.patch.object(c, "read_proc", side_effect=read_map), \
+                        mock.patch.object(audit, "tracked_create", side_effect=create), \
+                        mock.patch.object(audit.subprocess, "Popen", side_effect=start_service), \
+                        mock.patch.object(audit.time, "sleep"), \
+                        mock.patch.object(audit, "api", side_effect=api):
+                    self.assertEqual(audit.main(), 1 if outcome in cleanup_failures else 0)
+                operations = json.loads((output / "summary.json").read_text())["operations"]
+                self.assertIn("explicit-stop-start-restart", operations)
+                self.assertIn("exec-wait-logs", operations)
+                probe_expected = "blocked" if outcome == "preflight-error" else "observed-compatible"
+                self.assertEqual(operations["existing-build-preflight"]["disposition"], probe_expected)
+                self.assertEqual(operations["existing-build-command"]["disposition"], "blocked")
+                if probe_expected == "observed-compatible":
+                    self.assertNotIn("probe rejects", operations["existing-build-command"]["error"])
+                expected = "observed-compatible" if outcome in compatible_lifecycle else "blocked"
+                restart_expected = "observed-compatible" if outcome in post_restart_failures else expected
+                self.assertEqual(operations["explicit-stop-start-restart"]["disposition"], restart_expected)
+                self.assertEqual(operations["bounded-auto"]["disposition"], expected)
+                self.assertEqual(operations["exec-wait-logs"]["disposition"], expected)
+                released = any(call.args[0][1:4] == ["exec", identity, "/probe"]
+                               for call in runner.run.call_args_list)
+                self.assertEqual(released, outcome in compatible_lifecycle or outcome in post_restart_failures)
+                self.assertIn("network-create-inspect", operations)
+                if outcome in cleanup_failures:
+                    self.assertEqual(state["mapping_attempts"], 1)
+                    for profile in ("exact-sparse-candidate", "bounded-fixed-candidate"):
+                        self.assertEqual(operations[profile]["disposition"], "blocked")
+                        self.assertIn("cleanup", operations[profile]["error"])
+                    self.assertEqual(state["network_attempts"], 1)
+                self.assertEqual(state["removed"], outcome != "create-error")
+                service.terminate.assert_called_once()
+                self.assertFalse((output / "podman.sock").exists())
+
+    def test_volume_failures_do_not_abort_independent_audit_cases(self):
+        for failure in ("create", "ownership"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as root:
+                output = pathlib.Path(root) / "audit"
+                runner, service = mock.Mock(), mock.Mock()
+                service.poll.return_value = None
+
+                def start_service(argv, **_kwargs):
+                    pathlib.Path(argv[-1].removeprefix("unix://")).touch()
+                    return service
+
+                def api(_socket, method, route, body=None):
+                    if route == "/version":
+                        return {"Components": [{"Name": "Podman"}]}
+                    if method == "POST" and route == "/volumes/create":
+                        if failure == "create":
+                            raise audit.HTTPError(method, route, 501, {})
+                        return {"Name": body["Name"]}
+                    if route.startswith("/volumes/") and failure == "ownership":
+                        return {"Labels": {c.OWNER_LABEL: "foreign"}}
+                    if method == "GET":
+                        raise audit.HTTPError(method, route, 404, {})
+                    raise audit.HTTPError(method, route, 501, {})
+
+                def command(argv, **_kwargs):
+                    if argv[:3] == ["docker", "image", "inspect"]:
+                        return mock.Mock(stdout='[{"Id":"fixture"}]')
+                    raise c.ConformanceError("independent seam unsupported")
+
+                runner.run.side_effect = command
+                with mock.patch.object(sys, "argv", ["audit", "--output-dir", str(output)]), \
+                        mock.patch.object(c, "Runner", return_value=runner), \
+                        mock.patch.object(c, "inventory", return_value={}), \
+                        mock.patch.object(c, "assert_host_authority", return_value={
+                            "uid_host_ids": [(100000, 65536)], "gid_host_ids": [(100000, 65536)]}), \
+                        mock.patch.object(c, "resource_exists", return_value=False), \
+                        mock.patch.object(c, "build_image", return_value={"inspect": [{"Id": "fixture"}]}), \
+                        mock.patch.object(c, "remove_owned_resource", return_value={"pass": True}), \
+                        mock.patch.object(audit.subprocess, "Popen", side_effect=start_service), \
+                        mock.patch.object(audit, "api", side_effect=api):
+                    result = audit.main()
+                summary = json.loads((output / "summary.json").read_text())
+                operations = summary["operations"]
+                for name in ("volume-create-inspect", "volume-inspect-command", "bounded-auto",
+                             "exact-sparse-candidate", "bounded-fixed-candidate", "network-create-inspect"):
+                    self.assertEqual(operations[name]["disposition"], "blocked")
+                self.assertNotIn("error", summary)
+                # A foreign post-create object is preserved and blocks cleanup;
+                # unsupported creates with verified absence can finish cleanly.
+                self.assertEqual(result, 0 if failure == "create" else 1)
+                service.terminate.assert_called_once()
+                self.assertFalse((output / "podman.sock").exists())
 
     def test_main_cleans_only_an_attempted_image_after_build_failure(self):
         with tempfile.TemporaryDirectory() as root:
@@ -268,13 +501,135 @@ class AdmissionTests(unittest.TestCase):
             with self.assertRaisesRegex(c.ConformanceError, "matching real/effective UIDs"):
                 c.effective_caller()
 
+    def test_ambiguous_create_reconciles_server_side_resource_for_all_kinds(self):
+        token = "attempt"
+        for kind in ("network", "volume", "container"):
+            with self.subTest(kind=kind):
+                resources = []
+                attempts = []
+                name = f"reploy-mi-{kind}"
+                item = {"Labels": {c.OWNER_LABEL: token}}
 
+                def inspect(_path, method, route, _body=None):
+                    self.assertEqual(method, "GET")
+                    self.assertTrue(route.endswith(name) or route.endswith(f"{name}/json"))
+                    return item
 
+                with mock.patch.object(audit, "api", side_effect=inspect):
+                    with self.assertRaisesRegex(c.ConformanceError, "response lost"):
+                        audit.tracked_create(
+                            "socket", kind, name, token,
+                            lambda: (_ for _ in ()).throw(c.ConformanceError("response lost")),
+                            resources, attempts,
+                        )
+                self.assertEqual(resources, [(kind, name)])
+                self.assertEqual(attempts, [{"kind": kind, "name": name, "identity": name}])
 
+    def test_successful_create_failed_inspect_reconciles_deterministic_name_for_all_kinds(self):
+        token = "attempt"
+        for kind in ("network", "volume", "container"):
+            with self.subTest(kind=kind):
+                resources = []
+                attempts = []
+                name = f"reploy-mi-{kind}"
+                identity = f"{kind}-created-id"
+                item = {"Labels": {c.OWNER_LABEL: token}}
+                calls = []
 
+                def inspect(_path, method, route, _body=None):
+                    calls.append((method, route))
+                    if len(calls) == 1:
+                        raise c.ConformanceError("post-create inspect failed")
+                    self.assertEqual(method, "GET")
+                    self.assertTrue(route.endswith(name) or route.endswith(f"{name}/json"))
+                    return item
 
+                with mock.patch.object(audit, "api", side_effect=inspect):
+                    with self.assertRaisesRegex(c.ConformanceError, "post-create inspect failed"):
+                        audit.tracked_create(
+                            "socket", kind, name, token,
+                            lambda: {"Id": identity}, resources, attempts,
+                        )
+                self.assertEqual(resources, [(kind, name)])
+                self.assertEqual(attempts, [{"kind": kind, "name": name, "identity": name}])
 
+    def test_post_create_inspect_reconciles_deterministic_name_for_all_kinds(self):
+        token = "attempt"
+        for kind in ("network", "volume", "container"):
+            with self.subTest(kind=kind):
+                name = f"reploy-mi-{kind}"
+                identity = f"{kind}-created-id"
+                resources = [(kind, identity)]
+                attempts = [{"kind": kind, "name": name, "identity": identity}]
+                with mock.patch.object(audit, "api", return_value={"Labels": {c.OWNER_LABEL: token}}):
+                    with self.assertRaisesRegex(c.ConformanceError, "post-create inspect failed"):
+                        audit.tracked_post_create_step(
+                            "socket", kind, name, identity, token, resources, attempts,
+                            lambda: (_ for _ in ()).throw(c.ConformanceError("post-create inspect failed")),
+                        )
+                self.assertEqual(resources, [(kind, name)])
+                self.assertEqual(attempts, [{"kind": kind, "name": name, "identity": name}])
 
+    def test_ambiguous_foreign_collision_is_preserved(self):
+        resources = []
+        with mock.patch.object(audit, "api", return_value={"Labels": {c.OWNER_LABEL: "foreign"}}):
+            with self.assertRaisesRegex(c.ConformanceError, "refusing foreign"):
+                audit.tracked_create(
+                    "socket", "network", "collision", "attempt",
+                    lambda: (_ for _ in ()).throw(c.ConformanceError("response lost")),
+                    resources, [],
+                )
+        self.assertEqual(resources, [])
+
+    def test_reconcile_distinguishes_true_absence_from_engine_error(self):
+        resources = []
+        with mock.patch.object(audit, "api", side_effect=audit.HTTPError("GET", "/networks/missing", 404, {})):
+            self.assertFalse(audit.reconcile_ambiguous_create("socket", "network", "missing", "attempt", resources))
+        self.assertEqual(resources, [])
+        with mock.patch.object(audit, "api", side_effect=c.ConformanceError("engine unavailable")):
+            with self.assertRaisesRegex(c.ConformanceError, "engine unavailable"):
+                audit.reconcile_ambiguous_create("socket", "network", "unknown", "attempt", resources)
+
+    def test_reconcile_does_not_misclassify_deceptive_http_500_body(self):
+        resources = []
+        error = audit.HTTPError("GET", "/networks/object", 500, {"message": "HTTP 404 in backend text"})
+        with mock.patch.object(audit, "api", side_effect=error):
+            with self.assertRaises(audit.HTTPError) as raised:
+                audit.reconcile_ambiguous_create("socket", "network", "object", "attempt", resources)
+        self.assertIs(raised.exception, error)
+        self.assertEqual(resources, [])
+        with mock.patch.object(audit, "api", side_effect=c.ConformanceError("HTTP 404 in an engine error")):
+            with self.assertRaisesRegex(c.ConformanceError, "HTTP 404"):
+                audit.reconcile_ambiguous_create("socket", "network", "object", "attempt", resources)
+
+    def test_cleanup_targets_retries_unresolved_attempts_once(self):
+        resources = [("container", "created-id"), ("network", "network-id")]
+        attempts = [
+            {"kind": "container", "name": "container-name", "identity": "created-id"},
+            {"kind": "network", "name": "network-name", "identity": None},
+            {"kind": "volume", "name": "volume-name", "identity": None},
+        ]
+        self.assertEqual(
+            audit.cleanup_targets(resources, attempts),
+            [("container", "created-id"), ("network", "network-id"),
+             ("network", "network-name"), ("volume", "volume-name")],
+        )
+
+    def test_failed_reconciliation_keeps_deterministic_final_cleanup_target(self):
+        resources = [("network", "created-id")]
+        attempts = [{"kind": "network", "name": "network-name", "identity": "created-id"}]
+        with mock.patch.object(audit, "api", side_effect=c.ConformanceError("engine unavailable")):
+            with self.assertRaisesRegex(c.ConformanceError, "engine unavailable"):
+                audit.tracked_post_create_step(
+                    "socket", "network", "network-name", "created-id", "attempt",
+                    resources, attempts,
+                    lambda: (_ for _ in ()).throw(c.ConformanceError("post-create inspect failed")),
+                )
+        self.assertEqual(attempts[0]["identity"], None)
+        self.assertEqual(
+            audit.cleanup_targets(resources, attempts),
+            [("network", "created-id"), ("network", "network-name")],
+        )
 
     def test_all_four_payloads_stay_blocked_on_effective_collision(self):
         for slot in range(4):
@@ -421,6 +776,77 @@ class PeerMountVisibilityTests(unittest.TestCase):
             with self.assertRaisesRegex(c.ConformanceError, "invalid mountinfo"):
                 c.mount_snapshot(42)
 
+
+
+class AuditCleanupFailureEvidenceTests(unittest.TestCase):
+    def run_failed_audit(self, root, failure):
+        output = pathlib.Path(root) / "audit"
+        runner, service = mock.Mock(), mock.Mock()
+        baseline = {"containers": [], "images": [], "volumes": [], "networks": []}
+        inventories = [baseline, baseline]
+        if failure == "final-inventory":
+            inventories[1] = c.ConformanceError("final inventory unavailable")
+        if failure == "initial-inventory":
+            inventories[0] = c.ConformanceError("initial inventory unavailable")
+        if failure == "service-terminate":
+            service.terminate.side_effect = OSError("service terminate failed")
+        if failure == "service-wait":
+            service.wait.side_effect = OSError("service wait failed")
+        if failure == "service-kill":
+            service.wait.side_effect = subprocess.TimeoutExpired("service", 10)
+            service.kill.side_effect = OSError("service kill failed")
+
+        def start_service(argv, **_kwargs):
+            pathlib.Path(argv[-1].removeprefix("unix://")).touch()
+            return service
+
+        runner.save_commands.side_effect = lambda: c.write_json(output / "commands.json", [])
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(sys, "argv", ["audit", "--output-dir", str(output)]))
+            for name, kwargs in (
+                ("Runner", {"return_value": runner}),
+                ("inventory", {"side_effect": inventories}),
+                ("assert_host_authority", {"return_value": {
+                    "uid_host_ids": [(100000, 65536)], "gid_host_ids": [(100000, 65536)]}}),
+                ("resource_exists", {"return_value": False}),
+                ("build_image", {"return_value": {"inspect": [{"Id": "fixture"}]}}),
+            ):
+                stack.enter_context(mock.patch.object(c, name, **kwargs))
+            remove = stack.enter_context(mock.patch.object(c, "remove_owned_resource",
+                                                          return_value={"pass": True}))
+            stack.enter_context(mock.patch.object(audit.subprocess, "Popen", side_effect=start_service))
+            stack.enter_context(mock.patch.object(audit, "observe",
+                                                  side_effect=c.ConformanceError("original audit failure")))
+            self.assertEqual(audit.main(), 1)
+        runner.save_commands.assert_called_once()
+        self.assertTrue((output / "commands.json").is_file())
+        self.assertFalse((output / "podman.sock").exists())
+        self.assertEqual(remove.call_count, 0 if failure == "initial-inventory" else 1)
+        return json.loads((output / "summary.json").read_text())
+
+    def test_audit_keeps_error_and_receipts_when_final_inventory_fails(self):
+        with tempfile.TemporaryDirectory() as root:
+            summary = self.run_failed_audit(root, "final-inventory")
+        self.assertIn("original audit failure", summary["error"])
+        self.assertIn("final inventory unavailable", summary["inventory_error"])
+        self.assertIsNone(summary["inventory_after"])
+        self.assertFalse(summary["engine_restored"])
+
+    def test_audit_continues_image_cleanup_and_receipts_when_service_stop_fails(self):
+        for failure in ("service-terminate", "service-wait", "service-kill"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as root:
+                summary = self.run_failed_audit(root, failure)
+            self.assertIn("original audit failure", summary["error"])
+            self.assertFalse(summary["service_stopped"])
+            self.assertTrue(any(not item["pass"] for item in summary["cleanup"]))
+            self.assertEqual(summary["inventory_before"], summary["inventory_after"])
+
+    def test_audit_retains_preflight_failure_without_claiming_restoration(self):
+        with tempfile.TemporaryDirectory() as root:
+            summary = self.run_failed_audit(root, "initial-inventory")
+        self.assertIn("initial inventory unavailable", summary["error"])
+        self.assertIsNone(summary["inventory_before"])
+        self.assertFalse(summary["engine_restored"])
 
 
 class CleanupFailureEvidenceTests(unittest.TestCase):
