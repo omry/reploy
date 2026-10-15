@@ -171,7 +171,11 @@ func resolveBase(ctx context.Context, authorReference string, platform blueprint
 			return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("pull Docker base image %s for %s: %w", authorReference, platform.Canonical, err)
 		}
 		if pulledDigest == "" {
-			return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("pull Docker base image %s for %s: Docker did not report an immutable manifest digest", authorReference, platform.Canonical)
+			descriptor, config, identityErr := resolvePodmanBaseIdentity(ctx, authorReference, platform, run)
+			if identityErr != nil {
+				return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("pull Docker base image %s for %s: Docker did not report an immutable manifest digest: %w", authorReference, platform.Canonical, identityErr)
+			}
+			return descriptor, config, nil
 		}
 	}
 	output, err := run(ctx, "image", "inspect", inspectionReference)

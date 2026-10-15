@@ -1,0 +1,2 @@
+kind: Fixed
+body: Resolve tagged Podman base images from verified registry manifests and immutable local content when pull output omits Docker's digest line, while rejecting platform mismatches and changed tags.

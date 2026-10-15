@@ -372,7 +372,7 @@ func TestResolveBaseRejectsMissingPullDigestBeforeMutableInspection(t *testing.T
 	if err == nil || !strings.Contains(err.Error(), "immutable manifest digest") {
 		t.Fatalf("error = %v", err)
 	}
-	if len(calls) != 1 || calls[0][0] != "pull" {
+	if len(calls) != 2 || calls[0][0] != "pull" || calls[1][0] != "version" {
 		t.Fatalf("calls = %#v", calls)
 	}
 }
