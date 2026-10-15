@@ -324,7 +324,7 @@ func executeLockedProviderBuildV1(
 		Phase: buildprogress.PhaseAssemble, Detail: "Assembling environment runtime plan",
 	})
 	resolvedRequest, relevantPackageOverrides, err := finalizeResolvedRequestV1(
-		preparation.Loaded.Document, preparation.Loaded.State.Overlay, preparation.Loaded.PackageOverrides,
+		preparation.Loaded.Document, preparation.Loaded.State.Overlay, preparation.Loaded.PackageOverrides, preparation.Loaded.BaseImage,
 		preparation.Loaded.Request, graph, preparation.ApplicationTools,
 	)
 	if err != nil {
@@ -413,6 +413,7 @@ func executeLockedProviderBuildV1(
 		Document: preparation.Loaded.Document, DockerPlan: preparation.DockerPlan,
 		ResolvedRequest: resolvedRequest, Overlay: preparation.Loaded.State.Overlay,
 		PackageOverrides: relevantPackageOverrides,
+		BaseImage:        preparation.Loaded.BaseImage,
 		Base:             preparedBase.Descriptor, BaseCatalog: preparedBase.Catalog,
 		Graph: graph, PortableTools: portableTools, Validation: validation,
 		ApplicationTools: preparation.ApplicationTools, PortableRuntimeLayer: portableLayer,
