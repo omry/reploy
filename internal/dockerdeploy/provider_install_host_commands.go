@@ -36,7 +36,8 @@ func planProviderInstallHostCommandsV1(plan providerInstallationPlanV1, dockerPa
 			return providerInstallHostCommandsV1{}, err
 		}
 		result.Start = CommandSpec{
-			Name: dockerPath,
+			Name:               dockerPath,
+			applicationCompose: true,
 			Args: []string{
 				"compose",
 				"--project-name", plan.Installation.ComposeProject,

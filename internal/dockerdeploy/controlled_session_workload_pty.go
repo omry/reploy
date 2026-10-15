@@ -403,7 +403,19 @@ func (workload *DockerWorkloadPTYV1) Close() error {
 }
 
 func controlledSessionCommandSpecV1(command ControlledSessionDockerCommandV1) CommandSpec {
-	return CommandSpec{Name: command.Name, Args: append([]string(nil), command.Args...)}
+	spec := CommandSpec{Name: command.Name, Args: append([]string(nil), command.Args...)}
+	if len(command.Args) > 0 && command.Args[0] == "create" {
+		for index := 1; index < len(command.Args); index++ {
+			if command.Args[index] == "--entrypoint" {
+				break
+			}
+			if command.Args[index-1] == "--security-opt" && command.Args[index] == "seccomp=builtin" {
+				spec.builtinSeccompIndex = index
+				break
+			}
+		}
+	}
+	return spec
 }
 
 func rollbackControlledSessionWorkloadContainerV1(

@@ -33,6 +33,11 @@ func sandboxAndExecApplicationV1(plan sandboxExecPlanV1) error {
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("trusted sandbox setup must begin as container root")
 	}
+	if plan.PrepareTemporaryHome {
+		if err := prepareApplicationTemporaryHomeV1(plan.UID, plan.GID); err != nil {
+			return fmt.Errorf("prepare private temporary home: %w", err)
+		}
+	}
 	statusFile := (*os.File)(nil)
 	if plan.RecordExitStatus {
 		var err error

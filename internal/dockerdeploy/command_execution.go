@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -290,7 +291,7 @@ func transientContainerCommandSpecV1(operation string, container string, plan Do
 		plan.Image,
 	)
 	args = append(args, sandboxApplicationArgvV1(plan, command.Argv, true, []int{})...)
-	return CommandSpec{Name: "docker", Args: args}, nil
+	return CommandSpec{Name: "docker", Args: args, builtinSeccompIndex: slices.Index(args, "seccomp=builtin")}, nil
 }
 
 func transientCommandContainerName(plan DockerExecutionPlan) string {

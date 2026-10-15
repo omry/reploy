@@ -65,6 +65,15 @@ func runPodmanHealthcheckCompose(client *podmanHealthcheckClient, spec CommandSp
 	if !detached {
 		return fmt.Errorf("Podman Compose compatibility requires detached startup")
 	}
+	// Prepare the policy before stopping/removing any existing workload.
+	create := spec
+	create.Args = createArgs
+	translated, cleanup, seccomp, err := preparePodmanSeccompCompose(create, len(prefix))
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	create = translated
 	ctx := options.Context
 	if ctx == nil {
 		ctx = context.Background()
@@ -163,9 +172,10 @@ func runPodmanHealthcheckCompose(client *podmanHealthcheckClient, spec CommandSp
 			}
 		}
 	}()
-	create := spec
-	create.Args = createArgs
 	if err := raw(create, options); err != nil {
+		if seccomp {
+			err = podmanSeccompCreateError(client, err)
+		}
 		return err
 	}
 	ids, err := list(ctx)

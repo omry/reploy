@@ -43,7 +43,7 @@ func TestPodmanHealthcheckCompatibilityIntegration(t *testing.T) {
 		if !validPodmanHealthcheckContainerID(id) {
 			t.Fatalf("invalid owned ID: %q", id)
 		}
-		output, err := exec.CommandContext(ctx, "systemctl", "--user", "list-units", "--all", "--quiet",
+		output, err := exec.CommandContext(ctx, "systemctl", "--user", "list-units", "--all", "--quiet", "--no-legend",
 			id+"*.timer", id+"*.service", "libpod-healthcheck-"+id+"*.timer", "libpod-healthcheck-"+id+"*.service").CombinedOutput()
 		if err != nil || len(bytes.TrimSpace(output)) != 0 {
 			t.Fatalf("owned timer/service remains: %v: %s", err, output)
