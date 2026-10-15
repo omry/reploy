@@ -1,0 +1,29 @@
+{
+	"Ref": "registry.k8s.io/pause-amd64:3.1",
+	"Descriptor": {
+		"mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+		"digest": "sha256:59eec8837a4d942cc19a52b8c09ea75121acc38114a2c68b98983ce9356b8610",
+		"size": 527,
+		"platform": {
+			"architecture": "amd64",
+			"os": "linux"
+		}
+	},
+	"Raw": "ewogICAic2NoZW1hVmVyc2lvbiI6IDIsCiAgICJtZWRpYVR5cGUiOiAiYXBwbGljYXRpb24vdm5kLmRvY2tlci5kaXN0cmlidXRpb24ubWFuaWZlc3QudjIranNvbiIsCiAgICJjb25maWciOiB7CiAgICAgICJtZWRpYVR5cGUiOiAiYXBwbGljYXRpb24vdm5kLmRvY2tlci5jb250YWluZXIuaW1hZ2UudjEranNvbiIsCiAgICAgICJzaXplIjogMTYwOSwKICAgICAgImRpZ2VzdCI6ICJzaGEyNTY6ZGE4NmU2YmE2Y2ExOTdiZjZiYzVlOWQ5MDBmZWJkOTA2YjEzM2VhYTQ3NTBlNmJlZDY0N2IwZmJlNTBlZDQzZSIKICAgfSwKICAgImxheWVycyI6IFsKICAgICAgewogICAgICAgICAibWVkaWFUeXBlIjogImFwcGxpY2F0aW9uL3ZuZC5kb2NrZXIuaW1hZ2Uucm9vdGZzLmRpZmYudGFyLmd6aXAiLAogICAgICAgICAic2l6ZSI6IDMxMzM2MywKICAgICAgICAgImRpZ2VzdCI6ICJzaGEyNTY6NjdkZGJmYjIwYTIyZDdjMGVhMGRmNTY4MDY5ZTdmZmM0MjM3ODQ2NzQwMmQwNGYyOGVjZmEyNDRlNzhjNWViOCIKICAgICAgfQogICBdCn0=",
+	"SchemaV2Manifest": {
+		"schemaVersion": 2,
+		"mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+		"config": {
+			"mediaType": "application/vnd.docker.container.image.v1+json",
+			"size": 1609,
+			"digest": "sha256:da86e6ba6ca197bf6bc5e9d900febd906b133eaa4750e6bed647b0fbe50ed43e"
+		},
+		"layers": [
+			{
+				"mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+				"size": 313363,
+				"digest": "sha256:67ddbfb20a22d7c0ea0df568069e7ffc42378467402d04f28ecfa244e78c5eb8"
+			}
+		]
+	}
+}
