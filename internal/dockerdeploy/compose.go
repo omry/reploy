@@ -24,6 +24,11 @@ type CommandSpec struct {
 	Args []string
 	Dir  string
 	Env  []string
+
+	// Only application renderers set this index. Do not interpret forwarded
+	// application arguments as Docker options at the engine boundary.
+	builtinSeccompIndex int
+	applicationCompose  bool
 }
 
 type RunOptions struct {
@@ -424,8 +429,9 @@ func composeCommandWithProject(dir string, projectName string, args ...string) C
 		filepath.Join(dir, ComposeFileName),
 	)
 	return CommandSpec{
-		Name: "docker",
-		Args: append(composeArgs, args...),
-		Dir:  dir,
+		Name:               "docker",
+		Args:               append(composeArgs, args...),
+		Dir:                dir,
+		applicationCompose: true,
 	}
 }

@@ -16,6 +16,7 @@ type sandboxExecPlanV1 struct {
 	EnvironmentProfile     string
 	ContractEnvironment    []EnvironmentVariableV1
 	RecordExitStatus       bool
+	PrepareTemporaryHome   bool
 	AllowPublic            bool
 	AllowLocal             bool
 	AllowAmbiguous         bool
@@ -45,6 +46,7 @@ func parseSandboxExecPlanV1(args []string, installRules bool) (sandboxExecPlanV1
 	environmentProfile := set.String("environment-profile", "", "fixed application environment profile")
 	contractEnvironment := new(contractEnvironmentFlagV1)
 	set.Var(contractEnvironment, "environment-entry", "additional NAME=VALUE contract runtime environment entry")
+	prepareHome := set.Bool("prepare-temporary-home", false, "prepare fixed private home tmpfs ownership for the Podman uid/gid compatibility gap")
 	recordExitStatus := set.Bool("record-exit-status", false, "record the observed application exit status through the fixed trusted channel")
 	public := set.String("public", "", "public network policy")
 	local := set.String("local", "", "local network policy")
@@ -124,7 +126,7 @@ func parseSandboxExecPlanV1(args []string, installRules bool) (sandboxExecPlanV1
 	}
 	return sandboxExecPlanV1{
 		UID: parsedUID, GID: parsedGID, Groups: parsedGroups, EnvironmentProfile: *environmentProfile,
-		ContractEnvironment: parsedContractEnvironment, RecordExitStatus: *recordExitStatus,
+		ContractEnvironment: parsedContractEnvironment, RecordExitStatus: *recordExitStatus, PrepareTemporaryHome: *prepareHome,
 		AllowPublic: allowPublic, AllowLocal: allowLocal, AllowAmbiguous: allowAmbiguous,
 		InboundTCP: ports, SessionNetworkPrefixes: *sessionNetworkPrefixes, SessionNetworkPeer: *sessionNetworkPeer, InstallRules: installRules,
 		Argv: append([]string(nil), argv...),

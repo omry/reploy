@@ -49,6 +49,7 @@ func TestPlanProviderInstallHostCommandsV1DockerManagedUsesExactInstalledInputs(
 		t.Fatalf("managed configure commands = %#v", commands.Configure)
 	}
 	want := CommandSpec{
+		applicationCompose: true,
 		Name: dockerPath, Dir: destinationDir,
 		Args: []string{
 			"compose", "--project-name", "demo", "--project-directory", destinationDir,

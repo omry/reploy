@@ -38,6 +38,14 @@ func runPodmanHealthcheckCompatibility(spec CommandSpec, options RunOptions, raw
 	if composeIndex >= 0 {
 		return true, runPodmanHealthcheckCompose(client, spec, options, raw, composeIndex)
 	}
+	translated, err := preparePodmanSeccompCommand(spec)
+	if err != nil {
+		return true, err
+	}
+	if spec.builtinSeccompIndex > 0 {
+		args = translated.Args
+		spec = translated
+	}
 	create := spec
 	create.Args = append([]string{"create"}, args[1:]...)
 	var idOutput, createStderr dockerBuildOutputTail
@@ -48,6 +56,9 @@ func runPodmanHealthcheckCompatibility(spec CommandSpec, options RunOptions, raw
 		creation.Stderr = &createStderr
 	}
 	if err := raw(create, creation); err != nil {
+		if spec.builtinSeccompIndex > 0 {
+			err = podmanSeccompCreateError(client, err)
+		}
 		if options.Stdout == nil && options.Stderr == nil && options.Capture == nil && createStderr.String() != "" {
 			err = fmt.Errorf("%w\ncommand output:\n%s", err, createStderr.String())
 		}

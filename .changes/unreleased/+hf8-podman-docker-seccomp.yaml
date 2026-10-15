@@ -1,0 +1,2 @@
+kind: Fixed
+body: Use a pinned Docker seccomp profile for application containers on local Linux Podman engines with upstream inline-profile support. Prepare private home tmpfs ownership in the trusted startup helper and drop all setup capabilities before running the application. Stock Podman 6.1.4 requires an engine update; no weaker seccomp fallback is used.
