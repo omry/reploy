@@ -11,7 +11,7 @@ import (
 
 // Translate the generated workload's sandbox settings, retaining the
 // original project directory for all relative mounts and environment files.
-func preparePodmanSeccompCompose(spec CommandSpec, action int) (CommandSpec, func(), bool, error) {
+func preparePodmanSeccompCompose(spec CommandSpec, action int, resolveNamespace func([]string) (string, error)) (CommandSpec, func(), bool, error) {
 	noop := func() {}
 	if !spec.applicationCompose {
 		return spec, noop, false, nil
@@ -100,6 +100,38 @@ func preparePodmanSeccompCompose(spec CommandSpec, action int) (CommandSpec, fun
 	}
 	if err := preparePodmanTemporaryHomeCompose(service); err != nil {
 		return spec, noop, false, err
+	}
+	if resolveNamespace != nil {
+		entrypoint, err := composePodmanField(service, "entrypoint")
+		if err != nil {
+			return spec, noop, false, err
+		}
+		if entrypoint != nil {
+			current, err := composePodmanField(service, "userns_mode")
+			if err != nil {
+				return spec, noop, false, err
+			}
+			if current != nil {
+				return spec, noop, false, podmanNamespaceConflict(current.Value)
+			}
+			arguments, err := composePodmanField(service, "command")
+			if err != nil {
+				return spec, noop, false, err
+			}
+			var command []string
+			for _, value := range arguments.Content {
+				command = append(command, value.Value)
+			}
+			namespace, err := resolveNamespace(command)
+			if err != nil {
+				return spec, noop, false, err
+			}
+			if namespace != "" {
+				service.Content = append(service.Content,
+					&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "userns_mode"},
+					&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: namespace})
+			}
+		}
 	}
 	builtin.Value = "seccomp=" + strings.ReplaceAll(profile, "$", "$$")
 	data, err = yaml.Marshal(&document)

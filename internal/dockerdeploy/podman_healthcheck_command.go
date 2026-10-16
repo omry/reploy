@@ -49,13 +49,36 @@ func runPodmanHealthcheckCompatibility(spec CommandSpec, options RunOptions, raw
 	create := spec
 	create.Args = append([]string{"create"}, args[1:]...)
 	var idOutput, createStderr dockerBuildOutputTail
+	namespace := ""
+	if spec.builtinSeccompIndex > 0 {
+		command, err := podmanApplicationCommand(spec)
+		if err != nil {
+			return true, err
+		}
+		identity, cancel := context.WithTimeout(ctx, effectiveDockerPreflightTimeout(options.DockerPreflightTimeout))
+		namespace, err = client.applicationUserNamespace(identity, command)
+		cancel()
+		if err != nil {
+			return true, err
+		}
+	}
 	creation := options
 	creation.Stdin = nil
 	creation.Stdout = &idOutput
 	if creation.Stderr == nil {
 		creation.Stderr = &createStderr
 	}
-	if err := raw(create, creation); err != nil {
+	createApplication := func() error {
+		if namespace == "" {
+			return raw(create, creation)
+		}
+		id, err := client.createSameIDApplication(ctx, create, namespace, raw)
+		if err == nil {
+			_, err = io.WriteString(&idOutput, id)
+		}
+		return err
+	}
+	if err := createApplication(); err != nil {
 		if spec.builtinSeccompIndex > 0 {
 			err = podmanSeccompCreateError(client, err)
 		}
