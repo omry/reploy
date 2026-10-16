@@ -42,12 +42,12 @@ owns applications and their `os` and `python` package contributions; the
 internal `blueprint.Component` map is a derived provider projection while
 lower-level provider APIs migrate to first-class contribution identities.
 
-Known implementation discrepancies are tracked in [`BACKLOG.md`](BACKLOG.md),
-not silently normalized in this design. The APT install-record parser still
-rejects the valid optional trailing empty ` []` marker emitted by current APT,
-and bundle CLI help and diagnostics still expose obsolete component terminology.
-Those are implementation backlog items; this true-up changes no runtime
-behavior.
+The APT install-record parser accepts one optional trailing empty ` []` marker.
+It continues to validate the package, version, and architecture fields.
+It rejects nonempty, repeated, and malformed markers.
+
+Known implementation discrepancies are tracked in [`BACKLOG.md`](BACKLOG.md).
+Bundle CLI help and diagnostics still expose obsolete component terminology.
 
 ## Implemented Behavioral Cutover
 
@@ -3137,6 +3137,6 @@ covered by the provider and deployment test suites. The historical slice gates
 above are the durable delivery record; no separate APT implementation plan is
 required for current work.
 
-The remaining APT parser and public CLI terminology discrepancies are explicit
-backlog items. Their presence is a deferral, not evidence that the implemented
-provider architecture is still a prototype.
+The remaining public CLI terminology discrepancies are explicit backlog items.
+Their presence is a deferral, not evidence that the implemented provider
+architecture is still a prototype.
