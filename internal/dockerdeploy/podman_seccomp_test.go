@@ -128,7 +128,7 @@ func TestPodmanSeccompComposePreservesModelAndStableProfile(t *testing.T) {
 	action := len(spec.Args) - 1
 	var policy string
 	for iteration := 0; iteration < 2; iteration++ {
-		translated, cleanup, changed, err := preparePodmanSeccompCompose(spec, action)
+		translated, cleanup, changed, err := preparePodmanSeccompCompose(spec, action, nil)
 		if err != nil || !changed {
 			t.Fatalf("translation: %v / %t", err, changed)
 		}

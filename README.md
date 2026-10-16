@@ -47,6 +47,27 @@ setting or separately installed Podman CLI is required.
 This is a temporary compatibility path for disabled-check scheduling. Full
 Podman compatibility remains unqualified.
 
+Application identity follows the selected host account's primary UID/GID by
+default. On local rootless Podman, Reploy uses `keep-id` internally so managed
+config/data and explicit application outputs remain accessible to that account.
+The invoking account, engine owner, and application account must match; Reploy
+rejects a mismatch instead of changing file ownership. No Podman-specific flag
+or environment variable is required. Rootful engine behavior and internal
+provider build identities are unchanged. Explicit isolated service mappings
+remain separate multi-identity work.
+
+Same-ID support covers transient commands, controlled sessions without granted
+endpoints, and Compose recreation. Network-enabled Podman controlled sessions
+remain unsupported. Reploy retains its network identity and fixed-address
+checks before startup; this storage fix does not bypass them.
+
+This path targets the Podman 6.1.4 API and is tested on the development engine
+with the inline seccomp support required above; it does not establish stock
+6.1.4 compatibility. `keep-id` preserves primary IDs, but container supplementary
+groups still map to subordinate host groups. Host files requiring supplementary
+group access can remain inaccessible. Reploy does not import additional host
+group authority or repair existing subordinate-owned data automatically.
+
 ## Install
 
 Install the latest release binary:

@@ -68,16 +68,21 @@ func runPodmanHealthcheckCompose(client *podmanHealthcheckClient, spec CommandSp
 	// Prepare the policy before stopping/removing any existing workload.
 	create := spec
 	create.Args = createArgs
-	translated, cleanup, seccomp, err := preparePodmanSeccompCompose(create, len(prefix))
+	ctx := options.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	resolveNamespace := func(command []string) (string, error) {
+		identity, cancel := context.WithTimeout(ctx, effectiveDockerPreflightTimeout(options.DockerPreflightTimeout))
+		defer cancel()
+		return client.applicationUserNamespace(identity, command)
+	}
+	translated, cleanup, seccomp, err := preparePodmanSeccompCompose(create, len(prefix), resolveNamespace)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 	create = translated
-	ctx := options.Context
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	list := func(c context.Context) ([]string, error) {
 		var output bytes.Buffer
 		var diagnostic dockerBuildOutputTail
