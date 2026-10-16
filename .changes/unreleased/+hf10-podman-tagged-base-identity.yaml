@@ -1,0 +1,2 @@
+kind: Fixed
+body: Resolve Podman base pulls through the native API using the exact returned image ID, preserving Docker registry credentials, image validation, and immutable cache reuse without a second registry lookup.

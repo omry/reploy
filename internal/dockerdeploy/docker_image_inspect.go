@@ -66,7 +66,7 @@ type parsedDockerImageInspection struct {
 // ResolveBase pulls the requested platform, captures its immutable identity,
 // and normalizes the Docker image configuration used by later build stages.
 func ResolveBase(ctx context.Context, authorReference string, platform blueprint.Platform) (deploy.ImageDescriptor, deploy.BaseConfig, error) {
-	return resolveBase(ctx, authorReference, platform, runDockerOutput)
+	return resolveBaseWithNativePull(ctx, authorReference, platform, runDockerOutput, resolveNativePodmanBase)
 }
 
 // InspectCachedBase resolves only Docker's current local author reference. A
@@ -107,31 +107,33 @@ func inspectCachedBase(
 		}
 		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, nil
 	}
-	descriptor, config, err := parseResolvedDockerBase(
-		authorReference,
-		platform,
-		[]byte(output),
-		"",
-	)
-	if err != nil {
-		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, nil
-	}
-	// A local image can carry multiple repository digests (for example an
-	// index and its platform manifest). Prefer the locked identity only when
-	// it is still attached to this author reference and names the same bytes.
-	if expected != nil && expected.AuthorReference == authorReference && expected.ManifestDigest != "" {
-		locked, _, lockedErr := parseResolvedDockerBase(expected.ImmutableReference, platform, []byte(output), "")
+	// Prefer the complete locked identity only when this author reference still
+	// names the same image bytes. Native Podman pulls use config IDs, which do
+	// not require RepoDigests; Docker locks may instead name an index/manifest.
+	if expected != nil && expected.AuthorReference == authorReference &&
+		(expected.ManifestDigest != "" || isDockerLocalImageID(expected.ImmutableReference)) {
+		locked, config, lockedErr := parseResolvedDockerBase(expected.ImmutableReference, platform, []byte(output), "")
 		if lockedErr == nil {
 			locked.AuthorReference = authorReference
 			if reflect.DeepEqual(locked, *expected) {
-				descriptor = locked
+				return locked, config, true, nil
 			}
 		}
+	}
+	descriptor, config, err := parseResolvedDockerBase(authorReference, platform, []byte(output), "")
+	if err != nil {
+		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, nil
 	}
 	return descriptor, config, true, nil
 }
 
 func resolveBase(ctx context.Context, authorReference string, platform blueprint.Platform, run dockerOutputRunner) (deploy.ImageDescriptor, deploy.BaseConfig, error) {
+	return resolveBaseWithNativePull(ctx, authorReference, platform, run, nil)
+}
+
+type nativeBaseResolver func(context.Context, string, blueprint.Platform) (deploy.ImageDescriptor, deploy.BaseConfig, bool, error)
+
+func resolveBaseWithNativePull(ctx context.Context, authorReference string, platform blueprint.Platform, run dockerOutputRunner, native nativeBaseResolver) (deploy.ImageDescriptor, deploy.BaseConfig, error) {
 	if ctx == nil {
 		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("resolve Docker base requires a context")
 	}
@@ -160,6 +162,12 @@ func resolveBase(ctx context.Context, authorReference string, platform blueprint
 				); parseErr == nil {
 					return descriptor, config, nil
 				}
+			}
+		}
+		if native != nil {
+			descriptor, config, handled, err := native(ctx, authorReference, platform)
+			if handled || err != nil {
+				return descriptor, config, err
 			}
 		}
 		pullOutput, err := pullDockerBaseWithRetry(ctx, run, platform.Canonical, authorReference)
