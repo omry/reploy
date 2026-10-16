@@ -80,6 +80,10 @@ func (fixture *podmanHealthcheckFixture) serve(w http.ResponseWriter, r *http.Re
 		}
 		return
 	}
+	if r.URL.Path == "/v6.1.4/libpod/info" {
+		io.WriteString(w, `{"host":{"security":{"rootless":false}}}`)
+		return
+	}
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) != 6 || parts[1] != "v6.1.4" || parts[2] != "libpod" || parts[3] != "containers" {
 		http.NotFound(w, r)
