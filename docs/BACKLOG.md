@@ -280,10 +280,13 @@ This file is the day-to-day queue for design and implementation gaps.
       staged/installed consistency and cross-platform behavior. Acceptance:
       a dashboard binds its existing config and whole SQLite data directory
       from two differently located user homes without editing the published
-      blueprint or adding a preparation script; cover custom XDG roots (including XDG_STATE_HOME) and
-      invalid/missing sources. Extend the portable-checkout need in
+      blueprint or adding a preparation script; cover custom XDG roots
+      (including XDG_STATE_HOME) and invalid/missing sources. Extend the portable-checkout need in
       [Dingo gaps](DINGO_GAPS.md#portable-local-checkout-binding), keeping
-      checkout-relative and per-user storage resolution distinct.
+      checkout-relative and per-user storage resolution distinct. Define the
+      resolution base for each supported relative path and its behavior when
+      checkout or staging locations change; never assume a fixed relationship
+      between them.
 
 - [ ] `P2` Define deployment-local blueprint variable inputs.
       Promote the deferred installation-time override need in
