@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-10-07
+updated: 2026-10-18
 summary: Active planning surface for Reploy design and implementation gaps.
 ---
 
@@ -269,6 +269,37 @@ This file is the day-to-day queue for design and implementation gaps.
       `environment.runtime.network.ambiguous: allow` escape hatch with precise
       translated-destination policy and deprecate that coarse override.
 
+- [ ] `P2` Define portable host bind-source resolution.
+      Let a blueprint name existing per-user config, data, and state directories
+      without embedding an account-specific absolute path. Define explicit
+      home/XDG semantics, whose identity and host namespace are used, and
+      behavior when a directory variable is unset or relative. Preserve
+      explicit host-access grants and existing mount restrictions; resolve to
+      validated absolute existing sources before side effects, without
+      arbitrary shell evaluation or implicit directory creation. Specify
+      staged/installed consistency and cross-platform behavior. Acceptance:
+      a dashboard binds its existing config and whole SQLite data directory
+      from two differently located user homes without editing the published
+      blueprint or adding a preparation script; cover custom XDG roots (including XDG_STATE_HOME) and
+      invalid/missing sources. Extend the portable-checkout need in
+      [Dingo gaps](DINGO_GAPS.md#portable-local-checkout-binding), keeping
+      checkout-relative and per-user storage resolution distinct.
+
+- [ ] `P2` Define deployment-local blueprint variable inputs.
+      Promote the deferred installation-time override need in
+      [the blueprint model](BLUEPRINT_ENVIRONMENT_MODEL.md#private-implementation-backlog)
+      into a contract spanning staging, installation, and updates. Define the
+      supported input surface, allowed variables and types, precedence over
+      published defaults, required/unset/null semantics, validation timing,
+      persistence, and deliberate reset/replacement behavior. Preserve local
+      selections when a blueprint is updated, while rejecting incompatible
+      changes before side effects. Keep these inputs distinct from package
+      override sidecar variables and private workload `.env` values; do not
+      implicitly import the host environment or turn the input surface into a
+      secret store. Acceptance: the dashboard selects existing config/data
+      binds locally while its published blueprint remains unchanged; test
+      fresh stage, restage, install, update, missing values, and precedence.
+
 - [ ] `P2` Evaluate and prioritize the Dingo development-environment gaps.
       Use `docs/DINGO_GAPS.md` as the needs and evidence record for portable
       checkout binding, development execution, shell initialization, pinned
@@ -276,7 +307,8 @@ This file is the day-to-day queue for design and implementation gaps.
       ARM64 handoff. Confirm each boundary against current behavior, separate
       broadly useful Reploy capabilities from ROS-specific integration, and
       turn accepted priorities into focused follow-up backlog items without
-      treating this document as an implementation plan.
+      treating this document as an implementation plan. Portable host
+      bind-source resolution is tracked separately above.
 
 - [ ] `P2` Implement Reploy repository schemas and publication tooling.
       Follow `docs/REPOSITORY_DESIGN.md` as the policy source. Define strict
