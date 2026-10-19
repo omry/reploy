@@ -1,24 +1,540 @@
 ---
-status: Finalized delivery plan; implementation gated
-updated: 2026-10-14
-summary: Multi-identity delivery design; initial conformance group is specified, later integration remains subject to explicit design and compatibility gates.
+status: Single-installation mapping design proposed; composition deferred; implementation gates remain
+updated: 2026-10-19
+summary: Implementation-ordered single-installation identity slices, explicit durable mappings, separate composition scope, and conditional production/test estimates.
 ---
 
 # Multi-Identity Delivery Design and Implementation Plan
 
-This document defines the remaining delivery boundaries and acceptance gates.
-The approved [security contract](MULTI_IDENTITY_SECURITY_CONTRACT.md) remains
-authoritative. Finalizing this plan does not approve its unresolved host
-recipient, mapping default, supervisor implementation or public policy choices.
-Only the initial group A is specified for delivery now; later groups require
-the named decisions and evidence below before their implementation starts.
+The [security contract](MULTI_IDENTITY_SECURITY_CONTRACT.md) is authoritative.
+On 2026-10-19, the maintainer accepted separating composition from multi-identity.
+This proposal adds explicit mappings to one existing workload installation.
+A general service-composition system is separate work, not a prerequisite.
+Public mapping input/command syntax and the concrete host policy remain proposed
+for B-design approval. Review stamps assess the proposal; they do not grant that
+approval or select a production supervisor.
 
-The campaign uses **Podman through the existing Docker-compatible route**.
-Full native Podman support, native build transport, remote engines and Podman
-Machine are separate features. Unsupported required operations produce a
-blocker, not permission to introduce a native backend or relax isolation.
+The main delivery table is in implementation order. Each group can finish
+without a later implementation slice. Named design and evidence gates still
+apply. Earlier IDs are preserved in the crosswalk; historical evidence keeps
+its original milestone labels. No later implementation has started.
 
-## Baseline and current standing
+The target is local rootless Linux Podman through the existing Docker-compatible
+route. A general native Podman backend, remote engines and Podman Machine are
+separate features. Rootful multi-identity support needs separate qualification.
+The proposed first runtime cohort is non-root staging and user-scope installation
+under that same rootless operating account. System-scope multi-identity install
+and root-run mapped operations reject before mutation; the existing system-unit
+path does not establish that rootless runtime account. This restriction is part
+of the pending concrete host-policy decision, not a claim of system-scope support.
+Ordinary single-identity behavior keeps its backend-independent default.
+
+## Approved scope boundary — 2026-10-19
+
+- Implement mapping input, validation, state and recovery for one workload
+  installation through the existing deployment path.
+- The administrator supplies existing OS-user delegation and coordinates host
+  IDs across installations, unmanaged services and retained data.
+- Allow explicit mappings on staged test deployments as well as installed
+  destinations. Preserve stage/run/test/install through the same security gates.
+  Installation requires an explicit destination mapping decision; it cannot
+  copy source reservations, pending operations or mapped storage ownership.
+- Preserve mappings across recreation, generations, rollback and retained-data
+  lifetimes. No automatic remapping or recursive ownership rewrite occurs.
+- Defer general composition: service membership, blueprint references, batch
+  staging, startup ordering and multi-service orchestration need a separate design.
+  A future composition may supply the same per-installation mapping input; it
+  must not become a second authority over an installation's recorded mappings.
+- Keep sharing separately gated. Grouping or naming services grants no shared
+  identity, storage or network authority.
+- Add no Reploy-wide enrollment, allocator, registry or privileged broker.
+
+The 2026-10-16 discussion suggested composition as a place for initial mappings.
+The superseded proposal made that a delivery dependency. The scope correction
+above removes that dependency while retaining explicit mappings and manual
+external coordination. It does not approve a composition API.
+
+## Remaining scope: implementation-ordered delivery table
+
+Letters are delivery groups, numbers are slices within the group. Read top to
+bottom. Earlier independent work may run sooner (notably K1). Group subtotals
+are arithmetic planning ranges; do not add them to their slice rows. A1's written
+code is excluded from remaining totals. Targets do not require padding small
+changes to reach 500.
+
+| Group | Slice | Concrete result | Prod target | Production LOC | Test/fixture LOC | Prerequisites |
+| --- | --- | --- | ---: | ---: | ---: | --- |
+| **A** | **Subtotal** | **Readiness** | — | **0** | **0** | — |
+| A | A1 | Private mechanism and compatibility readiness; code written | 0 | 0 | 0 | PR 69; final PR 239 delivery gate |
+| **B** | **Subtotal** | **Single-installation inputs and durable mappings** | — | **1,750–2,900** | **2,900–4,550** | — |
+| B | B1 | Read-only caller, delegation and host-principal preflight | 450 | 350–550 | 550–850 | A1; B-design |
+| B | B2 | Operator-selected mapping input bound to one existing deployment | 450 | 350–600 | 500–850 | B1; B-design |
+| B | B3 | Exact/bounded geometry, disjoint assignments and dormant-ID comparison | 450 | 350–550 | 600–900 | B2 |
+| B | B4 | Identity record in existing deployment state and operation lock | 450 | 350–600 | 600–950 | B3 |
+| B | B5 | Pending intents, recovery, tombstones and conservative reservation retention | 450 | 350–600 | 650–1,000 | B4 |
+| **C** | **Subtotal** | **Existing engine and build integration** | — | **600–1,200** | **1,150–1,900** | — |
+| C | C1 | Scoped Podman admission and compatible exact/bounded create transport | 500 | 350–650 | 650–1,050 | B5; C-design; compatible-map-proof |
+| C | C2 | Reuse compatible build/image path; bind immutable service images | 400 | 250–550 | 500–850 | C1 |
+| **D** | **Subtotal** | **Locked identity and capability declarations** | — | **950–1,600** | **1,600–2,600** | — |
+| D | D1 | Public identity declarations and name/number validation | 300 | 250–400 | 400–650 | C2; D-design |
+| D | D2 | Role-specific capability declarations and policy lock | 300 | 200–350 | 350–550 | D1 |
+| D | D3 | Offline locked-image name/number evidence | 400 | 300–500 | 500–800 | D2 |
+| D | D4 | Locked-identity coverage, generation admission and identity-change diagnostics | 300 | 200–350 | 350–600 | D3; B3 |
+| **E** | **Subtotal** | **Mapped execution and supervisor admission** | — | **1,400–2,550** | **2,800–4,550** | — |
+| E | E1 | Compile reserved maps; pre-start verification and host-device rejection | 500 | 350–650 | 650–1,100 | D4; C1; launch-design |
+| E | E2 | Child credentials, capability drop, descriptors, dumpability and sessions | 500 | 400–750 | 800–1,300 | E1; D2 |
+| E | E3 | Supervisor lifetime/replacement and common admission including runtime exec | 450 | 350–650 | 700–1,150 | E2 |
+| E | E4 | Effective capability and privilege-regain verification on every entry | 400 | 300–500 | 650–1,000 | E3 |
+| **F** | **Subtotal** | **Exclusive preparation and network isolation** | — | **1,350–2,400** | **2,400–3,950** | — |
+| F | F1 | Descriptor-safe declared-object preparation with fresh ownership authority | 500 | 400–650 | 650–1,050 | E4; storage-design |
+| F | F2 | Exclusive prepare/attach admission, crash inhibition and restart fencing | 400 | 300–550 | 600–950 | F1; E3 |
+| F | F3 | Existing egress policy and cross-service network-denial enforcement | 500 | 350–650 | 650–1,100 | F2; network-design |
+| F | F4 | Declared endpoint publication, effective observation and cleanup | 400 | 300–550 | 500–850 | F3 |
+| **G** | **Subtotal** | **Service orchestration and initial activation** | — | **1,050–1,800** | **1,900–3,100** | — |
+| G | G1 | Existing staged/installed lifecycle and explicit destination mapping boundary | 500 | 400–700 | 750–1,200 | F4; B5; service-design |
+| G | G2 | Active revocation, stop/removal and retained-mapping admission | 450 | 350–550 | 550–900 | G1; B5 |
+| G | G3 | Failed operation reconciliation and exact owned-resource cleanup | 400 | 300–550 | 600–1,000 | G2; B5 |
+| **H** | **Subtotal** | **Ownership lifecycle and offline restore** | — | **2,050–3,500** | **3,600–5,800** | — |
+| H | H1 | Ownership-stable stop/start of the existing generation | 300 | 250–400 | 350–550 | G3; generic-launch |
+| H | H2 | Recreation preserves mapping and host ownership | 300 | 250–400 | 450–750 | H1 |
+| H | H3 | Identity evolution, dormant assignments and rollback | 450 | 350–550 | 650–1,000 | H2; B5 |
+| H | H4 | Removal, retained storage and checked reservation release | 350 | 250–450 | 500–800 | H3; G2 |
+| H | H5 | Exclusive offline export and integrity manifest | 500 | 350–600 | 550–900 | H4; restore-design |
+| H | H6 | Archive/destination validation and explicit checked ownership translation | 450 | 350–650 | 650–1,050 | H5 |
+| H | H7 | Exclusive restore activation and failure rollback | 350 | 250–450 | 450–750 | H6; F2 |
+| **I** | **Subtotal** | **Secret-file lifecycle** | — | **850–1,400** | **1,500–2,450** | — |
+| I | I1 | Secret references and redacted resolution | 300 | 250–400 | 400–650 | D4; secret-design |
+| I | I2 | Confined recipient files and no metadata/log disclosure | 400 | 300–500 | 550–900 | I1; F2 |
+| I | I3 | Rotation, rollback, restart and removal | 400 | 300–500 | 550–900 | I2; H3; G1 |
+| **J** | **Subtotal** | **Shared interfaces and participants** | — | **1,700–2,850** | **3,550–5,750** | — |
+| J | J1 | Disposable interface proof and dedicated runtime-path preparation | 400 | 300–500 | 950–1,550 | D4; H4; F2; interface-design |
+| J | J2 | Stale socket reconciliation and producer restart | 350 | 250–450 | 500–900 | J1 |
+| J | J3 | Explicit participant ownership, discovery and admission | 500 | 400–650 | 700–1,100 | J2; B5 |
+| J | J4 | Narrow participant attachment preserving private mappings | 500 | 350–600 | 650–1,000 | J3 |
+| J | J5 | Participant replacement, revocation and removal | 500 | 400–650 | 750–1,200 | J4; H4 |
+| **K** | **Subtotal** | **Component qualification and final evidence** | — | **0** | **2,750–4,550** | — |
+| K | K1 | Rspamd/Redis on supported capability-free path | 0 | 0 | 450–750 | A1 (may run independently) |
+| K | K2 | Stock Postfix through the approved supervisor model | 0 | 0 | 650–1,100 | H7; I3; F4; mail-compatible; generic-launch |
+| K | K3 | Stock Dovecot including synthetic SQL and restore | 0 | 0 | 1,000–1,600 | H7; I3; F4; mail-compatible; generic-launch |
+| K | K4 | Combined interface/lifecycle campaign and all-row evidence report | 0 | 0 | 650–1,100 | K1; K2; K3; J5 |
+| **Total** | — | **Conditional remaining implementation** | — | **11,700–20,200** | **24,150–39,200** | Named gates apply |
+
+There are **42 delivery candidates** including written A1;
+**41 remain**. The conditional code total is
+**35,850–59,400 LOC**, split into the production and test ranges above.
+This is a sizing scenario, not a complete supported-feature commitment: compatible
+exact mapping, production supervisor and mail compatibility remain substantive
+design/evidence dependencies. A failing gate can change the count and total.
+The superseded composition-specific B6/B7 are deferred and excluded. Other
+foundation estimates remain conservative; this is not a measured code saving. Tests include
+adversarial state, crash, restart and supported-interface qualification.
+
+### Group B acceptance by slice
+
+Each checkpoint proves one bounded behavior through the real parser, resolver
+or state transaction entry. B uses private integration seams until its complete
+metadata admission path is assembled. It cannot launch a multi-identity payload.
+
+| Slice | Independently verifiable result |
+| --- | --- |
+| B1 | Read-only proposed-map authority check succeeds under the proposed files-backed host contract; UID/GID collisions, hostile caller identity, unsupported delegation backends, libsubid disagreement and incomplete bulk principal inventory reject without mutation. Large-range controls prove query work does not grow with represented IDs; invalid/out-of-delegation intervals reject before inventory queries |
+| B2 | Decode an explicit operator mapping file for one existing deployment; reject duplicate/unknown fields, wrong versions/types and absent profile/maps. Canonical input preserves declared authority. Explicitly selected staged and installed deployments can own mappings; no service list, blueprint loader or implicit discovery is added |
+| B3 | Compare proposed assignments with retained installation state; reject overflow, overlapping intervals and prohibited reassignment. Omitted retained assignments remain reserved. Numeric geometry needs no image or final supervisor identity |
+| B4 | Commit optional identity metadata atomically with the existing deployment state under its existing operation lock. Bind the selected staged or installed owner and compare expected mapping revision and generation; updates preserve that owner's record and copied records cannot authorize another directory. Concurrent writers serialize; stale/substituted state rejects. Read-only inspection creates nothing; old strict readers reject opt-in identity state |
+| B5 | Assemble mapping configure/check/status/recovery; inject crashes around intent/effect/commit boundaries. Pending or ambiguous effects retain inhibition and reservations. Reject unknown/foreign ownership, prevent every existing workload entry from launching opt-in state before generic-launch, and keep ordinary absent-identity state behavior unchanged. Test staged configuration/update preservation, copied-owner rejection, destination ID mismatch, exact pending retry and checked unused-candidate replacement/cancellation through the private deployment seam |
+
+Identity completeness is a later admission check. D4 uses D1/D3's declared,
+image-locked identity evidence and rejects missing assignments for those IDs.
+E1 verifies coverage for the final execution set, including the resolved
+supervisor and justified runtime-required identities, and rejects surplus new
+exact assignments before payload release. Only previously execution-admitted
+assignments can have retained dormant authority.
+Both reject insufficiency without inventing assignments or remapping retained
+ones. B3 validates the supplied numeric reservations and retained-state
+consistency; B staging does not claim that a complete execution map exists.
+
+The table order is one valid delivery order. The prerequisite column records
+technical dependencies, not artificial dependencies merely to serialize unrelated
+work. For example secret references do not require restore, and an independent
+Postfix qualification does not require the shared-interface campaign.
+
+
+## Proposed single-installation mapping design
+
+### Boundary and operator input
+
+Reuse one existing deployment directory, its ordinary blueprint/build route,
+its state file and operation lock. The operator supplies host-specific mapping
+input separately from the portable blueprint. Images and blueprint authors
+cannot grant themselves host IDs. No service list, child-blueprint resolver,
+composition generation, batch-start operation or composition lock is introduced.
+An explicitly selected staged test deployment or installed destination can own
+its own mappings and reservations. Configuration binds them to that deployment;
+input cannot create or adopt an unrelated owner. Reusing a stage as build input
+does not transfer its runtime or mapping authority to another destination.
+
+The proposed YAML root is `identity_mapping`, containing one installation's map.
+The existing ordinary blueprint remains unchanged. No default file discovery,
+environment-variable override or automatic free-range selection is added.
+These public names are proposed for B-design approval, not approved APIs.
+
+`identity_mapping` has exactly `schema`, `profile`, `uids` and `gids`;
+`schema` is the integer `1`. `profile` is required and
+is either `exact` or `bounded`. Each nonempty map array contains objects with
+exactly `container_start`, `host_start` and `count`. All three are YAML integers,
+not strings, booleans or floats. Starts are nonnegative, count is positive,
+and every resulting ID must fit the runtime's usable unsigned 32-bit ID space
+excluding its unchanged-ID sentinel. Check end arithmetic before addition.
+Reject duplicate YAML keys, unknown fields, nulls and overlapping intervals
+and unsupported schema versions. Canonical resolved maps sort by container ID;
+input order does not change authority. There are no implicit mapping entries,
+profile defaults, environment-variable overrides or auto-selected free ranges.
+
+Range length does not authorize work proportional to the represented ID count.
+Validate interval arithmetic and delegated containment before account/group
+inventory queries. Compare intervals with complete delegation and principal
+inventories; do not expand a range into individual IDs or issue a principal
+lookup for each mapped ID. Validation work scales with the explicit intervals
+and inventory records, not the numeric span. Bulk reads/queries must use bounded,
+cancelable execution and reject on timeout, output bounds or incomplete evidence.
+This avoids a new public range cap while preventing per-ID amplification.
+
+For `exact`, these intervals describe explicit reserved assignments. B3 checks
+their geometry and retained-state consistency. D4 checks assignment coverage
+against the image-locked declared identities; E1 checks the complete resolved
+execution set and derives its active map. Before execution admission, E1 also
+rejects every supplied exact assignment that is neither in that resolved set
+nor a previously execution-admitted dormant assignment. D4 cannot make this
+final decision before supervisor/runtime identities are resolved. A never-admitted
+candidate entry cannot become dormant authority merely because it was staged.
+A failed admission preserves the accepted generation and leaves candidate
+reservations subject to the existing conservative recovery/release rules.
+Dormant assignments stay reserved but do not enter the active map. For `bounded`, each
+ID kind has one fixed contiguous interval. Neither form supplies application
+identity declarations or supervisor approval. B metadata configuration cannot execute it.
+
+Example geometry only; these IDs are neither delegation evidence nor a recommended
+size or an executable supervisor policy:
+
+```yaml
+identity_mapping:
+  schema: 1
+  profile: bounded
+  uids: [{container_start: 0, host_start: 300000, count: 4096}]
+  gids: [{container_start: 0, host_start: 400000, count: 4096}]
+```
+
+Proposed mapping-only commands:
+
+- `reploy identity check --dir DIR --mapping FILE`: read and validate explicit
+  input against an existing deployment and retained mapping; create nothing.
+- `reploy identity configure --dir DIR --mapping FILE`: validate and record a
+  candidate mapping in an inactive selected staged or installed deployment under
+  its deployment lock; never build, start, remap or chown.
+- `reploy identity status --dir DIR`: read existing identity state without
+  creating files; distinguish candidate, admitted, inhibited, revoked and retained.
+- `reploy identity recover --dir DIR --operation ID`: reconcile only the recorded
+  pending mapping operation and exact owned objects; never infer a replacement map.
+
+All paths are explicit. Missing/malformed selected deployments reject. No
+`compose` command, aggregate lifecycle command or host `prepare` command is part
+of B. Ordinary staging/building uses existing commands and immutable generation
+references. A failed build does not replace the accepted runtime generation.
+A candidate mapping is not execution admission. Configure operates only on an
+inactive explicitly selected staged or installed deployment with proved ownership
+and compatible mapping/storage history. Unknown live/retained inventory rejects
+before metadata changes; an ordinary live deployment cannot be silently inhibited
+or converted. Once generic-launch passes, existing stage/build/run/test paths
+must support mapped staging with the same fresh admission and sandbox checks as
+installed workloads. B's metadata tests alone do not establish that runtime support.
+
+### Staged testing and installation boundary
+
+A staged test deployment owns its explicit mappings. Ordinary stage updates,
+build publication and repeated test runs preserve its owner ID, mappings,
+reservations and pending operation under the existing deployment lock. Removal
+must use the same safe-release accounting as installed workloads: deleting a
+stage or container cannot erase a reservation while mapped data may remain.
+Copying a stage to another directory cannot create a second mapping owner;
+copied owner/path bindings reject rather than silently rebinding or allocating IDs.
+
+G1 integrates installation from a mapped stage through the existing immutable
+build route. The reviewed install adapter requires explicit destination mapping
+input for first opt-in install. Under the destination lock, validate independent
+non-overlapping assignments and durably record the destination owner plus proposed
+installation facts in its pending intent before destination runtime, storage or
+ownership effects. Installed-state publication atomically commits `Deployment`
+and the matching active installation binding; until then the proposed binding
+belongs only to the inhibited pending intent.
+The source stays valid, unchanged and separately reserved. Do not inherit its
+mapping ID, reservation history, pending operation, inhibition or owned resources.
+No source-to-destination ownership transfer or cross-directory commit is needed.
+The exact public install flags remain part of service-design.
+
+Only immutable build/image authority crosses this boundary automatically. Existing
+path-update/config/data transfer routes must reject mapped source storage that
+would need ownership adoption or translation before destination writes. Do not
+silently drop that data or copy its numeric owners. Such promotion requires the
+separate checked export/restore design in H5–H7. A clean destination can prepare
+its own managed objects using its own validated mappings. Test and production
+may use the same image-local IDs while their subordinate host assignments differ.
+
+On retry, the same destination mapping-owner ID and exact pending operation resume
+with retained destination mappings. Updates preserve and revalidate the existing
+destination record; any supplied map must agree with it. A different destination
+requires its own explicit input and administrator-coordinated IDs. Source/destination
+overlap is a known conflict and rejects even when external coordination is manual;
+include accepted, pending and dormant source reservations. Hold both existing
+operation locks, acquired in deterministic canonical-directory order rather than
+source/destination order. All install paths that can contend for those locks,
+including ordinary callers, must use the same pair order. Resolve both directory
+identities before acquiring either; reject same-directory/aliasing/overlap and
+recheck directory identities, selected target, source generation/mapping revision
+and destination revision after both locks are held. If an earlier source-only
+phase was needed to resolve the target, release it before ordered pair acquisition
+and revalidate; do not upgrade it by waiting for a lower-ordered destination.
+Keep both locks through validation and destination publication; neither mapping
+can change during that boundary. Cancellation/error releases every acquired lock.
+G1 proves reciprocal A-to-B/B-to-A operations and ordinary-versus-mapped contention
+finish or reject without deadlock or ownership effects from stale observations.
+This requires a bounded change to the current source-first acquisition path;
+existing lock retention alone is not proof of safe ordering. Pending,
+inhibited, revoked or unknown source authority rejects until reconciled. This is
+not a transfer of source reservations or a global reservation guarantee.
+An ambiguous destination operation retains its own inhibition
+and reservations until exact recovery; it cannot release source reservations.
+
+`PublishInstalledBuildV1`/`CommitInstalledStateV1` must construct the destination
+identity record explicitly rather than copying it through `candidate := sourceState`.
+Without the reviewed adapter, a mapped source rejects; source metadata must never
+be silently dropped to produce an ordinary unmapped destination. Destination
+updates preserve their own identity record. G1 acceptance includes mapped staging
+run/test, installs into two independently mapped destinations, source preservation,
+same-destination retry/update, missing explicit input, overlap, copied-owner rejection,
+source-revision races, mapped-data transfer rejection and retained-state failure.
+No automatic ordinary-data conversion or recursive ownership migration is added.
+
+### State and transaction boundary
+
+Extend existing `StateV1` with an optional `identity_mapping` record, persisted
+in the existing 0600 `.reploy/state.json`. Absence means ordinary behavior;
+never infer opt-in from an image or backend. Existing strict readers reject the
+new field instead of silently launching an opt-in installation as ordinary.
+Use existing descriptor-safe state access, atomic file/directory sync and
+`OperationLock`; do not create an independently committed mapping sidecar or
+second generation authority. Preserve metadata ownership and permissions.
+
+The proposed record has schema `identity-mapping-v1`, a stable mapping-owner
+`installation_id`, canonical `owner_dir`, nullable `installation_binding`,
+monotonic `revision`, numeric `operator_uid`/`operator_gid`,
+explicit `profile`, `uid_assignments`, `gid_assignments`, retained dormant sets,
+nullable accepted `supervisor`/`engine` bindings, nullable `admitted_generation`,
+`retained_storage`, `revoked` and nullable `pending_operation`. Assignment fields
+use the input interval geometry. Accepted supervisor/engine bindings are produced
+only by E/G, not inferred in B. Generation references use existing immutable
+build/runtime identities; no build-lock format is duplicated.
+
+Under the existing deployment operation lock, compare the mapping installation
+ID/revision and the existing generation before one atomic state replacement.
+The current generation comparison alone is insufficient for mapping-only changes;
+B4 must add the explicit mapping comparison. First configuration generates its
+stable mapping-owner ID once under the lock, for either staged or installed
+state. This ID is independent of the active service InstanceID and survives
+uninstall. Derive staged/installed status from existing deployment facts rather
+than adding a second owner-kind authority. When `Deployment` is present,
+`installation_binding` equals its installation InstanceID; otherwise the binding
+is null. All paths verify canonical owner directory, stable ID, revision and any
+active binding; retries cannot allocate a new identity. Existing stage/build/overlay
+and set/clear-installation writers preserve and compare the identity record
+rather than rebuilding it from portable input. Relocation/cloning needs separate
+design. Copied metadata is not a new safe installation. Read-only inspection uses
+non-creating existing-state access and cannot repair authority.
+All Reploy-issued lifecycle/session/control paths must honor opt-in state and
+inhibition; until generic-launch, opt-in payload execution rejects on every path.
+
+### Uninstall with retained staging
+
+The existing `executeProviderUninstallWithV1`/`ClearInstallationStateV1` route can
+remove installed facts while leaving the same directory and managed data. It must
+not remove or replace the mapping owner. B4 defines one atomic state transition
+that clears `Deployment` and the active installation binding together, preserves
+the mapping ID, canonical directory, assignments, dormant reservations and retained
+ownership evidence, and compares the exact prior installation plus mapping revision.
+The returned non-installed deployment is valid staged state; it does not require
+a reader to invent a missing `Staging` marker or a new owner ID.
+
+G2 records an uninstall intent with the exact installed binding and resource
+handles before host effects. It persists `effects-pending` before service/runtime
+removal. G3 recovery must prove all restart owners stopped and reconcile exact
+effects before the atomic installed-to-staged publication. A crash before or after
+that publication retains a valid old or new state; unknown effects keep admission
+inhibited and reservations retained. Historical installed-resource ownership stays
+in retained-object/tombstone and operation evidence; clearing the active binding
+cannot erase that evidence or permit another installation to adopt those objects.
+
+Later staged run/test uses the same owner and assignments, with fresh normal
+admission after recovery. Installing into this retained destination again must
+preserve its owner/mapping history and bind the reviewed active installation facts;
+it cannot treat a missing `Deployment` as a fresh allocation. This uses the existing
+supported source/destination install route, not a new in-place self-install command.
+Any new explicit input must agree with protected mappings. Directory removal
+remains blocked until safe release is proved; uninstall alone does not free IDs.
+B4/B5 test the state/revision transition and injected crash boundaries. G2/G3/H4
+test real uninstall, retained staged access, pending recovery, later reinstall and
+final safe removal, with before/after owner, assignment and ownership checks.
+
+### Pending operations
+
+A pending operation records `operation_id`, `kind`, expected revision, candidate
+and prior accepted references, exact owned-object handles, `phase` and inhibition.
+Phases are `intent`, `effects-pending`, `verified` and committed completion.
+New proposed geometry is stored inline in that pending intent's candidate;
+protected accepted `uid_assignments`/`gid_assignments` and their history are not
+replaced merely by configure. Count both protected and pending geometry as
+reserved. Before first acceptance, protected assignment sets are empty; the
+pending candidate carries the required nonempty input maps. Configure returns
+candidate/pending status, not execution admission.
+Before issuing any mapped-ID ownership or runtime effect, durably advance to
+`effects-pending` under the same lock. Thus `intent` proves no such request was
+issued; a crash after advancement remains conservative even if the call never ran.
+Verify exact effects before atomically accepting the result and clearing that operation. A crash or ambiguous
+response leaves inhibition/reservations. A revoked installation stays blocked.
+Recovery cannot adopt foreign objects, assume cleanup succeeded or release IDs
+because a container disappeared. Retained storage keeps its reservation.
+B5 proves metadata/recovery for both staged and installed owners with injected
+effects; G/H prove actual runtime and storage effects, including staging cleanup.
+Pure validation failure leaves accepted state/data unchanged.
+A post-intent failure reports the pending operation and its conservative state.
+
+### Correcting an unused candidate
+
+An explicit `identity configure` with corrected input may replace an existing
+candidate only while its exact pending operation remains in `intent`, its
+installation/revision still match, and current owned-resource/storage evidence
+proves no proposed assignment was used. Preserve the complete protected accepted
+assignment set and profile/geometry obligations. Atomically replace only the
+unused pending candidate and operation ID/revision; release only its never-used,
+unaccepted reservations. This is the correction path for an E1 surplus rejection
+before any effects, not an omission-based release of retained assignments.
+
+`identity recover --operation ID` may instead cancel that same proved unused
+intent, preserving accepted authority and clearing only its candidate. Missing or
+ambiguous history/inventory, any `effects-pending` transition, active preparation,
+admitted use or retained ownership forbids this fast cancellation/replacement.
+Those cases keep inhibition/reservations and require the existing exact effect
+reconciliation and safe-release rules in G/H. Never infer no use from container
+absence alone. B5 tests surplus correction, cancellation, stale revision, crashes
+before/after phase advancement and preservation of accepted/used/unknown authority.
+
+### Separate composition feature
+
+General composition needs its own design and estimates: service membership,
+blueprint references, aggregate staging/generation publication, ordering and
+partial-start behavior. None is required to configure one installation's map.
+A later composition can call the same installation operation with explicit input;
+it must preserve that installation's accepted mappings and ownership obligations.
+No composition implementation or public API is authorized by this plan.
+
+### Mapping admission and lifecycle invariants
+
+The proposed initial B-design host contract is local rootless Linux Podman with
+existing subordinate delegation from `/etc/subuid` and `/etc/subgid`. Require
+`/etc/nsswitch.conf` to select only `files` for `subid`, or to have no `subid`
+entry while the active libsubid result agrees with those files. Require
+`getsubids` for both UID and GID delegation checks. Other subordinate-ID
+backends are unsupported initially; B1 must reject them before mutation rather
+than infer their complete inventory from a partial file view. This is the
+recommended concrete host policy for maintainer approval, not an approved
+expansion to other backends.
+
+B1 validates the real/effective operating account, canonical account ownership,
+the complete files-backed delegation inventory, agreement with active libsubid,
+and proposed host intervals against local/NSS principals and other principals'
+delegation. Require one complete authoritative bulk UID/GID principal inventory
+per admission, with a supported completeness proof for every configured
+account/group source. A files-backed principal source can be read and validated
+once; another source requires equivalent authoritative bulk evidence. A generic
+`getent` enumeration or an empty response alone does not establish completeness.
+Unsupported, unavailable, ambiguous or partial inventory rejects; there is no
+per-ID query fallback or new general NSS-provider framework. Do not treat a
+lookup failure as an unused ID. The operating
+account and delegation must already exist; Reploy does not change accounts,
+subordinate-ID files or NSS configuration to satisfy this contract.
+
+For the proposed initial cohort, caller, deployment owner, rootless engine account
+and user-service runtime account must be the same non-root numeric UID/GID. Stored
+`operator_uid`/`operator_gid` bind that account; they are not proof about an unrelated
+daemon or restart owner. C1/G1 must positively identify the selected local rootless
+engine and its operating account and pin its endpoint. Configure/admission rejects
+root, sudo-mediated account substitution, a different engine account, and installed
+`scope: system` before mapped workload mutation. Every start, restart, recreation,
+exec and ownership-preparation path rechecks this binding and delegated authority.
+Unproved endpoint/runtime-account evidence rejects rather than trusting the caller
+or a socket path alone. Existing system installation resolves an application account
+separately but its systemd unit runs as root; that account is not a rootless engine
+identity. Supporting that route needs a separately reviewed runtime/service-account
+design and qualification. No automatic account switching or system-unit rewrite
+enters B. B1/G1 tests include root/system-scope rejection and caller/engine/service
+UID/GID mismatches with unchanged workload state.
+B1 owns the caller/deployment account preflight. C1/G1 own actual engine and
+service-account proof; B's metadata tests cannot establish that runtime evidence.
+
+B3 checks profile geometry and disjoint active, dormant and retained assignments
+within the installation. UID and GID collision domains are checked independently.
+Every host ID must lie within the selected account's exclusive delegation; host
+root and named host accounts are forbidden. Coordination across installations is
+an administrator obligation, not a safety claim made by this local lock.
+Immediately before any mapped-ID object creation or ownership change, reuse
+B1's complete bounded delegation/principal refresh and interval collision checks.
+This includes declared-object preparation in F1/F2, install preparation in G1,
+and restore/translation writes in H. Earlier configuration, execution or planning
+evidence cannot authorize the write. Incomplete/changed authority rejects before
+mutation under the existing exclusive-preparation boundary. No ownership write
+uses rejected authority. If a later check fails after earlier authorised writes,
+retain those recorded effects and inhibition for exact recovery; do not claim
+atomic rollback of a multi-object preparation. F1/F2 test account/delegation changes
+between configuration and preparation, with unchanged objects on rejection.
+
+Every execution admission, including start, restart, recreation and runtime
+exec, also refreshes delegation, engine identity and the complete authoritative bulk
+UID/GID principal inventory. Rerun the interval collision checks and reject
+unavailable, incomplete or conflicting evidence before payload release; staging
+or earlier execution evidence cannot substitute. Verify effective kernel maps
+before release as well. If host delegation changes
+concurrently, Reploy cannot prevent that administrator action; it must reject
+known disagreement and never report revocation complete while resources remain.
+
+A later generation can add an exact identity only with an explicit unused
+assignment. Removing it makes the assignment dormant. Rollback reactivates that
+same numeric assignment. Bounded geometry, profile and supervisor identity stay
+fixed. D4 rejects missing assignments for locked declared identities; E1 also
+rejects missing supervisor/runtime-required assignments before execution.
+B3 rejects changes to retained assignments without needing those later identity
+sets. No
+ordinary update scans or recursively chowns application data. Existing ordinary
+same-ID/keep-id handling is not the subordinate multi-identity mapping policy.
+
+### Runtime scope and unresolved decisions
+
+C1 must first prove a compatible creation request for both explicit profiles.
+The recorded sparse candidate failed; native private-probe success is not proof
+of supported compatible transport. If no bounded change satisfies that request,
+block its dependents and revise the design. Do not introduce a native backend
+or substitute the bounded profile for the exact profile.
+
+E2/E3 require a reviewed production supervisor/launch design. The private Go
+probe is test evidence, not a selected shipped supervisor. The estimate assumes
+reuse of existing runtime helper/admission infrastructure and a narrow accepted
+supervisor role. A new general supervisor or application process manager is
+outside that estimate and needs a separate proposal and new splits.
+
+Before product implementation, approve B's concrete single-installation mapping contract.
+Before D/E, approve identity/capability syntax and supervisor authority. Before
+F/G, approve preparation/restart ownership and supported service behavior.
+Mail compatibility is independent: the stock master process cannot silently
+become either an ordinary capability-bearing child or the trusted supervisor.
+
+## Baseline and current standing (historical IDs)
 
 - The published native stack is #238:
   HF1 / [#236](https://github.com/omry/reploy/pull/236),
@@ -26,12 +542,20 @@ blocker, not permission to introduce a native backend or relax isolation.
   0A / [#62](https://github.com/omry/reploy/pull/62),
   1A / [#63](https://github.com/omry/reploy/pull/63),
   1B / [#69](https://github.com/omry/reploy/pull/69), then
-  A1 / [#239](https://github.com/omry/reploy/pull/239).
-- Base: `main` at `ecd5791fd66423ef7a60a8a75ef862cb714b1a6b`.
+  A1 / [#239](https://github.com/omry/reploy/pull/239), then
+  B-design / [#250](https://github.com/omry/reploy/pull/250).
+- Base: `main` at `33d0583c9dfa07367541b1d71d0f3e56bed760ea`, including
+  merged HF3–HF8.
 - HF1 and HF2 are merged and published in
   [0.8.0.dev3](https://github.com/omry/reploy/releases/tag/v0.8.0.dev3).
-  The remaining four slices are locally rebased onto that main revision.
-  Fresh PR cycles now proceed bottom-up on the rebased suffix. 0A is unchanged;
+  The remaining four slices were locally rebased onto the stated main revision
+  on 2026-10-15. All four commit patches are unchanged by that rebase. Their
+  rebased heads are now published; all eight required CI jobs passed on each
+  head as observed on 2026-10-19. Approval records still name the original
+  reviewed heads. Equivalent-review recovery has passed native proof and
+  semantic assessment but is deferred by the maintainer while a separate SWE
+  design-record compatibility issue is assessed. This does not establish
+  current PR-cycle approval. 0A is unchanged;
   1A strengthens SI-01 evidence for unauthorized identities inside participants.
   1B owns the atomic admission-release repair and matching source-bound trial
   evidence. Commit titles retain their slice IDs. Exact-head PR approval remains
@@ -39,7 +563,7 @@ blocker, not permission to introduce a native backend or relax isolation.
 - The approved repair-ownership change placed the private harness fixes in 1B.
   Its repaired baseline is `b6862f67661d5861b9b857fab55283291d815684`;
   its earlier rebased head was `901013a2f4e4ff64b0d76cc1d40cf58f4a600e3e`.
-  The current 1B repair is `8b1ca4f046a968c932eff83e98060b334ce368d4` and
+  The reviewed pre-rebase 1B repair is `8b1ca4f046a968c932eff83e98060b334ce368d4` and
   includes atomic admission-release publication, its concurrent regression and
   explicit mapped-root policy rejection cases, failure-receipt preservation,
   a supervisor omitted-CAP_CHOWN operation with a same-owner positive control,
@@ -76,17 +600,19 @@ blocker, not permission to introduce a native backend or relax isolation.
   prerequisite, not evidence for a native backend. The production build path
   does not call `ProbeBuildKitCapabilities`; its earlier Podman 4.9.3 audit
   rejection must not be generalized to this newer host. Duplicate-tag cleanup
-  was fixed for temporary build references in merged HF3
-  [#241](https://github.com/omry/reploy/pull/241). Draft HF4
-  [#242](https://github.com/omry/reploy/pull/242) separately fixes environment
-  publication and legacy-generation cleanup. The latest operator follow-up
-  completed build/verify/exec only through diagnostic native-build and truthful
-  health-metadata adapters. Local-base visibility/output loading, authoritative
-  health inspection, NONE timer startup and unexplained conmon monitors remain
-  open. A1 selects no native backend, metadata fabrication or timer workaround.
-  These are operator observations and source assessments, not a matching-server
-  reproduction or multi-identity acceptance. The current stack is not rebased
-  onto HF3 or HF4.
+  was fixed by merged HF3 [#241](https://github.com/omry/reploy/pull/241) and
+  HF4 [#242](https://github.com/omry/reploy/pull/242). Subsequent merged fixes
+  add automatic builder selection (HF5 / #243), authoritative health metadata
+  (HF6 / #244), disabled-healthcheck timer preparation (HF7 / #245) and Docker
+  seccomp policy/private-home ownership compatibility (HF8 / #246).
+  The [readiness disposition](../tools/conformance/multiidentity/READINESS.md)
+  records each result and remaining limits. HF8 requires an engine with upstream
+  #29726 and rebuilt runtime images; stock Podman 6.1.4 remains insufficient.
+  Flux reports that Podman looks OK and is continuing evaluation. Final
+  qualification, unexplained conmon monitors and multi-identity acceptance remain
+  open. The stack now includes these fixes through its main baseline; the
+  earlier private mechanism and operation audits have not been rerun by this
+  rebase. These hotfixes do not establish multi-identity acceptance.
 - The original detailed campaign is the private, untracked
   [`temp/flux-support-work-plan.md`](../temp/flux-support-work-plan.md).
   Its old baseline, gap map and sprint status are historical planning context,
@@ -94,474 +620,258 @@ blocker, not permission to introduce a native backend or relax isolation.
   historical one-off-probe wording. A wording correction alone cannot close a
   harness defect; the reviewed 1B baseline and current A1 source-bound trials supply that proof.
 
-## Groups, delivery slices and gates
 
-Groups have unique letters **A–I**, with numbered delivery slices such as
-**A1**, **B1** and **B2**. Further splits use **A1.1**, **A1.2**, and so on;
-the parent becomes an aggregate, and dependencies name the required children.
-Every delivered implementation PR has the same production LOC limit.
+Read-only reconciliation confirms that local 0A, 1A, 1B and A1 are synchronized
+with their published heads: `39f61fc2fd79`, `fa43b5805fce`, `62689dd733b8` and
+`18bbf46a63b4` respectively. Their original reviewed patches, full commit
+messages and file modes pass SWE's native equivalence proof. Existing approval
+labels alone do not renew the original approval records for these heads.
+The design checkpoint is published above A1 as
+[#250](https://github.com/omry/reploy/pull/250). Its substantive design review
+proceeds independently under the maintainer's explicit ancestor-recovery
+deferral. Formal stack approval remains separate and pending.
+Do not rebase this stack again as part of this design pass or rewrite ancestor
+patches/descriptions. Use the existing PR mappings if synchronization is needed.
 
-The earlier 66-row inventory mixed delivery work with decisions and evidence.
-This plan defines **42 candidate delivery slices**: 30 with estimated production
-changes, seven audit-gated runtime responsibilities, and five test-only
-packages. The seven runtime entries are provisional boundaries, not seven
-approved PRs: compatible operations may need no change, and an oversized
-concrete change must split before implementation. Review/approval decisions,
-conformance and final reports are gates rather than standalone code slices.
-The A1 code and readiness evidence are written; its final PR cycle remains pending.
-The remaining code estimates below cover the **41 later candidates** and exclude
-A1's already written test code. No later implementation is started by this update.
+HF9 [#247](https://github.com/omry/reploy/pull/247), HF10
+[#248](https://github.com/omry/reploy/pull/248) and HF11
+[#249](https://github.com/omry/reploy/pull/249) are now merged on newer main.
+They address effective base override, Podman tagged-image identity and ordinary
+same-primary-ID managed-storage access respectively. They are **not present in
+this stack's base**. Reuse assessment must distinguish the local baseline from
+newer main. In particular HF11's ordinary keep-id policy is not the isolated
+multi-identity policy, and its network-enabled Podman controlled sessions remain
+deferred. Existing mechanism receipts are not new qualification of those fixes.
 
-| Group | Scope | Delivery slices | Previous inventory groups |
-| --- | --- | --- | --- |
-| A | Conformance and compatibility readiness | A1 | A, B, F |
-| B | Host authority and durable allocation | B1–B6 | C, D |
-| C | Existing-backend runtime integration | C1–C7 | E |
-| D | Public identity and capability policy | D1–D5 | G, H |
-| E | Filesystem preparation and storage lifecycle | E1–E9 | I, J |
-| F | Secret-file delivery | F1–F3 | K |
-| G | Network and endpoint compatibility | G1–G2 | L |
-| H | Shared interfaces and participant lifecycle | H1–H5 | M, N, O |
-| I | Component validation and final evidence | I1–I4 | P, Q, R, S, T |
+## Delivery sizing and estimation
 
-Previous-inventory letters refer only to the superseded 66-row draft. Historical
-milestone labels in the baseline, contract and retained evidence remain unchanged.
+Aim for about **500 production LOC per PR**. **750 is a hard maximum**.
+Count added or rewritten handwritten shipped code, comments, blank lines and
+helpers. Do not subtract deletions; moving code counts at the destination.
+Report deletions and mechanical moves separately. Tests/fixtures are separate
+and have no numeric cap. Prose, review sidecars, generated code, dependencies
+and observations do not count as production or tests.
 
-## Delivery sizing rule
-
-The user set this delivery constraint on 2026-10-10:
-
-- Aim for **approximately 500 production LOC** per initial implementation PR.
-  Smaller coherent changes are welcome; do not add code to reach the target.
-- **750 production LOC is a hard limit per PR**, not a limit per parent milestone
-  or a campaign budget. Combining tasks does not combine their allowances.
-- Use this document's incremental metric: count added or rewritten handwritten
-  production lines, including comments, blank lines and shipped helper scripts.
-  Do not subtract deleted lines to make an oversized change appear smaller.
-  Report deletions and mechanical moves separately; count additions at the
-  destination so moving code cannot bypass the cap. Tests/fixtures and docs
-  remain separately reported; test LOC has no user-imposed numeric cap.
-- Before implementation, identify the exact review unit, its production target,
-  estimate range, test scope and prerequisites. If its estimated upper bound
-  exceeds 750, split it before starting. An unknown estimate is not a zero-code
-  allowance: the responsible audit/design must resolve and bound it first.
-- Inspect actual production LOC before each checkpoint commit/publication.
-  If actual code exceeds 750, split into coherent dependent commits/PRs before
-  publishing; do not silently raise the limit or remove required behavior/tests.
-  Revalidate each independently reviewable child and the assembled behavior.
-- Preserve ownership, rollback and security invariants across a split. An
-  intermediate helper may land inactive, but activation waits for its complete
-  admission/launch/storage contract. Code below the cap is not automatically safe.
-
-Initial targets in the delivery table are planning targets, not predictions or
-authorization to implement an unresolved design. Every numbered implementation
-unit has the same 750-LOC hard limit. Parent rows below are aggregate work, not
-one-PR delivery instructions.
-
-## Estimation method and assumptions
-
-Numbers are engineering estimates of **incremental handwritten lines added or
-meaningfully rewritten**, including ordinary comments and blank lines. They
-are not measured future diffs, net repository growth, or a token/time budget.
-Estimate ranges are separate from the user-specified hard delivery cap. A
-reused existing file is not charged in full. Ownership of
-shared helpers belongs to the first introducing unit; downstream units count
-only their additional integration and assertions. Actual PR churn can be larger
-when later work revises earlier code.
-
-- **Production:** shipped Go/runtime helpers, supported command and service
-  behavior, policy/schema parsing, allocator and storage code. A script is
-  production if it implements supported behavior.
-- **Tests:** unit/integration tests, disposable Go/Python/C probes, fixtures,
-  synthetic configuration and blueprint files, and test-only orchestration.
-  The existing private conformance harness and component experiments count here even though they
-  are not named `_test.go`.
-- **Excluded from both:** design prose, changelog/release-note prose, website
-  documentation, generated code, dependency/vendor trees, build artifacts and
-  captured environment inventories. Therefore a zero/zero design or report row
-  still represents work.
-- Estimates retain both exact and bounded profiles. Neither silently replaces
-  the other and no default is selected.
-- The reference sizing case is a local rootless Linux Podman engine behind
-  the existing Docker-compatible transport, a delegated OS-user pool, explicit
-  administrator bootstrap and reuse of existing build/generation machinery.
-  The host/delegation choices remain **sizing assumptions, not approved choices**.
-  Compatibility gaps are unresolved until audited. Native Podman execution,
-  native build support, Podman Machine/remote-engine support and a general
-  runtime framework are separate features, not alternative paths included here.
-  A privileged broker likewise requires a separate authority decision and estimate.
-- Durable allocations own concrete host IDs for both profiles. The probe's
-  `auto:size=4096` invocation is not a production persistence design. Rootless
-  mapping translates through an intermediate namespace; planned host authority
-  and effective maps must agree before executing any payload.
-- Existing capabilityless Docker behavior and ordinary sandbox policy remain
-  enforced. Resource-limit design remains separately deferred by the contract;
-  no new resource policy is hidden in these estimates.
-- Backup/restore covers checked, offline Reploy-managed storage with approved
-  ownership preservation/translation. Database dump/import is component test
-  orchestration, not a new generic database backup facility.
-- Component estimates assume the mail-compatible gate and the approved public contracts permit their
-  process/capability models. If they do not, full campaign completion has an
-  unbounded design dependency; the conditional total below is not a promise to
-  solve it within a numeric allowance.
-
-Confidence is medium for bounded parser/registry/preparation changes and low
-for bootstrap authority, runtime/image/service integration and cross-install
-sharing until their designs are approved. The endpoints below describe
-plausible implementation sizes under the stated assumptions; they are not
-statistical confidence intervals or automatic reasons to stop.
+Ranges below estimate incremental changes, not full reused files, future measured
+diffs, elapsed time or token budgets. Shared helpers belong to the first slice
+that introduces them. Recheck actual production LOC before every checkpoint;
+split an oversized slice before publication as `B1.1`, `B1.2`, and update its
+prerequisites. Do not remove required behavior to fit. Each initial upper bound
+is at most 750, but unresolved transport/supervisor designs can invalidate their
+conditional estimates. In that case re-estimate/split before implementation;
+an estimate is not authorization or proof of feasibility.
 
 ## Source-grounded reuse and scale
 
-Physical source line counts at the baseline, used as scale references rather
-than targets:
+Physical line counts below were remeasured at `cc3b23a52441` on 2026-10-16,
+including comments and blank lines. Test counts cover the paired test file only.
+These are reuse references, not incremental estimates.
 
 | Existing seam | Production LOC | Paired test LOC | Reuse and limitation |
 | --- | ---: | ---: | --- |
-| `internal/deploy/operation_lock.go` | 214 | 122 | Advisory-lock technique; lock is per deployment, not a cross-install allocator lock |
-| `internal/dockerdeploy/application_sandbox_plan.go` | 208 | 282 | Central sandbox policy; currently rejects retaining capabilities |
-| `internal/dockerdeploy/install_runtime_identity.go` | 142 | 124 | Existing numeric entry identity and groups; no identity-transition set |
+| `internal/deploy/operation_lock.go` | 214 | 122 | Stable descriptor-held deployment lock; reuse for mapping transactions |
+| `internal/deploy/atomic_state.go` | 50 | 39 | Atomic file replacement and sync; not multi-service recovery |
+| `internal/deploy/blueprint_loader.go` | 200 | — | Existing blueprint references; reuse without a new service-map loader |
+| `internal/blueprint/model.go` | 352 | — | Single-environment model; keep host mapping authority separate |
+| `internal/blueprint/syntax.go` | 257 | 195 | Strict YAML decoding patterns, not new public syntax approval |
+| `internal/dockerdeploy/application_sandbox_plan.go` | 208 | 282 | Common sandbox; currently requires dropping all capabilities |
+| `internal/dockerdeploy/install_runtime_identity.go` | 142 | 124 | Single numeric account adaptation; no declared transition set |
 | `internal/dockerdeploy/runtime_host_filesystem_linux.go` | 626 | 509 | Host path/mount checks; not mixed-owner object preparation |
-| `internal/dockerdeploy/private_workload_environment.go` | 347 | 509 | Private-input/redaction patterns; no declared secret-file lifecycle |
-| `internal/deploy/runtime_policy.go` | 209 | 101 | Locked effective-policy structure; needs identity/backend integration |
+| `internal/dockerdeploy/private_workload_environment.go` | 347 | 509 | Private input/redaction patterns; no secret-file lifecycle |
+| `internal/deploy/runtime_policy.go` | 209 | 101 | Locked policy structure; no multi-identity roles |
+| `internal/dockerdeploy/generation_reference_docker.go` | 299 | 313 | Existing image identity/reference validation |
+| `internal/dockerdeploy/provider_install_systemd.go` | 131 | 193 | Existing Compose service; not complete rootless restart ownership |
 
-`atomic_state.go` supplies file sync/atomic replacement/directory-sync patterns.
-`generation_reference_docker.go` (296 lines) owns Docker image references;
-`provider_install_systemd.go` (131 lines) emits a system service bound to Docker
-Compose. Neither is a reusable Podman backend merely by changing an executable
-name. The current `dockerdeploy` package contains 55,374 production and 74,207
-test/testdata Go lines; this plan sizes changes to the relevant seams, not a
-rewrite of that package.
-
-The four original private conformance code files totaled 2,449 lines before repair.
-The current four files total 2,999 lines; all are private test fixtures.
-Existing Flux
-functionality scripts are 333 lines for Rspamd/Redis, 396 for Postfix and 726
-for Dovecot, before their synthetic blueprints/configuration. These provide
-fixtures and protocol checks; they still directly orchestrate Docker and do
-not prove the supported Reploy integration.
-
-The retained [compatibility experiment](../temp/flux-identity-probe/DECISION_GATE_1.md)
-and its [machine-readable result](../temp/flux-identity-probe/results-podman-docker-compat/20260814T074049Z-21912/summary.json)
-proved a bounded-range creation request through the Docker-compatible API and
-subsequent start, exec, inspect, volume and cleanup operations through a scoped
-Docker CLI. The CLI rejected the Podman-specific `UsernsMode` before sending
-it; direct create JSON succeeded. This supports reuse rather than a presumption
-of a new backend. It does not prove exact sparse creation, durable fixed
-mappings, Reploy's complete operation inventory, its build/service path, or
-the required supervisor/application trust split. Native Podman was used to
-build the disposable scratch fixture and independently inspect the runtime;
-that is not evidence that production needs native backend support.
-
-Primary runtime references checked for this design pass:
-
-- [Podman 4.9.3 run/mapping documentation](https://docs.podman.io/en/v4.9.3/markdown/podman-run.1.html):
-  rootless UID/GID maps pass through an intermediate namespace; automatic
-  namespace allocation is runtime behavior, not Reploy's retained-allocation
-  contract. The persistence conclusion is this plan's design inference.
-- [Podman service documentation](https://docs.podman.io/en/v4.9.3/markdown/podman-system-service.1.html):
-  distinguishes the Docker-compatible API from the native Libpod API. The
-  requirement to positively identify Podman before using either profile comes
-  from Reploy's approved contract, not from API compatibility alone.
-
-## Remaining scope: delivery slices and estimates
-
-Bold group rows are subtotals, followed by their delivery slices. Do not add
-both. Tests, probes and fixtures are reported separately from production code;
-prose and generated observations do not count as code. All ranges remain
-conditional engineering estimates, not measured diffs or support claims.
-
-| Group | Slice | Concrete result | Initial prod target | Production LOC | Test/fixture LOC | Prerequisites |
-| --- | --- | --- | ---: | ---: | ---: | --- |
-| **A** | **Subtotal** | **Readiness evidence written; final PR gate pending** | — | **0 remaining** | **0 remaining** | — |
-| A | A1 | Consume approved 1B repairs and retain current operation/mail dispositions; fresh mechanism 6/6 passed | 0 | 0 remaining | 0 remaining | approved private harness (PR 69); [current evidence](../tools/conformance/multiidentity/READINESS.md); final PR 239 checks |
-| **B** | **Subtotal** | **Host authority and durable allocation** | — | **2,150–3,350** | **3,550–5,450** | — |
-| B | B1 | Read-only host/delegation preflight | 450 | 350–550 | 550–850 | A1; B-design |
-| B | B2 | Explicit administrator preparation with rollback, idempotency and audit receipt | 500 | 450–700 | 650–1,000 | B1 |
-| B | B3 | Versioned registry transaction and global lock | 500 | 400–600 | 650–950 | B1; B-design |
-| B | B4 | Exact and bounded reservation/allocation geometry | 450 | 350–550 | 600–900 | B3, B1 |
-| B | B5 | Crash recovery, tombstones and safe-release checks | 300 | 250–400 | 550–850 | B4 |
-| B | B6 | Revocation admission and runtime/service stop orchestration | 450 | 350–550 | 550–900 | B2, B3, C1, C6 |
-| **C** | **Subtotal** | **Existing-backend runtime integration** | — | **TBD** | **TBD** | — |
-| C | C1 | Positive engine identity, scoped endpoint and supported create/map request | 500 | TBD | TBD | A1; C-design |
-| C | C2 | Existing build/image compatibility and immutable-reference verification, only where changes are needed | 500 | TBD | TBD | C1 |
-| C | C3 | Reserved exact/bounded map compilation and pre-start admission; reject host-device grants before mutation | 500 | TBD | TBD | B4, B1, C1 |
-| C | C4 | Declared child credentials, capability drop, descriptor/dumpability/session confinement | 500 | TBD | TBD | C3, D1; C-design |
-| C | C5 | Trusted supervisor replacement/lifetime and common admission for every application entry, including runtime exec | 400 | TBD | TBD | C4 |
-| C | C6 | User-level install/start/stop/status and restart-owner revocation interlock | 500 | TBD | TBD | C2, C5, B2, D3, D5, E2, G2 |
-| C | C7 | Failed-operation reconciliation and exact owned-resource cleanup | 400 | TBD | TBD | C6, B5 |
-| **D** | **Subtotal** | **Public identity and capability policy** | — | **1,250–2,100** | **2,250–3,600** | — |
-| D | D1 | Public identity model, parser and validation | 300 | 250–400 | 400–650 | A1; D-design |
-| D | D2 | Offline locked-image name/number evidence | 400 | 300–500 | 500–800 | D1, C2 |
-| D | D3 | Generation admission and identity change diagnostics | 300 | 200–350 | 350–600 | D2, B4 |
-| D | D4 | Capability declarations, role validation and locking | 300 | 200–350 | 350–550 | D1; D-design |
-| D | D5 | Runtime delivery and startup capability/privilege-regain verification | 400 | 300–500 | 650–1,000 | D4, C5 |
-| **E** | **Subtotal** | **Filesystem preparation and storage lifecycle** | — | **2,600–4,300** | **4,550–7,250** | — |
-| E | E1 | Descriptor-safe declared object preparation | 500 | 400–650 | 650–1,050 | D3, B5; E-design |
-| E | E2 | Exclusive preparation/attach, restart fencing and no-mutation failure handling | 300 | 250–400 | 500–800 | E1, C5 |
-| E | E3 | Ownership-stable stop/start of the existing generation | 300 | 250–400 | 350–550 | C6, E2, D3; E-design |
-| E | E4 | Recreation preserving allocation and host ownership | 300 | 250–400 | 450–750 | E3 |
-| E | E5 | Identity evolution, dormant assignments and rollback | 450 | 350–550 | 650–1,000 | E4, B5 |
-| E | E6 | Removal, retained storage and safe reuse integration | 350 | 250–450 | 500–800 | E5, B6 |
-| E | E7 | Exclusive offline export and integrity manifest | 500 | 350–600 | 550–900 | E4; E-design |
-| E | E8 | Archive validation, destination allocation checks before ownership writes, and explicit checked translation | 400 | 300–500 | 550–850 | E7, E6 |
-| E | E9 | Exclusive activation after verified restore, with rollback | 300 | 200–350 | 350–550 | E8, E6 |
-| **F** | **Subtotal** | **Secret-file delivery** | — | **850–1,400** | **1,500–2,450** | — |
-| F | F1 | Secret reference model and redacted resolution | 300 | 250–400 | 400–650 | D3; F-design |
-| F | F2 | Confined file delivery and absence from metadata/logs | 400 | 300–500 | 550–900 | F1, E2 |
-| F | F3 | Rotation, rollback, restart and removal | 400 | 300–500 | 550–900 | F2, E5, C6 |
-| **G** | **Subtotal** | **Network and endpoint compatibility** | — | **600–1,000** | **1,000–1,700** | — |
-| G | G1 | Podman egress policy enforcement and current-network denial parity | 500 | 350–600 | 600–1,000 | C1, C5; G-design |
-| G | G2 | Declared endpoint publication, observation and cleanup | 300 | 250–400 | 400–700 | G1, C5 |
-| **H** | **Subtotal** | **Shared interfaces and participant lifecycle** | — | **1,700–2,850** | **3,550–5,750** | — |
-| H | H1 | Prove the approved shared-interface mechanism and prepare its dedicated runtime paths | 400 | 300–500 | 950–1,550 | D3, E6, E2; H-design |
-| H | H2 | Stale socket reconciliation and producer restart safety | 350 | 250–450 | 500–900 | H1 |
-| H | H3 | Resource ownership, discovery and participant admission | 500 | 400–650 | 700–1,100 | H2; H-design |
-| H | H4 | Narrow participant attachment and private mapping isolation | 500 | 350–600 | 650–1,000 | H3 |
-| H | H5 | Producer/consumer replacement, revocation and removal | 500 | 400–650 | 750–1,200 | H4, E6 |
-| **I** | **Subtotal** | **Component validation and final evidence** | — | **0** | **2,750–4,550** | — |
-| I | I1 | Rspamd/Redis reproduction on existing capability-free path | 0 | 0 | 450–750 | A1 |
-| I | I2 | Postfix reproduction using approved supervisor model | 0 | 0 | 650–1,100 | generic-launch, D5, E9, F3, G2; mail-compatible |
-| I | I3 | Dovecot reproduction including synthetic SQL and restore | 0 | 0 | 1,000–1,600 | generic-launch, D5, E9, F3, G2; mail-compatible |
-| I | I4 | Postfix–Dovecot shared-interface campaign and final evidence/gap report | 0 | 0 | 650–1,100 | I2, I3, H5, I1 |
-| **Total excluding C** | — | **Conditional remaining estimate** | — | **9,150–15,000** | **19,150–30,750** | — |
-
-The conditional remaining estimate excluding C is **28,300–45,750 LOC**.
-This removes A1's original 650–1,300-test-LOC estimate from the remaining total.
-The A1 audit and tests add 879 test/fixture lines and delete 8
-against the repaired 1B parent; prose and sidecars are excluded from that count.
-All other numeric ranges remain unchanged. B includes preparation and idempotency
-checks; H includes its disposable shared-interface proof. Gate prose adds no
-code allowance. Additional test work belongs to its owning slice and updates
-its estimate. These are estimates, not a token or time budget.
-
-C targets are initial planning targets, not estimates or extra limits. A1 must establish which
-compatible operations work, which need targeted changes and which are blocked.
-Before starting any C slice, approve its concrete approach and record production
-and test ranges with a production upper bound at most 750; otherwise close it
-with reuse evidence, split it, or report the blocker. A new trusted supervisor
-requires an explicit design decision, and native Podman is never a fallback.
-There is no complete campaign total while C or mail compatibility is unresolved.
+The private harness and component fixtures remain tests. They are sources of
+assertions and historical mechanism evidence, not production implementations.
+Build/image compatibility must reuse merged fixes when available; do not copy
+an obsolete local implementation or add registry credential machinery to this
+single-installation work. Direct native Podman operations already approved for individual
+hotfixes do not authorize a general native backend.
 
 ## Group descriptions
 
-### A — Conformance and compatibility readiness
+- **A — Readiness.** Retain the six source-bound trials, compatible-operation
+  dispositions and precise stock-mail blocker. PR 239 is the existing delivery.
+- **B — Deployment mapping foundation.** Read-only host checks, explicit
+  operator inputs, geometry, and identity state/recovery for staged and installed
+  owners in the existing deployment transaction. Finish without launching workloads or adding a service-composition
+  system. Create no host accounts, delegation, enrollment or global registry.
+- **C — Existing runtime integration.** Identify and pin the selected local
+  Podman endpoint, prove both compatible map requests, and reuse immutable image
+  handling. A transport gap blocks dependent integration; native backend work
+  does not enter through this group.
+- **D — Locked declarations.** Define and validate image-local names/numbers,
+  role-specific capabilities and generation evidence. Keep public activation
+  disabled; default capabilities remain empty.
+- **E — Mapped execution.** Compile reserved maps and verify them before payload
+  release. Enforce final child credentials/groups, capability sets, descriptor
+  closure, supervisor non-dumpability and separate sessions on every supported
+  entry. An unproved exec/restart path rejects instead of running raw exec.
+- **F — Preparation and isolation.** Prepare only declared inert managed objects
+  with no elevated application code. Exclude attached workloads, inhibit restart
+  through recovery, and prove existing egress/endpoint policy on Podman. Keep
+  private network namespaces and reject undeclared peer reachability.
+- **G — Initial service activation.** Integrate staged run/test and the existing
+  installed workload/user-service lifecycle, explicit independent destination
+  mappings, all autonomous restart owners, active revocation and exact cleanup. Complete
+  generic-launch before public multi-identity execution is supported.
+- **H — Durable ownership.** Verify stop/start and recreation separately, then
+  identity evolution, retained-data removal, offline export and restore. Check
+  destination allocation/delegation before writing archived ownership; reject
+  unsafe destinations without altering their accepted state. Use collision-safe
+  staging or an explicitly checked translation. Never automatically chown updates.
+- **I — Secrets.** Resolve references without values in metadata/logs, deliver
+  recipient-confined files and handle rotation, rollback and retained state.
+- **J — Shared interfaces.** Prove the narrow mechanism first, then dedicated
+  paths, stale-socket recovery, participant authority and private-map isolation.
+  Declared participants do not gain access as every identity in their workload.
+- **K — Qualification.** Adapt disposable component fixtures to supported Reploy
+  operations. Stock Postfix/Dovecot remain conditional on approved supervisor
+  compatibility. SQL fixtures are tests, not a generic database backup product.
 
-Current evidence: three exact and three bounded trials passed on the current
-host after the approved 1B repairs; all four primary/control roles were gated before
-payload execution. The compatible endpoint accepted a tested fixed bounded
-request, lifecycle/volume CRUD and network CRUD. The tested sparse-map projection
-failed, and the audit's call to `ProbeBuildKitCapabilities` rejected Podman 4.9.3. Service launch
-ownership, network-policy parity and stock-mail supervisor approval remain
-unproved. These are explicit downstream blockers, not native-backend work.
-See the [readiness disposition](../tools/conformance/multiidentity/READINESS.md).
-A1 itself remains pending its delivery review and exact-head PR checks.
-
-A1 consumes the reviewed private harness and its source-bound dual-profile proof.
-It adds the compatible-operation audit and audit regressions, and retains the
-readiness and design dispositions. The 1B parent owns atomic admission release
-and the source-bound six-trial evidence; earlier checkpoints remain historical.
-After mechanism conformance passes, audit actual Reploy create/map, build/image,
-inspect/exec, volume, service, network and cleanup operations through the scoped
-compatible endpoint. Separately investigate whether stock Postfix/Dovecot can
-fit the frozen supervisor/child trust split. These are checkpoints of one
-readiness package, not new production backends or mandatory additional PRs.
-
-### B — Host authority and durable allocation
-
-Read-only preflight precedes explicit administrator preparation. Preparation
-includes rollback, rerun verification and its audit receipt in the same slice.
-A versioned cross-install registry and allocation lock own disjoint subordinate
-UID/GID assignments for exact and bounded profiles, including dormant assignments
-and retained storage. Revocation lands after real runtime resources and restart
-owners exist; it stops resources without releasing retained data or its mapping.
-
-### C — Existing-backend runtime integration
-
-Reuse the existing endpoint, build/image and service seams wherever A1 proves
-compatibility. Bind each start to locked images, delegated reserved maps and
-verified effective credentials. The trusted launch boundary enforces declared
-child identities, groups, empty child capabilities, descriptor closure,
-dumpability/session separation and privilege-regain denial before untrusted
-execution. Replacement, restart interlocks and exact failure reconciliation
-remain trusted Reploy behavior. Neither a new supervisor binary nor native
-transport is predetermined. The seven candidate responsibilities are re-sized
-after the audit; they cannot bypass the hard cap by remaining TBD.
-
-C3 rejects host-device grants before creating or mutating workload resources.
-Its supported-interface negative tests must prove that workload state stays unchanged.
-C5 supplies the common admission boundary for every supported application entry.
-This includes service starts, restarts, supervisor-created children and Reploy-issued runtime execs.
-Every path uses current accepted identities, normalizes credentials and groups,
-drops capabilities, closes undeclared descriptors and applies the required sandbox before application code.
-An unproved path rejects the operation; it cannot use raw runtime exec or supervisor credentials as a fallback.
-C6 integrates every owned service-manager and autonomous restart path before public activation.
-An unfenced restart remains a blocker for offline preparation.
-
-### D — Public identity and capability policy
-
-Public declarations, resolved state and lock records capture image-local IDs
-and role-specific allowlists. Locked-image name/number evidence and generation
-admission diagnose mismatches before mutation. Capability sets stay empty by
-default; application children never inherit the supervisor allowlist. Schema
-work begins only after A1 viability and explicit declaration design approval;
-it does not wait for the supported-interface acceptance it enables.
-
-### E — Filesystem preparation and storage lifecycle
-
-Trusted no-follow descriptor operations prepare only declared inert objects,
-with exclusive attachment and no application hooks at elevated authority.
-Stop/start and recreation preserve mappings and host ownership. Generation
-changes retain removed assignments without rewriting data. Retention/release,
-offline export, integrity checks, explicit checked ownership translation and
-exclusive restore activation are independently reviewed responsibilities.
-Database dump/import remains component test orchestration.
-
-E8 validates the destination allocation and exclusive delegation before writing archived ownership.
-It requires collision-safe staging or explicit checked translation.
-Unsafe or unproved mappings fail before ownership writes and leave destination state unchanged.
-Tests cover collisions with local/NSS accounts and another principal's delegation.
-E9 activates restored state only after that validation and exclusive-lifecycle proof pass.
-E-design must select the concrete restore mechanism; this plan does not choose one.
-
-Before preparation, offline export or restore mutates an object, acquire
-exclusive lifecycle ownership, revalidate that no workload is attached, and
-inhibit all launch/restart paths until the operation releases that ownership.
-On interruption, startup stays inhibited until explicit recovery verifies
-allocation, ownership and operation state. E-design must specify that recovery
-and tests for racing restart, crash and reopening, reusing existing lifecycle
-locking/admission primitives where applicable. C5 provides the common admission
-boundary; C6's restart-owner integration and generic-launch evidence prove that
-public operations cannot bypass it. No new authority or locking implementation
-is selected by these required outcomes.
-
-### F — Secret-file delivery
-
-Resolve declared references without secret leakage into metadata or logs,
-materialize confined files for the approved recipient/mode, and handle rotation,
-restart, rollback and removal. Existing private environment injection supplies
-patterns, not a secret-file product contract.
-
-### G — Network and endpoint compatibility
-
-Adapt existing declared egress and endpoint semantics through the compatible
-engine interface. Preserve separate network namespaces and denial of
-undeclared peer reachability. Networkless mechanism probes cannot substitute
-for these tests. No new discovery, networking policy or resource-limit product
-is included.
-
-### H — Shared interfaces and participant lifecycle
-
-An approved interface design and disposable mechanism proof precede supported
-cross-install attachment. Prepare dedicated runtime paths, safely reconcile
-stale sockets, and admit only declared producers/consumers to the narrow
-interface. SI-01 tests include positive declared identities and negative
-unauthorized identities within every participant and in unrelated workloads.
-Registry ownership, participant replacement, revocation and cleanup
-must preserve independent private mappings and retained state.
-
-### I — Component validation and final evidence
-
-Adapt disposable Rspamd/Redis, Postfix and Dovecot fixtures to supported Reploy
-behavior. The mail tests require a favorable compatibility disposition; a
-blocker cannot be relabeled a pass. The combined interface campaign collects
-positive and negative participant/lifecycle observations and produces the final
-acceptance/gap report. Component defects return to their owning production
-slice. Synthetic mail configuration and SQL fixtures do not authorize production
-Flux deployment, daemon patches or a general database backup facility.
+This order deliberately moves revocation behind runtime ownership, declaration
+policy before child launch, and preparation/network checks before service
+activation. It replaces the earlier group table with forward prerequisites.
+No obsolete enrollment/global-allocator implementation remains in B.
 
 ## Required design and evidence gates
 
-Gates are required work within group delivery, not additional implementation
-PRs. Human approval is required only for an unresolved decision about the
-intended behavior or authority; evidence checks are evaluated against the
-already approved contract. A design review stamp does not provide human approval.
+Gates are work inside delivery, not extra code PRs. Review establishes design
+quality; only the maintainer can approve a new intended behavior or authority.
+Unresolved later decisions do not block independent foundations.
 
-| Gate | Prerequisites | Required disposition or evidence |
+| Gate | Required before | Required decision or evidence |
 | --- | --- | --- |
-| B-design | A1 | Explicit delegation recipient, supported host/session policy, bootstrap/revocation authority, registry ownership, lock scope and retention rules. The OS-user pool is a sizing assumption, not a selected default. |
-| C-design | A1, B-design | Operation-by-operation compatibility disposition; concrete approach and <=750 upper-bound estimate for each required runtime change; explicit trusted supervisor ownership and launch/replacement boundary. Unsupported required operations block their dependent work. |
-| D-design | A1, C-design | Image-locked identity declarations and role-specific capability syntax/allowlist, including default-empty behavior. Mail-specific bundles are not implicit. |
-| E-design | B-design, D-design | Declared object/ownership rules, exclusive lifecycle ownership, restart inhibition/recovery and retention. Offline restore validates destination allocation and exclusive delegation before ownership writes, using collision-safe staging or checked translation; rejection leaves destination state unchanged. |
-| F-design | D-design, E-design | Secret sources, recipients, confined paths, redaction and lifecycle contract. |
-| G-design | A1, C-design | Exact adaptation of existing network/endpoint policy and observation/cleanup to the compatible engine. |
-| H-design | D3, E6, E2 | Shared-interface identity/access proof criteria, participant registry/discovery authority and narrow attachment/revocation contract. H1 must pass its disposable proof before supported attachment is activated. |
-| mail-compatible | A1 | Stock mail process/capability evidence satisfies the approved supervisor/child model, or the mail branch remains blocked for an explicit design decision. This gate does not block independent generic work. |
-| generic-launch | B6, C7, D3, D5, E2, G2 | Both profiles pass identity, credential/group, capability, descriptor and sandbox evidence on every supported application entry, including runtime exec. Also require namespace isolation, host-device rejection before mutation with unchanged state, pre-start mismatch, preparation/restart-race exclusion, ordinary owned-storage and active-revocation evidence. This is launch acceptance, not full lifecycle/sharing support. |
-| completion | I4, E9, F3, G2, H5 | Every security-contract acceptance row has supported-interface evidence or an explicit unresolved blocker in the gap report. Full campaign completion requires every mandatory row to pass; a gap report alone cannot satisfy a failing row. |
+| B-design | B1–B5 | Reviewed single-installation mapping input/state proposal, public syntax, initial files-backed host contract and failure/recovery behavior. Manual coordination, composition deferral and staged mapping ownership with explicit independent destination input are approved; concrete public syntax and host policy still require maintainer approval. |
+| compatible-map-proof | C1 implementation completion | Fresh exact and bounded compatible creation, planned/effective host maps and pre-payload negative tests; preserve private-harness receipts as separate evidence. |
+| C-design | C1–C2 | Operation dispositions and bounded adapter/build approach; no general native backend. |
+| D-design | D1–D4 | Public identity/capability syntax, locked image evidence, role allowlists and default-empty behavior. |
+| launch-design | E1–E4 | Production supervisor ownership and launch/replacement boundary; helper/supervisor authority, child descriptor/credential/capability plan and every supported entry. |
+| storage-design | F1–F2 | Declared objects, fresh delegation/principal checks before ownership mutations, confined preparation, exclusion, restart inhibition and explicit crash recovery. |
+| network-design | F3–F4 | Existing egress/endpoint semantics, pre-start effective observation and cleanup on selected Podman engine; HF11's deferred endpoint session gap is not declared fixed. |
+| service-design | G1–G3 | Concrete staged run/test and installed user-service/restart ownership; explicit destination install input, independent reservations, source-revision checks and mapped-data transfer rejection; no hidden general scheduler. |
+| generic-launch | Public execution after G3 | Both profiles; fresh complete principal/delegation checks before every execution admission; real mapped stage/run/test and separately mapped installation; staged-to-start and restart collision/unavailable-inventory negatives; surplus new exact-assignment rejection and retained-dormant controls; all accepted/undeclared identity transitions; final credentials/groups/capabilities/descriptors; supervisor separation; every application entry including exec; namespaces, devices, network denial, ordinary owned storage, mismatch/no-mutation, restart exclusion, active revocation and exact cleanup. |
+| restore-design | H5–H7 | Offline export, integrity, destination allocation/delegation before ownership writes, collision-safe staging or approved checked translation and rollback. |
+| secret-design | I1–I3 | Sources, recipients, confined paths, redaction and lifecycle authority. |
+| interface-design | J1–J5 | Explicit producer/consumer identities, dedicated path/registry ownership, narrow discovery/attachment and safe replacement/revocation. Disposable proof passes before attachment activation. |
+| mail-compatible | K2–K3 | Stock-master role and image-locked process/capability evidence fit the contract. Otherwise this branch remains blocked without relabeling a failure. |
+| completion | After K4 | All 19 mandatory contract rows pass through supported interfaces. A report listing blockers is not completion. |
 
-## Activation and dependency order
+B can deliver inactive state/model code only after B-design approval. This pass
+is the reviewed proposal for that decision, not its automatic approval. Later
+gates are resolved immediately before the group that needs them; do not ask
+for every later policy decision before delivering independent B work.
 
-1. Complete A1's delivery gate and retain the exact harness/host/image identities,
-   fresh results, operation inventory and mail disposition. Its approved 1B
-   parent owns the confirmed harness repairs. Mechanism conformance is the first checkpoint;
-   backend/mail investigations follow it and may independently identify blockers.
-2. Obtain B-design and C-design dispositions; begin B1–B5 and audit-bounded C1–C3
-   as their prerequisites become satisfied. Bootstrap/registry paths remain
-   explicit; no public start may use partial admission or cleanup behavior.
-3. Approve D-design and the required E/G designs. Implement declarations and
-   locked-image admission in D, then credential launch and supervisor lifetime
-   in C4/C5, filesystem preparation in E1/E2 and network policy in G1/G2.
-   These controls can be tested through internal integration seams while the
-   public multi-identity activation remains gated.
-4. Assemble C6/C7 and B6, then pass generic-launch. C6's internal tests provide
-   real resources/restart owners for B6; approval of the public start follows
-   complete revocation, cleanup and pre-start admission evidence. Generic-launch
-   is an activation condition, not a prerequisite for constructing its tests.
-5. Continue E3–E9, F and H in prerequisite order. A shared-path exception is
-   activated only after the approved H-design and its mechanism/participant
-   denial tests pass. A generation update never implicitly chowns existing data.
-6. I1 may run after A1 on the existing capability-free path. I2/I3 wait for
-   mail-compatible and the listed product prerequisites; I4 validates their
-   shared interfaces and closes the final evidence report. Stop at the affected
-   branch on a blocker and retain independent ready work.
+## Previous-to-current slice crosswalk
 
-Dependencies include named gates and slice IDs and are acyclic. A group can
-span dependencies in another group; its letter is an ownership boundary, not
-an instruction to deliver all its slices contiguously. Neither a helper test
-nor a code change below 750 establishes support or security conformance.
+The prior table had 42 candidates. IDs below refer to that table, not the older
+66-row inventory. Historical milestones 0A/1A/1B and evidence/PR titles do not
+change. Existing A1 stays A1. Prefix future commit and PR titles with the new
+slice ID. Further splits use decimal children, never a new singleton group.
+
+| Previous ID | Current ID | Responsibility |
+| --- | --- | --- |
+| A1 | A1 | Private mechanism and compatibility readiness; code written |
+| B1 | B1 | Read-only caller, delegation and host-principal preflight |
+| B2 (administrator preparation) | — (removed) | Superseded by approved manual coordination; no `prepare` command |
+| — (new) | B2 | Operator mapping input for one existing deployment; no service envelope |
+| B4 | B3 | Exact/bounded geometry, disjoint assignments and dormant-ID comparison |
+| B3 | B4 | Optional identity record and mapping revision checks in existing deployment transaction |
+| B5 | B5 | Pending intents, recovery, tombstones and conservative reservation retention |
+| C1 | C1 | Scoped Podman admission and compatible exact/bounded create transport |
+| C2 | C2 | Reuse compatible build/image path; bind immutable service images |
+| D1 | D1 | Public identity declarations and name/number validation |
+| D4 | D2 | Role-specific capability declarations and policy lock |
+| D2 | D3 | Offline locked-image name/number evidence |
+| D3 | D4 | Locked-identity coverage, generation admission and identity-change diagnostics |
+| C3 | E1 | Compile reserved maps; pre-start verification and host-device rejection |
+| C4 | E2 | Child credentials, capability drop, descriptors, dumpability and sessions |
+| C5 | E3 | Supervisor lifetime/replacement and common admission including runtime exec |
+| D5 | E4 | Effective capability and privilege-regain verification on every entry |
+| E1 | F1 | Descriptor-safe declared-object preparation with fresh ownership authority |
+| E2 | F2 | Exclusive prepare/attach admission, crash inhibition and restart fencing |
+| G1 | F3 | Existing egress policy and cross-service network-denial enforcement |
+| G2 | F4 | Declared endpoint publication, effective observation and cleanup |
+| C6 | G1 | Existing staged/installed lifecycle and explicit destination mapping boundary |
+| B6 | G2 | Active revocation, stop/removal and retained-mapping admission |
+| C7 | G3 | Failed operation reconciliation and exact owned-resource cleanup |
+| E3 | H1 | Ownership-stable stop/start of the existing generation |
+| E4 | H2 | Recreation preserves mapping and host ownership |
+| E5 | H3 | Identity evolution, dormant assignments and rollback |
+| E6 | H4 | Removal, retained storage and checked reservation release |
+| E7 | H5 | Exclusive offline export and integrity manifest |
+| E8 | H6 | Archive/destination validation and explicit checked ownership translation |
+| E9 | H7 | Exclusive restore activation and failure rollback |
+| F1 | I1 | Secret references and redacted resolution |
+| F2 | I2 | Confined recipient files and no metadata/log disclosure |
+| F3 | I3 | Rotation, rollback, restart and removal |
+| H1 | J1 | Disposable interface proof and dedicated runtime-path preparation |
+| H2 | J2 | Stale socket reconciliation and producer restart |
+| H3 | J3 | Explicit participant ownership, discovery and admission |
+| H4 | J4 | Narrow participant attachment preserving private mappings |
+| H5 | J5 | Participant replacement, revocation and removal |
+| I1 | K1 | Rspamd/Redis on supported capability-free path |
+| I2 | K2 | Stock Postfix through the approved supervisor model |
+| I3 | K3 | Stock Dovecot including synthetic SQL and restore |
+| I4 | K4 | Combined interface/lifecycle campaign and all-row evidence report |
+
+The superseded 44-candidate composition proposal additionally had B6 (service
+blueprint staging) and B7 (composition generation publication). Both are deferred
+to the separate composition feature and absent from the active table. Its B2/B4
+are narrowed here to one installation; G1 uses the existing workload lifecycle.
+J3 remains separately gated explicit sharing between independently configured
+installations, with no aggregate service-list or composition dependency.
+
+Previous gate names follow their responsibilities: old C-design is now C-design
+for transport and launch-design for supervisor execution; old D-design remains
+D-design; old E-design becomes storage-design/restore-design; old F/G/H-design
+become secret-design/network-design/interface-design. Old generic-launch and
+completion retain their meaning with the current prerequisites above.
 
 ## Acceptance ownership and publication checks
 
-The security contract's 19 rows remain authoritative and unchanged. The table
-assigns collecting/fixing responsibilities; passing a named implementation slice
-does not automatically mark a contract row complete.
+The contract's 19 acceptance rows remain authoritative. Slice completion does
+not automatically close an evidence row.
 
-| Contract acceptance row | Owning delivery and evidence |
+| Contract row | Current owning slices and evidence |
 | --- | --- |
-| ID-01 | A1 pre-payload proof; B1, B4, C3 and generic-launch |
-| ID-02 | C4, C5, D1–D3 and generic-launch |
-| ID-03 | C4, C5, D5 and generic-launch |
-| ID-04 | A1 mechanism isolation; C6, G1 and generic-launch; H must preserve private boundaries |
-| BE-01 | A1 Docker-negative proof; C1 and generic-launch |
-| CAP-01 | C4, D4, D5 and generic-launch |
-| LC-01 | E3, E4 |
-| LC-02 | B4–B5, D3, E5 |
-| LC-03 | E7–E9; destination allocation/exclusivity before ownership writes, with unchanged-state rejection tests |
-| AL-01 | B3–B5, C3, E2, E6 |
-| RV-01 | B6, C6, C7, E6 and generic-launch |
-| HB-01 | B1, B2, C6 and generic-launch |
-| SB-01 | A1 mechanism evidence; C3 and generic-launch |
-| SB-02 | C3 pre-mutation host-device rejection; C4, D5, G1–G2 and generic-launch; every application entry, including runtime exec |
-| FS-01 | E1, E2 |
-| CF-01 | B1, C3, D2–D3, E3–E4, E8–E9 and generic-launch |
-| SI-01 | H1 proof, H3–H4 and I4 |
-| SI-02 | H1, H4 and I4 |
-| SI-03 | H2, H5 and I4 |
+| ID-01 | A1; B1, B3, D4, E1; generic-launch |
+| ID-02 | D1, D3–D4, E2–E3; generic-launch |
+| ID-03 | E2–E4; generic-launch |
+| ID-04 | A1; F3, G1; generic-launch; J preserves isolation |
+| BE-01 | A1; C1; generic-launch |
+| CAP-01 | D2, E2, E4; generic-launch |
+| LC-01 | H1–H2 |
+| LC-02 | B3–B5, D4, H3 |
+| LC-03 | H5–H7; destination authority checked before archived ownership |
+| AL-01 | B3–B5, E1, F2, G1–G3, H4 |
+| RV-01 | G1–G3, H4; generic-launch |
+| HB-01 | B1–B2, G1; generic-launch |
+| SB-01 | A1; E1; generic-launch |
+| SB-02 | E1–E4, F3–F4; generic-launch; every application entry |
+| FS-01 | F1–F2 |
+| CF-01 | B1, B4–B5, D3–D4, E1, H1–H2, H6–H7; generic-launch |
+| SI-01 | J1, J3–J4, K4; reject unauthorized identities inside participants |
+| SI-02 | J1, J4, K4 |
+| SI-03 | J2, J5, K4 |
 
-PR-cycle approval requires every job generated by the current `ci.yml` for
-that exact PR head. Derive the check list again at delivery time. At this local
-baseline it is Linux CI checks, Bash native evidence checks, four Target smoke
-jobs (linux-amd64, linux-arm64, darwin-arm64, darwin-amd64), and two Windows host
-smoke jobs (windows-amd64, windows-arm64). Missing, pending, cancelled or failed
-jobs block approval. Historical seven-job results are insufficient.
+PR-cycle approval requires every exact-head job generated by `ci.yml`: Linux CI
+checks, Bash native evidence checks, four Target smoke jobs (linux-amd64,
+linux-arm64, darwin-arm64, darwin-amd64), and two Windows host smoke jobs
+(windows-amd64, windows-arm64) at this baseline. Derive the list again at delivery.
+Missing, pending, cancelled or failed jobs block approval. Preserve exact-head
+approval evidence; a byte-equal rebased patch alone is not a current stamp.
+Do not rebase the multi-identity stack on unrelated hotfixes during this pass.
 
 ## Initial group A delivery specification
 
 **Task A1** is the only initial delivery request. It is test/fixture code:
 **0 production LOC**, plus test/fixture code, prose and retained observations.
 The original estimate was 650–1,300 test LOC. After the approved ownership move,
-A1 adds 879 test/fixture lines against 1B; its final PR cycle remains pending.
+A1 adds 879 test/fixture lines against 1B. Its original published head was
+approved; the rebased head is now published and its eight required CI jobs
+passed. Approval renewal for that head remains deferred as described above.
 It does not add a public schema, change production runtime policy or approve
 later host/supervisor choices. Its 500/750 production rule still applies if a
 product defect changes that classification; return such work to a separately
@@ -605,23 +915,33 @@ remains incomplete even when its harness repair PR is ready or merged. Later
 public schema/runtime implementation remains unauthorized until that pass and
 its owning design decisions are satisfied.
 The existing PR 69 owns the harness and its approved repairs.
-A1 is the existing PR 239 follow-up in the same six-PR native stack.
+A1 is the existing PR 239 follow-up in native stack #238; the current
+B-design PR #250 is above it.
 Preserve that mapping and every slice-prefixed commit title.
 Do not create a duplicate PR or rewrite an approved ancestor.
 
-### Active A1 delivery request
+
+## Next delivery request
+
+Finish the local and remote review of this design checkpoint first. Under the
+maintainer's explicit deferral, substantive design review and B-design approval
+can proceed while ancestor approval recovery remains pending. This does not
+waive formal PR-cycle or merge checks, and a later approval pass must revalidate
+the evidence against the then-current stack. Obtain B-design approval of the
+concrete public contract and report before implementation. The first revised delivery
+set is B1–B5: host preflight, installation mapping input, geometry, durable state
+and recovery. The former composition-specific B6/B7 are deferred to a separate
+feature; their IDs are not silently reused. The next major system is
+C's existing-engine integration, with compatible-map-proof before activation.
+Do not resume the old enrollment proposal or infer an automatic full campaign.
 
 ```text
 global:swe:deliver-design-stack(
   "docs/MULTI_IDENTITY_IMPLEMENTATION_PLAN.md",
-  tasks="A1"
+  tasks="B1,B2,B3,B4,B5"
 ) -> produce run stats, timing, observed tokens and issues/opportunities
 ```
 
-Stop after group A's reviewed delivery and readiness dispositions. The next
-delivery request is selected from evidence-backed B/C/D prerequisites after
-required human design decisions; it is not an automatic full-campaign run.
-HF1 and HF2 are already implemented and reviewed below this stack.
-The later request to put the plan in implementation order remains after B;
-this A1 update preserves all group and slice IDs and stops before B.
-
+This invocation is proposed, not started by this document. Every commit title
+must include its slice ID. No merge, release, live service changes or changes
+to the Arbiter/Podman checkouts are part of this design pass.
