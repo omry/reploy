@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-07-06
+updated: 2026-10-20
 summary: Current maintainer workflow for local checks, release notes, and publishing.
 ---
 
@@ -13,7 +13,7 @@ tests. Match CI as closely as practical:
 
 - Go 1.25.x
 - Python 3.12
-- Node 22
+- Node 24 and npm 11.9.0
 - Docker, for the full CLI integration path
 
 Create the local Python environment from the repository root:
@@ -224,3 +224,28 @@ unless they affect the maintainer or release workflow.
 Dev releases include the current unreleased fragments in GitHub Release notes
 without consuming them. Final releases batch and merge the fragments into
 `CHANGELOG.md`.
+
+## Dependency maintenance
+
+Use Node 24 and npm 11.9.0, matching the project declarations. Install the
+pinned npm version with `npm install --global npm@11.9.0`, then use `npm ci`.
+
+The [Node maintenance workflows](https://github.com/hydra-ecosystem/github-actions/blob/main/docs/node-maintenance.md)
+check security every Monday at 02:00 UTC and propose routine upgrades quarterly,
+on January 1, April 1, July 1, and October 1 at 02:00 UTC. New releases have a
+ten-day cooldown. The repository-root `.github/node-maintenance.json` points to the shared
+policy; edit its overrides to change project policy, and keep caller cron entries
+in `.github/workflows/dependency-audit.yml` consistent with the resolved schedule.
+
+To run an audit sooner, open **Actions → Node dependency audit → Run workflow**
+on `main` and select `security` or `upgrades`. The action validates dependency
+changes before opening or updating one maintenance PR. A toolchain or schedule
+mismatch fails preflight and opens or updates a configuration issue. The action
+does not rewrite toolchain declarations.
+
+Publication uses the built-in token and requires **Allow GitHub Actions to create
+and approve pull requests** in **Settings → Actions → General → Workflow
+permissions**. Default token permissions remain read-only. The workflow does
+not approve or merge its own PRs.
+
+When a maintenance PR uses the built-in token, GitHub can hold its PR checks for approval. Select **Approve workflows to run** in the PR merge box to start them. All jobs in `.github/workflows/ci.yml` must pass before PR-cycle approval, including the Linux CI, target smoke matrix, and Bash native evidence checks. See [GitHub token workflow behavior](https://docs.github.com/en/actions/concepts/security/github_token).
