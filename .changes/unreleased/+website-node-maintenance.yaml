@@ -1,0 +1,2 @@
+kind: Changed
+body: Standardize website maintenance on Node 24 and npm 11.9.0, with weekly security checks and quarterly dependency upgrades.

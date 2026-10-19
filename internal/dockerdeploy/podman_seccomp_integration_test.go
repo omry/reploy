@@ -16,6 +16,7 @@ import (
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/fsowner"
 )
 
 // Explicit disposable fixtures only. The launcher records the exact engine
@@ -109,18 +110,36 @@ func main(){ _,_,e:=syscall.RawSyscall(syscall.SYS_PERSONALITY,0x40000,0,0); if 
 	if output := run(t, CommandSpec{Name: "docker", Args: []string{"run", "--rm", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt", "no-new-privileges=true", "--security-opt", "seccomp=unconfined", "--mount", "type=bind,source=" + helper + ",target=/hf8-check,readonly", "--entrypoint", "/hf8-check", image, "allow"}}); output != "syscall-allow-pass" {
 		t.Fatalf("no independent syscall control: %q", output)
 	}
-	identity := RuntimeUserPlan{UID: 1000, GID: 1000, DockerUser: "1000:1000"}
+	uid, gid := os.Geteuid(), os.Getegid()
+	identity := RuntimeUserPlan{UID: uint32(uid), GID: uint32(gid), DockerUser: fmt.Sprintf("%d:%d", uid, gid)}
 	plan := DockerExecutionPlan{EnvironmentID: "hf8", DeploymentDir: t.TempDir(), Phase: blueprint.PhaseStaged, Image: image, ContainerName: uniqueDockerIntegrationName("reploy-hf8"), NetworkName: uniqueDockerIntegrationName("reploy-hf8-net"), Sandbox: newApplicationSandboxPlanV1(identity), Mounts: []MountExecutionPlan{{Name: "syscall-check", Mode: blueprint.MountBind, Source: helper, SourceKind: deploy.RuntimeMountSourceFile, Target: "/hf8-check", ReadOnly: true}}}
-	check := `test "$(awk '/^Seccomp:/ {print $2}' /proc/self/status)" = 2
+	// HF11: the same sandbox must read operator-private config and write
+	// operator-usable managed state on every application entry path below.
+	for _, name := range []string{"conf", "data"} {
+		plan.Mounts = append(plan.Mounts, MountExecutionPlan{Name: name, Mode: blueprint.MountManagedBind,
+			Source: filepath.Join(plan.DeploymentDir, name), SourceKind: deploy.RuntimeMountSourceDirectory, Target: "/" + name})
+	}
+	if err := PrepareStagedManagedBindPathsV1(plan.DeploymentDir, plan); err != nil {
+		t.Fatal(err)
+	}
+	privateConfig := filepath.Join(plan.DeploymentDir, "conf", "operator-private")
+	if err := os.WriteFile(privateConfig, []byte("operator-private\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	check := fmt.Sprintf(`test "$(awk '/^Seccomp:/ {print $2}' /proc/self/status)" = 2
 test "$(awk '/^NoNewPrivs:/ {print $2}' /proc/self/status)" = 1
-test "$(id -u):$(id -g)" = 1000:1000
-test "$(stat -c %u:%g:%a /mnt/reploy-home)" = 1000:1000:700
+test "$(id -u):$(id -g)" = %s
+test "$(stat -c %%u:%%g:%%a /mnt/reploy-home)" = %s:700
 test "$HOME" = /mnt/reploy-home
 touch "$HOME/private-write"
+test "$(cat /conf/operator-private)" = operator-private
+umask 077
+printf 'managed-write\n' > /conf/application-private
+printf 'persisted-data\n' > /data/application-private
 for name in CapEff CapPrm CapBnd CapAmb; do test "$(awk -v n="$name:" '$1==n {print $2}' /proc/self/status)" = 0000000000000000; done
 if touch /hf8-root-write 2>/dev/null; then exit 44; fi
 /hf8-check deny
-echo kernel-policy-pass`
+echo kernel-policy-pass`, identity.DockerUser, identity.DockerUser)
 	proof := filepath.Join(dir, "proof.sh")
 	if err := os.WriteFile(proof, []byte(check), 0o644); err != nil {
 		t.Fatal(err)
@@ -142,7 +161,7 @@ echo kernel-policy-pass`
 				if test.mount != "" {
 					args = append(args, "--tmpfs", test.mount)
 				}
-				args = append(args, "--entrypoint", "/reploy-probe", image, "restricted-exec", "--prepare-temporary-home", "--uid", "1000", "--gid", "1000", "--", "/bin/echo", "unsafe-app-ran")
+				args = append(args, "--entrypoint", "/reploy-probe", image, "restricted-exec", "--prepare-temporary-home", "--uid", fmt.Sprint(identity.UID), "--gid", fmt.Sprint(identity.GID), "--", "/bin/echo", "unsafe-app-ran")
 				var output bytes.Buffer
 				err := runCommandWithoutDockerPreflight(pinDockerEndpointV1(CommandSpec{Name: "docker", Args: args}, endpoint), RunOptions{Context: ctx, Stdout: &output, Stderr: &output})
 				if err == nil || !bytes.Contains(output.Bytes(), []byte("prepare private temporary home")) || bytes.Contains(output.Bytes(), []byte("unsafe-app-ran")) {
@@ -232,6 +251,30 @@ echo kernel-policy-pass`
 				}
 				time.Sleep(50 * time.Millisecond)
 			}
+		}
+	})
+	t.Run("operator access after all entry paths", func(t *testing.T) {
+		for _, name := range []string{"conf", "data"} {
+			p := filepath.Join(plan.DeploymentDir, name, "application-private")
+			info, err := os.Stat(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			uid, gid := fsowner.FromInfo(info).IDs()
+			if uid != os.Geteuid() || gid != os.Getegid() || info.Mode().Perm() != 0o600 {
+				t.Fatalf("managed %s output lost operator ownership/private permissions: %d:%d %o", name, uid, gid, info.Mode().Perm())
+			}
+			if _, err := os.ReadFile(p); err != nil {
+				t.Fatal(err)
+			}
+		}
+		data, err := os.ReadFile(privateConfig)
+		if err != nil || string(data) != "operator-private\n" {
+			t.Fatalf("changed existing private config: %v", err)
+		}
+		info, err := os.Stat(privateConfig)
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("changed existing private config mode: %v", err)
 		}
 	})
 	if !t.Failed() {
