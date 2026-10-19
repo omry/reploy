@@ -3,18 +3,18 @@ artifact: swe-design-review-attestation
 schema_version: 4
 scope_key: 759c4832028b9f6f5a5d726cff691c90a0792176e2d7c93e57732a8f63e9d5c7
 scope: {"kind": "path", "primary_target": "docs/MULTI_IDENTITY_IMPLEMENTATION_PLAN.md", "repository": ".", "selector": "docs/MULTI_IDENTITY_IMPLEMENTATION_PLAN.md"}
-review_content_identity_sha256: c1c3ae899637b28e62aa0ccf48d44ab83d6547628bd0809b37f6258c98ad49a4
-target_content_identity_sha256: 84c941c445e96fbae1385c2a4b651118e62322a99f7599d4d0015e3eec60304b
-baseline_content_identity_sha256: 4b2622ee0730d52bf4972e399ab2bb61e1f3025176066176ffd766694e8d823b
-target_documents: [{"executable": false, "path": "docs/MULTI_IDENTITY_IMPLEMENTATION_PLAN.md", "repository": ".", "sha256": "61e9a9f6086b15fc0d993a79b2e674ba0535f786d8a14497218a4b3a69aca9ea"}]
-baseline_documents: [{"executable": false, "path": "docs/MULTI_IDENTITY_SECURITY_CONTRACT.md", "repository": ".", "sha256": "724b2089f2e372f1590eb0625232dd65a0d5ac486adbd4b878a288161437a3e2"}]
-design_dependency_documents: [{"executable": false, "path": "docs/MULTI_IDENTITY_SECURITY_CONTRACT.md", "repository": ".", "sha256": "724b2089f2e372f1590eb0625232dd65a0d5ac486adbd4b878a288161437a3e2"}]
+review_content_identity_sha256: b7c6b3eaa2a31d9fbd2be615521a7e2ed1761d483507e2dcfa08f0d689b4a484
+target_content_identity_sha256: ec804ae02ac37f9c789f0af7c52e838f81290ad80c390579ce8e7134f347464b
+baseline_content_identity_sha256: 5ae48f5e53cefe5f5486b78467f607b47d63c2b693be7ac5d570d4eacdc5050a
+target_documents: [{"executable": false, "path": "docs/MULTI_IDENTITY_IMPLEMENTATION_PLAN.md", "repository": ".", "sha256": "64aa0c2aed0e1804db0202d1c0ba7cbf7019255bcc3c9acde5ed692f63a28101"}, {"executable": false, "path": "tools/conformance/multiidentity/READINESS.md", "repository": ".", "sha256": "0e4b9f67abbc22523ae2b19fe467e5dadb93a69f77c77fd687590363f4594771"}]
+baseline_documents: [{"executable": false, "path": "docs/MULTI_IDENTITY_SECURITY_CONTRACT.md", "repository": ".", "sha256": "6a488c15200d8d9cf56286855c2480cea4f78141f74584b2914ee23327174f16"}]
+design_dependency_documents: [{"executable": false, "path": "docs/MULTI_IDENTITY_SECURITY_CONTRACT.md", "repository": ".", "sha256": "6a488c15200d8d9cf56286855c2480cea4f78141f74584b2914ee23327174f16"}]
 document_repository: "."
 document_path: "docs/MULTI_IDENTITY_IMPLEMENTATION_PLAN.md"
-document_revision_provenance: "cbd20850281b4c22693f325e86c7d70e2b9924f5"
-document_sha256: 61e9a9f6086b15fc0d993a79b2e674ba0535f786d8a14497218a4b3a69aca9ea
+document_revision_provenance: "c0776d68336adef88513f495c329d61d30dc9ac3"
+document_sha256: 64aa0c2aed0e1804db0202d1c0ba7cbf7019255bcc3c9acde5ed692f63a28101
 verdict: clean
-attested_at: 2026-10-14T02:24:04Z
+attested_at: 2026-10-19T13:05:13Z
 ---
 <!-- swe-design-review-attestation:v4 -->
 
