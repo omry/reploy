@@ -34,7 +34,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: 24
           cache: npm
           cache-dependency-path: website/package-lock.json
 
@@ -43,7 +43,7 @@ jobs:
 
       - name: Install docs dependencies
         working-directory: website
-        run: npm ci --no-audit --no-fund
+        run: npm install --global npm@11.9.0 && npm ci --no-audit --no-fund
 
       - name: Build docs site
         working-directory: website
