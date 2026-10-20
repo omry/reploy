@@ -53,6 +53,15 @@ type ValidatedBuildReferenceV1 struct {
 }
 
 func PackageOverridesDigestV1(overrides PackageOverridesV1) (canonical.Digest, error) {
+	if err := ValidatePackageOverridesV1(overrides); err != nil {
+		return "", err
+	}
+	// Deployment host mappings are not build inputs. Validate before projecting
+	// them out, and retain the historical empty package intent representation.
+	overrides.Environment.Runtime = nil
+	if overrides.Environment.PackageOverrides == nil {
+		overrides.Environment.PackageOverrides = map[string]map[string]PackageOverrideChoiceV1{}
+	}
 	content, err := EncodePackageOverridesV1(overrides)
 	if err != nil {
 		return "", err

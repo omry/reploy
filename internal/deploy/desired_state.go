@@ -130,6 +130,9 @@ func setDesiredStateV1(
 				document.Environment.ID,
 			)
 		}
+		if err := initialOverrides.CheckIdentityMappingDeclaration(document); err != nil {
+			return DesiredStateUpdateResult{}, err
+		}
 		if _, sidecarFound, readErr := ReadPackageOverridesV1(deploymentDir); readErr != nil {
 			return DesiredStateUpdateResult{}, readErr
 		} else if sidecarFound {
@@ -137,6 +140,16 @@ func setDesiredStateV1(
 				"%s already exists in the staging directory",
 				PackageOverridesFilename,
 			)
+		}
+	} else if !found || current.Deployment == nil {
+		overrides, sidecarFound, readErr := ReadPackageOverridesV1(deploymentDir)
+		if readErr != nil {
+			return DesiredStateUpdateResult{}, readErr
+		}
+		if sidecarFound && overrides.IdentityMappingOverride() != nil {
+			if err := overrides.CheckIdentityMappingDeclaration(document); err != nil {
+				return DesiredStateUpdateResult{}, err
+			}
 		}
 	}
 	overlay := EmptyRequestOverlayV1()
