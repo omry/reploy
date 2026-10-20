@@ -1,0 +1,2 @@
+kind: Added
+body: Preserve typed identity mapping overrides in staged deployment input and resolve effective mapping values without changing blueprint build identity. Mapped execution remains unavailable.
