@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providerstore"
 )
@@ -127,6 +126,9 @@ func runCurrentWorkloadV1(ctx context.Context, input CurrentWorkloadRunInputV1, 
 	if !found {
 		return fmt.Errorf("runtime state is missing; run `reploy stage` or `reploy install`")
 	}
+	if _, err := unmappedRuntimeDocumentV1(state); err != nil {
+		return err
+	}
 	recoverStop := func(cause error) error {
 		if input.Action != "down" {
 			return cause
@@ -179,7 +181,7 @@ func runCurrentWorkloadV1(ctx context.Context, input CurrentWorkloadRunInputV1, 
 	if state.Current == nil {
 		return recoverStop(fmt.Errorf("%s", currentBuildRecoveryMessageV1(state, "runtime build is missing")))
 	}
-	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	document, err := unmappedRuntimeDocumentV1(state)
 	if err != nil {
 		return recoverStop(fmt.Errorf("runtime blueprint: %w", err))
 	}

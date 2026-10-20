@@ -173,7 +173,7 @@ func runProviderInstallV1(
 	if !found || sourceState.Deployment != nil || sourceState.TerminalRemoval {
 		return deploy.StateV1{}, fmt.Errorf("install source %s must contain active staging state", filepath.Join(sourceDir, StateFileName))
 	}
-	sourceDocument, err := blueprint.DecodeResolvedDocumentV1(sourceState.Blueprint)
+	sourceDocument, err := unmappedRuntimeDocumentV1(sourceState)
 	if err != nil {
 		return deploy.StateV1{}, fmt.Errorf("install source blueprint: %w", err)
 	}
@@ -230,7 +230,7 @@ func runProviderInstallV1(
 	if !reflect.DeepEqual(sourceBuild.State.Blueprint, sourceState.Blueprint) {
 		return deploy.StateV1{}, fmt.Errorf("install source blueprint changed after destination preflight")
 	}
-	document, err := blueprint.DecodeResolvedDocumentV1(sourceBuild.State.Blueprint)
+	document, err := unmappedRuntimeDocumentV1(sourceBuild.State)
 	if err != nil {
 		return deploy.StateV1{}, fmt.Errorf("provider install source blueprint: %w", err)
 	}
@@ -568,6 +568,9 @@ func validateProviderInstallDestinationServiceV1(operation *deploy.OperationLock
 	}
 	if !found {
 		return nil
+	}
+	if _, err := unmappedRuntimeDocumentV1(state); err != nil {
+		return err
 	}
 	if state.Deployment == nil {
 		return fmt.Errorf("destination contains a staging deployment; choose a different install target")

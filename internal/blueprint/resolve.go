@@ -48,6 +48,10 @@ func Resolve(source Syntax) (Document, error) {
 	if err != nil {
 		return Document{}, err
 	}
+	mapping, err := prepareIdentityMappingV1(source.Environment.Runtime.IdentityMapping, variables)
+	if err != nil {
+		return Document{}, err
+	}
 	extended, err := resolveExtends(source)
 	if err != nil {
 		return Document{}, err
@@ -67,7 +71,7 @@ func Resolve(source Syntax) (Document, error) {
 			Applications:    map[string]Application{},
 			Components:      map[string]Component{},
 			AllowConcurrent: allowConcurrent,
-			Runtime:         EnvironmentRuntime{User: runtimeUser, Network: runtimeNetwork},
+			Runtime:         EnvironmentRuntime{User: runtimeUser, Network: runtimeNetwork, IdentityMapping: mapping},
 			Terminal:        Terminal{ColorEnv: strings.TrimSpace(source.Environment.Terminal.ColorEnv)},
 			Install:         resolveInstallSyntax(source.Environment.Install, variables),
 			Mounts:          map[string]EnvironmentMount{},
