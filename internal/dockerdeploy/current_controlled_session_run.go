@@ -426,7 +426,7 @@ func loadCurrentControlledSessionRuntimeV1(
 	if !found {
 		return currentControlledSessionRuntimeV1{}, fmt.Errorf("runtime state is missing; run `reploy stage` or `reploy install`")
 	}
-	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	document, err := unmappedRuntimeDocumentV1(state)
 	if err != nil {
 		return currentControlledSessionRuntimeV1{}, fmt.Errorf("runtime blueprint: %w", err)
 	}
