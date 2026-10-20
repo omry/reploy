@@ -27,6 +27,7 @@ type StateV1 struct {
 	Staging         *StagingStateV1              `json:"staging"`
 	Deployment      *DeploymentStateV1           `json:"deployment"`
 	TerminalRemoval bool                         `json:"terminal_removal,omitempty"`
+	IdentityMapping *IdentityMappingStateV1      `json:"identity_mapping,omitempty"`
 }
 
 // StagingStateV1 marks a deployment as staged. Staging-only package overrides
@@ -73,7 +74,7 @@ func ValidateStateV1(state StateV1) error {
 			return fmt.Errorf("state deployment: %w", err)
 		}
 	}
-	return nil
+	return validateIdentityMappingStateV1(state)
 }
 
 func ValidateStagingStateV1(state StagingStateV1, _ blueprint.Document) error {
