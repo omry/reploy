@@ -8,7 +8,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providerstore"
 )
@@ -89,7 +88,7 @@ func runCurrentRuntimeTestV1(ctx context.Context, input CurrentRuntimeTestInputV
 	if !found {
 		return fmt.Errorf("runtime state is missing; run `reploy stage` or `reploy install`")
 	}
-	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	document, err := unmappedRuntimeDocumentV1(state)
 	if err != nil {
 		return fmt.Errorf("runtime blueprint: %w", err)
 	}

@@ -90,6 +90,9 @@ func awaitLiveRunAdmissionV1(
 	if backend.acquire == nil || backend.wait == nil {
 		return releaseLiveRunAdmissionLockV1(operation, fmt.Errorf("live run admission requires a complete backend"))
 	}
+	if err := requireUnmappedDeploymentV1(operation); err != nil {
+		return releaseLiveRunAdmissionLockV1(operation, err)
+	}
 	if err := operation.RequireQueueEntryLeaseHeldV1(candidate.ID); err != nil {
 		return releaseLiveRunAdmissionLockV1(operation, fmt.Errorf("live run admission ownership: %w", err))
 	}
@@ -124,6 +127,9 @@ func awaitLiveRunAdmissionV1(
 		operation, err = backend.acquire(ctx, deploymentDir)
 		if err != nil {
 			return cancelLiveRunAdmissionV1(ctx, deploymentDir, nil, candidate, backend, err)
+		}
+		if err := requireUnmappedDeploymentV1(operation); err != nil {
+			return cancelLiveRunAdmissionV1(ctx, deploymentDir, operation, candidate, backend, err)
 		}
 		if _, err := recoverLiveRunQueueV1(ctx, operation, notice, backend.removeContainer); err != nil {
 			return cancelLiveRunAdmissionV1(ctx, deploymentDir, operation, candidate, backend, err)
