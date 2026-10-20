@@ -105,6 +105,9 @@ func removeProviderUninstallDeploymentWithV1(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := operation.RequireNoRetainedIdentityV1(); err != nil {
+		return err
+	}
 
 	state, found, err := operation.ReadStateV1()
 	if err != nil || !found || state.Deployment == nil || state.Current == nil {

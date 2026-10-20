@@ -88,6 +88,20 @@ func identityGuardTreeV1(t *testing.T, root string) map[string]string {
 		if info.IsDir() {
 			return nil
 		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("snapshot fixture requires a regular file: %s", path)
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		// NTFS directory entries can retain stale attributes for a hard link.
+		// Compare actual handle metadata and bytes, including the file mode.
+		info, err = file.Stat()
+		if err != nil {
+			return err
+		}
 		relative, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
@@ -102,7 +116,7 @@ func identityGuardTreeV1(t *testing.T, root string) map[string]string {
 			result[strings.TrimPrefix(path, root)] = fmt.Sprintf("%o:%d:%d:%d:empty-lock", info.Mode(), uid, gid, info.ModTime().UnixNano())
 			return nil
 		}
-		content, err := os.ReadFile(path)
+		content, err := io.ReadAll(file)
 		if err != nil {
 			return err
 		}
