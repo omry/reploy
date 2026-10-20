@@ -1,0 +1,2 @@
+kind: Added
+body: Accept portable identity mapping declarations in blueprints, including required values. Staging and explicit builds preserve them. Execution and installation reject these declarations until multi-identity runtime admission is available.
