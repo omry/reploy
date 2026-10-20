@@ -23,6 +23,9 @@ type resolvedDocumentEnvelopeV1 struct {
 }
 
 func EncodeResolvedDocumentV1(document Document) (ResolvedDocumentV1, error) {
+	if err := document.Environment.Runtime.IdentityMapping.validate(); err != nil {
+		return "", err
+	}
 	payload, err := json.Marshal(resolvedDocumentEnvelopeV1{Schema: ResolvedDocumentSchemaV1, Document: document})
 	if err != nil {
 		return "", fmt.Errorf("encode resolved blueprint: %w", err)
