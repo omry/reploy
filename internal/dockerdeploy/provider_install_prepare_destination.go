@@ -52,6 +52,12 @@ func prepareProviderInstallDestinationWithV1(
 	if err := locked.DestinationOperation.RequireWritable(); err != nil {
 		return preparedProviderInstallFilesV1{}, err
 	}
+	if err := locked.SourceOperation.RequireNoRetainedIdentityV1(); err != nil {
+		return preparedProviderInstallFilesV1{}, err
+	}
+	if err := locked.DestinationOperation.RequireNoRetainedIdentityV1(); err != nil {
+		return preparedProviderInstallFilesV1{}, err
+	}
 	if backend.files == nil || backend.diskRequirements == nil || backend.preflight == nil || backend.prepare == nil {
 		return preparedProviderInstallFilesV1{}, fmt.Errorf("prepare provider install destination requires a complete backend")
 	}
