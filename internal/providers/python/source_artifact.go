@@ -230,9 +230,17 @@ func ValidateSourceBuildIdentityV2(
 	builderProfile string,
 	buildSettings providers.CanonicalProviderData,
 ) error {
+	// Persisted identities remain valid across the frontend upgrade. Reuse
+	// checks separately require the current builder; never rewrite stored facts.
+	requirement, ok := buildSettings.Value["builder_requirement"].(string)
+	if !ok || (requirement != SourceBuilderRequirementV1 && requirement != "uv==0.11.26") {
+		return fmt.Errorf("Python source builder requirement %q is unsupported", requirement)
+	}
 	switch builderProfile {
 	case SourceBuilderProfileV1:
-		if !reflect.DeepEqual(buildSettings, CanonicalSourceBuildSettingsV1()) {
+		expected := CanonicalSourceBuildSettingsV1()
+		expected.Value["builder_requirement"] = requirement
+		if !reflect.DeepEqual(buildSettings, expected) {
 			return fmt.Errorf("Python source build settings do not match %q", SourceBuildSettingsSchemaV1)
 		}
 	case SourceBuilderProfileV2:
@@ -248,6 +256,12 @@ func ValidateSourceBuildIdentityV2(
 	return nil
 }
 
+// SourceUsesCurrentBuilderV1 reports whether a validated source is eligible
+// for reuse with this release's frontend. Historical identities stay readable.
+func SourceUsesCurrentBuilderV1(source providers.ResolvedSourceInput) bool {
+	return source.BuildSettings.Value["builder_requirement"] == SourceBuilderRequirementV1
+}
+
 func validateSourceBuildSettingsV2(settings providers.CanonicalProviderData) error {
 	if settings.Schema != SourceBuildSettingsSchemaV2 || len(settings.Value) != 8 {
 		return fmt.Errorf("Python local recipe build settings must use schema %q and its exact shape", SourceBuildSettingsSchemaV2)
@@ -261,6 +275,7 @@ func validateSourceBuildSettingsV2(settings providers.CanonicalProviderData) err
 	if err != nil {
 		return err
 	}
+	expected.Value["builder_requirement"] = settings.Value["builder_requirement"]
 	if !reflect.DeepEqual(settings, expected) {
 		return fmt.Errorf("Python local recipe build settings are not canonical")
 	}

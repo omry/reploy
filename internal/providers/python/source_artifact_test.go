@@ -141,7 +141,7 @@ func TestSourceBuilderUVUpgradeInvalidatesProfileFacts(t *testing.T) {
 			}
 
 			// Keep the source, output wheel, recipe, and environment identical:
-			// only the old frontend requirement should invalidate cached facts.
+			// only the old frontend requirement should prevent reuse.
 			source.BuildSettings.Value["builder_requirement"] = "uv==0.11.26"
 			stale := CanonicalProfileFactsV2("application", []providers.ResolvedSourceInput{source})
 			staleBytes, err := canonical.Marshal(stale)
@@ -151,8 +151,15 @@ func TestSourceBuilderUVUpgradeInvalidatesProfileFacts(t *testing.T) {
 			if string(currentBytes) == string(staleBytes) {
 				t.Fatal("uv upgrade did not change canonical profile facts used in cache identity")
 			}
-			if _, _, err := decodeProfileFactsV2(stale); err == nil {
-				t.Fatal("cached profile facts with the old uv requirement were accepted")
+			if _, _, err := decodeProfileFactsV2(stale); err != nil {
+				t.Fatalf("historical profile facts must remain readable: %v", err)
+			}
+			if SourceUsesCurrentBuilderV1(source) {
+				t.Fatal("historical source is eligible for reuse")
+			}
+			source.BuildSettings.Value["builder_requirement"] = "uv==0.0.0"
+			if err := ValidateResolvedSourceInputV2(source); err == nil {
+				t.Fatal("unknown historical builder requirement was accepted")
 			}
 		})
 	}
