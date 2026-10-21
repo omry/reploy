@@ -12,6 +12,7 @@ import (
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/identitymapping"
 	"github.com/omry/reploy/internal/providerstore"
 )
 
@@ -45,7 +46,7 @@ func TestMappingInputUsesLockedSelectedStateAndHasNoEffects(t *testing.T) {
 	}
 	before := identityGuardTreeV1(t, dir)
 	mapping, err := loadStagedIdentityMappingV1(operation, dir)
-	if err != nil || mapping.UIDs[0].HostStart.Value != "300000" {
+	if err != nil || mapping.UIDs[0].HostStart != 300000 {
 		t.Fatalf("effective selected input = %#v / %v", mapping, err)
 	}
 	after := identityGuardTreeV1(t, dir)
@@ -102,8 +103,48 @@ func TestMappingInputCapturedSidecarDoesNotRereadChangedFile(t *testing.T) {
 		t.Fatalf("captured bytes were replaced during resolution: %#v / %v", oldCandidate, err)
 	}
 	newCandidate, err := loadStagedIdentityMappingV1(operation, dir)
-	if err != nil || newCandidate.UIDs[0].HostStart.Value != "400000" {
+	if err != nil || newCandidate.UIDs[0].HostStart != 400000 {
 		t.Fatalf("new operation did not capture current input: %#v / %v", newCandidate, err)
+	}
+}
+
+func TestMappingInputNumericGeometryKeepsProtectedReservationsSeparate(t *testing.T) {
+	dir, state := identityGuardFixtureV1(t, true, false)
+	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	if err := operation.CommitPackageOverridesV1(mappingInputOverridesV1(t, document.Environment.ID, "300000")); err != nil {
+		t.Fatal(err)
+	}
+	before := identityGuardTreeV1(t, dir)
+	candidate, err := loadStagedIdentityMappingV1(operation, dir)
+	if err != nil || candidate == nil || candidate.Profile != "exact" {
+		t.Fatalf("numeric staging candidate unavailable: %#v / %v", candidate, err)
+	}
+	protected := identitymapping.Geometry{Profile: "exact", UIDs: []identitymapping.Interval{{ContainerStart: 0, HostStart: 300000, Count: 32}}, GIDs: []identitymapping.Interval{{ContainerStart: 0, HostStart: 200000, Count: 32}}}
+	reserved, err := identitymapping.RetainGeometry(*candidate, &protected)
+	if err != nil || reserved.UIDs[0].Count != 32 || reserved.GIDs[0].Count != 32 || candidate.UIDs[0].Count != 16 {
+		t.Fatalf("candidate omitted protected IDs or gained authority: %#v / %#v / %v", reserved, candidate, err)
+	}
+	protected.UIDs[0].HostStart = 500000
+	if _, err := identitymapping.RetainGeometry(*candidate, &protected); err == nil {
+		t.Fatal("new input silently replaced protected host assignments")
+	}
+	if !maps.Equal(before, identityGuardTreeV1(t, dir)) {
+		t.Fatal("geometry comparison changed deployment state or files")
+	}
+	current, found, err := operation.ReadStateV1()
+	if err != nil || !found {
+		t.Fatalf("selected state lost: %v", err)
+	}
+	if _, err := unmappedRuntimeDocumentV1(current); err == nil {
+		t.Fatal("numeric mapping validation granted payload admission")
 	}
 }
 
