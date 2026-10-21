@@ -111,3 +111,49 @@ func TestCanonicalSourceBuildSettingsV2BindsLocalRecipe(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSourceBuilderUVUpgradeInvalidatesProfileFacts(t *testing.T) {
+	for _, buildType := range []string{"", SourceBuildTypePEP517, SourceBuildTypeLegacy} {
+		name := buildType
+		if name == "" {
+			name = "default"
+		}
+		t.Run(name, func(t *testing.T) {
+			source := testPythonSourceInput("application", "demo", "1.0", schemaTestDigest("1"), schemaTestDigest("2"))
+			if buildType != "" {
+				settings, err := CanonicalSourceBuildSettingsV2(buildType, schemaTestDigest("3"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				source.BuilderProfile = SourceBuilderProfileV2
+				source.BuildSettings = settings
+			}
+			if got := source.BuildSettings.Value["builder_requirement"]; got != "uv==0.13.4" {
+				t.Fatalf("builder requirement = %v, want uv==0.13.4", got)
+			}
+			current := CanonicalProfileFactsV2("application", []providers.ResolvedSourceInput{source})
+			if _, _, err := decodeProfileFactsV2(current); err != nil {
+				t.Fatal(err)
+			}
+			currentBytes, err := canonical.Marshal(current)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Keep the source, output wheel, recipe, and environment identical:
+			// only the old frontend requirement should invalidate cached facts.
+			source.BuildSettings.Value["builder_requirement"] = "uv==0.11.26"
+			stale := CanonicalProfileFactsV2("application", []providers.ResolvedSourceInput{source})
+			staleBytes, err := canonical.Marshal(stale)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(currentBytes) == string(staleBytes) {
+				t.Fatal("uv upgrade did not change canonical profile facts used in cache identity")
+			}
+			if _, _, err := decodeProfileFactsV2(stale); err == nil {
+				t.Fatal("cached profile facts with the old uv requirement were accepted")
+			}
+		})
+	}
+}

@@ -20,7 +20,7 @@ const (
 	SourceInputManifestSchemaV1 = "python-source-input-manifest-v1"
 	SourceBuilderProfileV1      = "python-uv-sdist-wheel-v1"
 	SourceBuilderProfileV2      = "python-uv-local-recipe-v2"
-	SourceBuilderRequirementV1  = "uv==0.11.26"
+	SourceBuilderRequirementV1  = "uv==0.13.4"
 	SourceBuildSettingsSchemaV1 = "python-sdist-wheel-build-settings-v1"
 	SourceBuildSettingsSchemaV2 = "python-local-recipe-build-settings-v2"
 	SourceMetadataSchemaV2      = "python-source-metadata-v2"
