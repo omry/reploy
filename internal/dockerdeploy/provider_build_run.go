@@ -260,6 +260,11 @@ func runLockedProviderBuildV1(
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("run provider build blueprint: %w", err)
 	}
+	if input.Automatic {
+		if _, err := unmappedRuntimeDocumentV1(state); err != nil {
+			return LockedProviderBuildExecutionResultV1{}, err
+		}
+	}
 	if state.Deployment != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("provider build requires a staged deployment; an installed deployment cannot be used as a build source")
 	}

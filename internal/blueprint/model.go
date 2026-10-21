@@ -43,8 +43,9 @@ type Environment struct {
 }
 
 type EnvironmentRuntime struct {
-	User    string
-	Network RuntimeNetwork
+	User            string
+	Network         RuntimeNetwork
+	IdentityMapping *IdentityMappingV1 `json:"IdentityMapping,omitempty"`
 }
 
 type NetworkAccess string

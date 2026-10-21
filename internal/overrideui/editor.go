@@ -2732,6 +2732,9 @@ func saveSidecarAt(
 			document.Environment.ID,
 		)
 	}
+	if err := overrides.CheckIdentityMappingDeclaration(document); err != nil {
+		return editorSnapshot{}, err
+	}
 	content, err := deploy.EncodePackageOverridesV1(overrides)
 	if err != nil {
 		return editorSnapshot{}, err

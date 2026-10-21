@@ -1,0 +1,2 @@
+kind: Added
+body: Add private identity-mapping configuration and recovery metadata with inhibited pending intents, exact retries, and conservative reservation retention. Mapped execution remains unavailable.

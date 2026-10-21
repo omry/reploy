@@ -146,6 +146,9 @@ func localBlueprintInitialPackageOverridesV1(
 			overrides.Environment.ID,
 		)
 	}
+	if err := overrides.CheckIdentityMappingDeclaration(loaded.Document); err != nil {
+		return nil, err
+	}
 	workspace, hasWorkspace, err := localBlueprintOverridesWorkspaceV1(&overrides, sourceDir)
 	if err != nil {
 		return nil, fmt.Errorf("resolve local blueprint package overrides workspace: %w", err)
@@ -164,6 +167,7 @@ func localBlueprintInitialPackageOverridesV1(
 		return nil, nil
 	}
 	staged := deploy.EmptyPackageOverridesV1(resolved.EnvironmentID)
+	staged.Environment.Runtime = overrides.Environment.Runtime
 	if overrides.Environment.Base != nil {
 		base := *overrides.Environment.Base
 		staged.Environment.Base = &base

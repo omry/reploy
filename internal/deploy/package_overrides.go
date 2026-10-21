@@ -32,6 +32,7 @@ type PackageOverridesV1 struct {
 
 type PackageOverridesEnvironmentV1 struct {
 	ID               string                                        `yaml:"id"`
+	Runtime          *PackageOverridesRuntimeV1                    `yaml:"runtime,omitempty"`
 	Vars             map[string]any                                `yaml:"vars,omitempty"`
 	Base             *BaseImageOverrideV1                          `yaml:"base,omitempty"`
 	PackageAdditions map[string][]string                           `yaml:"package_additions,omitempty"`
@@ -117,6 +118,9 @@ func DecodePackageOverridesV1(content []byte) (PackageOverridesV1, error) {
 		}
 		return PackageOverridesV1{}, fmt.Errorf("decode package overrides: multiple YAML documents are not supported")
 	}
+	if err := validateMappingOverridePresenceV1(content, overrides.IdentityMappingOverride() != nil); err != nil {
+		return PackageOverridesV1{}, err
+	}
 	if err := ValidatePackageOverridesV1(overrides); err != nil {
 		return PackageOverridesV1{}, err
 	}
@@ -176,7 +180,10 @@ func ValidatePackageOverridesV1(overrides PackageOverridesV1) error {
 			return fmt.Errorf("overrides environment.base.image: %w", err)
 		}
 	}
-	if environment.PackageOverrides == nil {
+	if err := overrides.IdentityMappingOverride().Validate(); err != nil {
+		return err
+	}
+	if environment.PackageOverrides == nil && overrides.IdentityMappingOverride() == nil {
 		return fmt.Errorf("package overrides environment.package_overrides must use a mapping")
 	}
 	for _, provider := range sortedKeys(environment.PackageAdditions) {
@@ -613,6 +620,12 @@ func ReadPackageOverridesV1(deploymentDir string) (PackageOverridesV1, bool, err
 	if err != nil {
 		return PackageOverridesV1{}, false, err
 	}
+	return ReadPackageOverridesFileV1(path)
+}
+
+// ReadPackageOverridesFileV1 captures one explicitly selected override file.
+// Callers decide whether absence is allowed and bind its environment/declaration.
+func ReadPackageOverridesFileV1(path string) (PackageOverridesV1, bool, error) {
 	info, err := os.Lstat(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return PackageOverridesV1{}, false, nil
