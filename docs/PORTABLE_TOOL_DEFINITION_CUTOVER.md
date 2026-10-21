@@ -7,14 +7,18 @@ It introduces no tool, target, trust policy, or execution mechanism.
 
 ## Qualified Support
 
-The current catalog derives 19 cases: four Java build cases, three Playwright
+The cutover catalog derived 19 cases: four Java build cases, three Playwright
 Python/Chromium runtime cases, and twelve Bash build/runtime cases. Each was
 matched through `MatchPortableToolCaseEvidenceV1` against its canonical external
 validation record from successful [CI run 37889434362, attempt 1](https://github.com/omry/reploy/actions/runs/37889434362).
 The run belongs to PR #227 head
 `83875fb7d6d966f8e3dfb46bfe8bace0bf205570`; the actual tested merge revision is
 `e769ca18e38de54ed1afc90cda737b1b94dd262e`. These identities remain distinct.
-The current selected definitions are unchanged from that qualified revision.
+The current catalog selects Playwright definition revision `2`, which adds an
+official ffmpeg mirror without changing the pinned artifact bytes. Revision `1`
+authoring remains archived unchanged. The table below records the original
+cutover evidence; revision `2` requires fresh native validation and does not
+inherit the old manifest evidence.
 
 The match verifies manifest and selected-closure digests, exact target/context,
 binding/selection sets, fixture, validator, image and original probe output.
