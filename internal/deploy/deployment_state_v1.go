@@ -102,7 +102,7 @@ func ValidateInstallationStateV1(state InstallationStateV1) error {
 // MarkInstallationReadyV1 completes the only supported installation-state
 // transition. The ready record must describe the exact configuring install;
 // changing any other installation fact requires a new install publication.
-func (lock *OperationLock) MarkInstallationReadyV1(ready InstallationStateV1) (StateV1, bool, error) {
+func (lock *OperationLock) MarkInstallationReadyV1(ready InstallationStateV1, expectedMapping ...*IdentityMappingStateV1) (StateV1, bool, error) {
 	if lock == nil {
 		return StateV1{}, false, fmt.Errorf("mark installation ready requires an operation lock")
 	}
@@ -128,6 +128,9 @@ func (lock *OperationLock) MarkInstallationReadyV1(ready InstallationStateV1) (S
 	}
 	if !found || state.Current == nil || state.Deployment == nil {
 		return StateV1{}, false, fmt.Errorf("mark installation ready requires a committed installation")
+	}
+	if err := compareIdentityObservationV1(state.IdentityMapping, expectedMapping); err != nil {
+		return StateV1{}, false, err
 	}
 	targetDir := filepath.Dir(filepath.Dir(path))
 	if ready.TargetDir != targetDir {
@@ -161,7 +164,7 @@ func validInstallationPort(value string) bool {
 // installed. The caller retains the deployment operation lock across any
 // filesystem, service, image-reference, and provider-store work that precedes
 // this final state publication.
-func (lock *OperationLock) SetInstallationStateV1(installation InstallationStateV1) (StateV1, bool, error) {
+func (lock *OperationLock) SetInstallationStateV1(installation InstallationStateV1, expectedMapping ...*IdentityMappingStateV1) (StateV1, bool, error) {
 	if lock == nil {
 		return StateV1{}, false, fmt.Errorf("set installation state requires an operation lock")
 	}
@@ -188,6 +191,9 @@ func (lock *OperationLock) SetInstallationStateV1(installation InstallationState
 	if state.Current == nil {
 		return StateV1{}, false, fmt.Errorf("set installation state requires a current build")
 	}
+	if err := compareIdentityObservationV1(state.IdentityMapping, expectedMapping); err != nil {
+		return StateV1{}, false, err
+	}
 	targetDir := filepath.Dir(filepath.Dir(path))
 	if installation.TargetDir != targetDir {
 		return StateV1{}, false, fmt.Errorf("installation target directory %q does not match locked deployment %q", installation.TargetDir, targetDir)
@@ -207,7 +213,7 @@ func (lock *OperationLock) SetInstallationStateV1(installation InstallationState
 // ClearInstallationStateV1 removes the exact recorded installation facts
 // after host uninstall succeeds, returning the deployment to staged state
 // without changing its current build.
-func (lock *OperationLock) ClearInstallationStateV1(expected InstallationStateV1) (StateV1, bool, error) {
+func (lock *OperationLock) ClearInstallationStateV1(expected InstallationStateV1, expectedMapping ...*IdentityMappingStateV1) (StateV1, bool, error) {
 	if lock == nil {
 		return StateV1{}, false, fmt.Errorf("clear installation state requires an operation lock")
 	}
@@ -234,7 +240,13 @@ func (lock *OperationLock) ClearInstallationStateV1(expected InstallationStateV1
 	if !reflect.DeepEqual(state.Deployment.Installation, expected) {
 		return StateV1{}, false, fmt.Errorf("installed facts changed before clearing installation state")
 	}
-	state.Deployment = nil
+	if err := compareIdentityObservationV1(state.IdentityMapping, expectedMapping); err != nil {
+		return StateV1{}, false, err
+	}
+	state, err = RetainedStagingAfterUninstallV1(state, expected)
+	if err != nil {
+		return StateV1{}, false, err
+	}
 	if err := writeInstalledStateV1(path, state); err != nil {
 		return StateV1{}, false, err
 	}
@@ -259,6 +271,9 @@ func (lock *OperationLock) CommitInstalledStateV1(
 	}
 	if sourceState.Current == nil {
 		return StateV1{}, false, fmt.Errorf("commit installed state requires a current source build")
+	}
+	if sourceState.IdentityMapping != nil {
+		return StateV1{}, false, fmt.Errorf("mapped install requires its reviewed destination adapter")
 	}
 	if sourceState.Deployment != nil {
 		return StateV1{}, false, fmt.Errorf("commit installed state requires staged source state without deployment-local facts")
@@ -286,6 +301,9 @@ func (lock *OperationLock) CommitInstalledStateV1(
 	current, found, err := readStateV1Path(path)
 	if err != nil {
 		return StateV1{}, false, err
+	}
+	if current.IdentityMapping != nil {
+		return StateV1{}, false, fmt.Errorf("mapped destination requires its reviewed installation adapter")
 	}
 	var observed *EnvironmentGenerationState
 	if found {
@@ -322,6 +340,9 @@ func validateInstalledDestinationGeneration(source EnvironmentGenerationState, d
 }
 
 func writeInstalledStateV1(path string, state StateV1) error {
+	if err := validateMappingOwnerPathV1(path, state); err != nil {
+		return err
+	}
 	content, err := EncodeStateV1(state)
 	if err != nil {
 		return err

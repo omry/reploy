@@ -264,6 +264,7 @@ func publishBuild(
 		Schema: deploy.StateSchemaV1, Blueprint: blueprintPayload, BlueprintSource: state.BlueprintSource,
 		Platform: input.Lock.Platform, Overlay: input.Lock.Overlay, Current: &candidate,
 		Staging: state.Staging, Deployment: state.Deployment,
+		IdentityMapping: state.IdentityMapping,
 	}
 	commitState := backend.commitState
 	if commitState == nil {
