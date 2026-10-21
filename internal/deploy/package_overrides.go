@@ -620,6 +620,12 @@ func ReadPackageOverridesV1(deploymentDir string) (PackageOverridesV1, bool, err
 	if err != nil {
 		return PackageOverridesV1{}, false, err
 	}
+	return ReadPackageOverridesFileV1(path)
+}
+
+// ReadPackageOverridesFileV1 captures one explicitly selected override file.
+// Callers decide whether absence is allowed and bind its environment/declaration.
+func ReadPackageOverridesFileV1(path string) (PackageOverridesV1, bool, error) {
 	info, err := os.Lstat(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return PackageOverridesV1{}, false, nil
