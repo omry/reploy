@@ -1,0 +1,2 @@
+kind: Added
+body: Check numeric identity mapping geometry and protect retained ID assignments against reassignment. Mapped execution remains unavailable.
