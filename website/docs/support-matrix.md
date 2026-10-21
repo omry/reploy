@@ -17,15 +17,16 @@ For feature support by Reploy release, see [Version Support](/docs/version-suppo
 ## Portable Tools
 
 Portable-tool support is qualified separately from the host release targets
-above. The current embedded catalog supports these exact tuples; every row
-below was derived from current catalog cases and matched to passing native
-validation records from [CI run 37889434362](https://github.com/omry/reploy/actions/runs/37889434362).
-The qualified definition revision is `1` for each release.
+above. These target tuples were originally qualified at definition revision `1`
+using native validation records from [CI run 37889434362](https://github.com/omry/reploy/actions/runs/37889434362).
+The current catalog selects Playwright revision `2` for its official ffmpeg
+mirror. Its artifact bytes and target tuples are unchanged, but its new manifest
+requires fresh native validation in CI. The other releases remain at revision `1`.
 
-| Tool request | Context | Exact base-image distributions | OCI architectures | Binding / selection | Qualified cases |
+| Tool request | Context | Exact base-image distributions | OCI architectures | Binding / selection | Native cases |
 | --- | --- | --- | --- | --- | --- |
 | `tool:java==21~1` | build | Debian 12, Debian 13, Ubuntu 25.10, Ubuntu 26.04 | `linux/amd64` | None | 4 |
-| `tool:playwright==1.61.0~1` | runtime | Debian 12, Ubuntu 25.10, Ubuntu 26.04 | `linux/amd64` | Python / Chromium | 3 |
+| `tool:playwright==1.61.0~2` | runtime | Debian 12, Ubuntu 25.10, Ubuntu 26.04 | `linux/amd64` | Python / Chromium | 3 |
 | `tool:bash==5.2.15~1` | build, runtime | Debian 12 | `linux/amd64`, `linux/arm64` | None | 4 |
 | `tool:bash==5.2.37~1` | build, runtime | Debian 13 | `linux/amd64`, `linux/arm64` | None | 4 |
 | `tool:bash==5.3.9~1` | build, runtime | Ubuntu 26.04 | `linux/amd64`, `linux/arm64` | None | 4 |

@@ -77,7 +77,7 @@ func TestPortableToolSelectionsMatchCurrentBuildV1InvalidatesChangedReleaseProve
 		t, fixture.store, fixture.request.Plan, fixture.request.NodeID,
 	).Plan.PortableToolPlan
 	requested := clonePortableToolPlanForReuseTestV1(current)
-	requested.Tools[0].Provenance.Revision = "2"
+	requested.Tools[0].Provenance.Revision += "0"
 
 	matched, err := portableToolSelectionsMatchCurrentBuildV1(current, requested)
 	if err != nil || matched {

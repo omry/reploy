@@ -1,0 +1,2 @@
+kind: Fixed
+body: Use an official Playwright CDN mirror for the pinned Linux ffmpeg archive, with the original mirror retained as a fallback. Publish definition revision 2 without changing artifact bytes or rewriting revision 1.

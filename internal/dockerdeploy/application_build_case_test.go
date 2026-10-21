@@ -146,7 +146,7 @@ func TestApplicationBuildCasePreflightRejectsBeforeExecutionV1(t *testing.T) {
 				selected.sealed.closures = selected.Closures
 			case "different closure":
 				selected := input.Preparation.ApplicationTools
-				selected.Closures[0].Provenance.Revision = "2"
+				selected.Closures[0].Provenance.Revision += "0"
 				selected.sealed.closures = selected.Closures
 			}
 			called := false

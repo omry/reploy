@@ -71,7 +71,7 @@ func TestEmbeddedPlaywrightCatalogSelectsCompleteChromiumClosureV1(t *testing.T)
 			t.Fatalf("Playwright candidate count = %d, want 1", len(candidates))
 		}
 		candidate := candidates[0]
-		if candidate.Manifest.Version != "1.61.0" || candidate.Manifest.Revision != "1" ||
+		if candidate.Manifest.Version != "1.61.0" || candidate.Manifest.Revision != "2" ||
 			!reflect.DeepEqual(candidate.Bindings, []string{"python"}) ||
 			!reflect.DeepEqual(candidate.Selections, map[string][]string{"browser": {"chromium"}}) ||
 			candidate.Fixture.Target != vetted.target || candidate.Fixture.BaseImage != vetted.baseImage ||
@@ -152,8 +152,12 @@ func TestEmbeddedPlaywrightCatalogPinsArtifactInventoryV1(t *testing.T) {
 		{"python-linux-amd64", "sha256:54f3b39f6eab832e33458c1dd7da0b5682aedab3b09ae731b5c59fa12fd2024e", "https://files.pythonhosted.org/packages/ab/f8/a35bf179e4ba2522c1893635094a64e407572547bd61528820fc0abc87fe/playwright-1.61.0-py3-none-manylinux1_x86_64.whl", "https://pypi.org/project/playwright/1.61.0/"},
 	}
 	for _, want := range sources {
-		source := embeddedRecordV1[*ArtifactSourceRecordV1](t, "tool:playwright/releases/1.61.0/revisions/1/sources/"+want.id)
-		if source.SHA256 != canonical.Digest(want.sha256) || !reflect.DeepEqual(source.Mirrors, []string{want.mirror}) ||
+		source := embeddedRecordV1[*ArtifactSourceRecordV1](t, "tool:playwright/releases/1.61.0/revisions/2/sources/"+want.id)
+		mirrors := []string{want.mirror}
+		if want.id == "ffmpeg-linux-amd64" {
+			mirrors = append([]string{"https://cdn.playwright.dev/builds/ffmpeg/1011/ffmpeg-linux.zip"}, mirrors...)
+		}
+		if source.SHA256 != canonical.Digest(want.sha256) || !reflect.DeepEqual(source.Mirrors, mirrors) ||
 			!reflect.DeepEqual(source.Provenance, []string{want.provenance}) || len(source.Diagnostics) != 0 {
 			t.Fatalf("embedded Playwright source %q = %#v", want.id, source)
 		}

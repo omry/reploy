@@ -9,4 +9,4 @@ fields:
   license: https://github.com/microsoft/playwright-python/blob/main/LICENSE
   documentation: https://playwright.dev/python/docs/intro
   releases:
-    - {id: tool:playwright/releases/1.61.0/revisions/1/manifest, digest: ""}
+    - {id: tool:playwright/releases/1.61.0/revisions/2/manifest, digest: ""}

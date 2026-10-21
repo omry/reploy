@@ -133,7 +133,7 @@ func TestPortableToolCaseEvidenceRejectsChangedBindingsAndFailedOutput(t *testin
 		"scope":                  func(b *portableToolCaseEvidenceBundleV1) { b.Scope = "application:other" },
 		"tool":                   func(b *portableToolCaseEvidenceBundleV1) { b.Evidence.Tool = "other" },
 		"version":                func(b *portableToolCaseEvidenceBundleV1) { b.Evidence.Version = "1.0.0" },
-		"revision":               func(b *portableToolCaseEvidenceBundleV1) { b.Evidence.Revision = "2" },
+		"revision":               func(b *portableToolCaseEvidenceBundleV1) { b.Evidence.Revision += "0" },
 		"manifest":               func(b *portableToolCaseEvidenceBundleV1) { b.Evidence.ManifestDigest = rendererDigest("f") },
 		"closure":                func(b *portableToolCaseEvidenceBundleV1) { b.Evidence.SelectedClosureDigest = rendererDigest("f") },
 		"context":                func(b *portableToolCaseEvidenceBundleV1) { b.Evidence.Context = "build" },

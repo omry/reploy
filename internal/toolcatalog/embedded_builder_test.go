@@ -105,7 +105,7 @@ func TestEmbeddedPortableToolLockRecordsV1ResolvesBindingWheelManifestAndSource(
 	if wheel.Descriptor.LogicalPath != "wheels/playwright-1.61.0-py3-none-manylinux1_x86_64.whl" ||
 		wheel.Descriptor.Kind != "wheel" || wheel.Descriptor.Size != "47421381" ||
 		wheel.Descriptor.SHA256 != "sha256:54f3b39f6eab832e33458c1dd7da0b5682aedab3b09ae731b5c59fa12fd2024e" ||
-		wheel.Source.Reference.ID != "tool:playwright/releases/1.61.0/revisions/1/sources/python-linux-amd64" ||
+		wheel.Source.Reference.ID != "tool:playwright/releases/1.61.0/revisions/2/sources/python-linux-amd64" ||
 		len(wheel.Mirrors) != 1 {
 		t.Fatalf("binding wheel projection = %#v", wheel)
 	}

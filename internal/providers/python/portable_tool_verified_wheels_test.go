@@ -189,9 +189,9 @@ func TestPortableToolPythonVerifiedWheelsV1SelectedPlaywrightWheel(t *testing.T)
 	artifactRecord := portableToolProjectionDefinitionRecordForTest(t,
 		"../../toolcatalog/definitions/playwright/releases/1.61.0/bindings/python/linux-amd64.json")
 	manifestRecord := portableToolProjectionDefinitionRecordForTest(t,
-		"../../toolcatalog/definitions/playwright/releases/1.61.0/revisions/1/manifest.json")
+		"../../toolcatalog/definitions/playwright/releases/1.61.0/revisions/2/manifest.json")
 	sourceRecordData := portableToolProjectionDefinitionRecordForTest(t,
-		"../../toolcatalog/definitions/playwright/releases/1.61.0/revisions/1/sources/python-linux-amd64.json")
+		"../../toolcatalog/definitions/playwright/releases/1.61.0/revisions/2/sources/python-linux-amd64.json")
 	contractReference := portableToolProjectionReferenceForTest(t, contractRecord.Value["id"].(string), contractRecord)
 	artifactReference := portableToolProjectionReferenceForTest(t, artifactRecord.Value["id"].(string), artifactRecord)
 	manifestReference := portableToolProjectionReferenceForTest(t, manifestRecord.Value["id"].(string), manifestRecord)
@@ -201,7 +201,7 @@ func TestPortableToolPythonVerifiedWheelsV1SelectedPlaywrightWheel(t *testing.T)
 		Tools: []providers.PortableToolPlanEntryV1{{
 			Scope: "application:browser", SelectedClosureDigest: portableToolProjectionTestDigest,
 			Provenance: providers.PortableToolReleaseProvenanceV1{
-				Tool: "playwright", Version: "1.61.0", Revision: "1", ManifestDigest: manifestReference.Digest,
+				Tool: "playwright", Version: "1.61.0", Revision: manifestRecord.Value["revision"].(string), ManifestDigest: manifestReference.Digest,
 			},
 			Responsibilities: providers.PortableToolResponsibilitiesV1{
 				BindingContracts: []providers.PortableToolSelectedRecordV1{{Reference: contractReference, Record: contractRecord}},
