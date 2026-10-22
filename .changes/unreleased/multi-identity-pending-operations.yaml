@@ -1,0 +1,2 @@
+kind: Added
+body: Add private identity-mapping configuration and recovery metadata with inhibited pending intents, exact retries, and conservative reservation retention. Read selected overrides through checked regular-file handles without following replacement symlinks. Mapped execution remains unavailable.
