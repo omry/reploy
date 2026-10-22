@@ -94,6 +94,8 @@ done
 exec 3<&-
 [ "$reploy_private_environment_ready" = 1 ] || exit 70
 rm -f "$reploy_private_environment_pipe"
+# Reuse the consumed FIFO path as positive, secret-free initialization evidence.
+: > "$reploy_private_environment_pipe"
 trap - EXIT
 exec "$@" </dev/null
 `
