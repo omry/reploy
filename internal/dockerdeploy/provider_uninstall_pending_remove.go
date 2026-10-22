@@ -86,6 +86,9 @@ func retryPendingProviderUninstallRemovalWithV1(
 			err = errors.Join(err, operation.Unlock())
 		}
 	}()
+	if err := operation.RequireNoRetainedIdentityV1(); err != nil {
+		return ProviderUninstallResultV1{}, true, err
+	}
 	state, stateFound, err := operation.ReadStateV1()
 	if err != nil {
 		return ProviderUninstallResultV1{}, true, fmt.Errorf("read pending deployment removal state: %w", err)
@@ -291,7 +294,7 @@ func locatePendingProviderUninstallRemovalV1(
 func finalizePendingProviderUninstallRemovalV1(
 	deploymentDir string,
 	tombstone string,
-) error {
+) (err error) {
 	expectedTombstone, err := providerUninstallTombstoneV1(deploymentDir)
 	if err != nil {
 		return err
@@ -315,6 +318,28 @@ func finalizePendingProviderUninstallRemovalV1(
 	}
 	if tombstoneStateFound && controlStateFound {
 		return fmt.Errorf("pending deployment removal has state in both %s and %s", tombstone, control)
+	}
+	stateRoot := control
+	if tombstoneStateFound {
+		stateRoot = tombstone
+	}
+	operation, err := deploy.AcquireExistingOperationLock(context.Background(), stateRoot)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, operation.Unlock()) }()
+	if err := operation.RequireNoRetainedIdentityV1(); err != nil {
+		return err
+	}
+	state, found, err := operation.ReadStateV1()
+	if err != nil || !found || state.Deployment == nil || state.Current == nil || state.Deployment.Installation.TargetDir != deploymentDir {
+		return errors.Join(fmt.Errorf("pending finalizer requires exact retained installed authority"), err)
+	}
+	// Windows cannot move or remove .reploy while these handles remain open.
+	// Isolated installed state cannot enroll a new mapping owner; validate it
+	// under the lock, then release before ordinary pending-directory cleanup.
+	if err := operation.Unlock(); err != nil {
+		return err
 	}
 	if tombstoneStateFound {
 		controlFound, err := requirePendingRemovalDirectoryV1(control)

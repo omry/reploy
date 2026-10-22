@@ -210,6 +210,9 @@ func (lock *OperationLock) requireTerminalPublicationCompleteLocked() error {
 }
 
 func (lock *OperationLock) requireExactTerminalStateLocked(expected StateV1) error {
+	if err := requireNoRetainedIdentityPathV1(filepath.Join(filepath.Dir(lock.path), stateFilenameV1)); err != nil {
+		return err
+	}
 	if err := lock.requireHeldLocked(); err != nil {
 		return err
 	}

@@ -321,6 +321,9 @@ func removeStagedDeploymentV1(
 func readStagedDeploymentForRemovalV1(
 	operation *deploy.OperationLock,
 ) (deploy.StateV1, string, error) {
+	if err := operation.RequireNoRetainedIdentityV1(); err != nil {
+		return deploy.StateV1{}, "", err
+	}
 	state, found, err := operation.ReadStateV1()
 	if err != nil {
 		return deploy.StateV1{}, "", fmt.Errorf("read staged deployment for removal: %w", err)

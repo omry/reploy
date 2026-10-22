@@ -65,6 +65,9 @@ func (lock *OperationLock) PrepareLegacyComponentsStagingRecoveryV1(
 	validatePackage PackageRequestValidator,
 	preserveSelectedPlatform bool,
 ) (LegacyComponentsStagingRecoveryV1, error) {
+	if err := lock.RequireNoRetainedIdentityV1(); err != nil {
+		return LegacyComponentsStagingRecoveryV1{}, err
+	}
 	if selectPlatform == nil {
 		return LegacyComponentsStagingRecoveryV1{}, fmt.Errorf(
 			"recover legacy staging state requires a platform selector",
