@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -207,12 +208,8 @@ func runCurrentWorkloadV1(ctx context.Context, input CurrentWorkloadRunInputV1, 
 		if err != nil {
 			return recoverStop(fmt.Errorf("prepare private workload environment: %w", err))
 		}
-		if privateEnvironment.Present {
-			if err := validatePrivateWorkloadEnvironmentIsolationV1(dir, planned.Docker); err != nil {
-				return recoverStop(err)
-			}
-			planned.Docker.PrivateEnvironment = true
-		}
+		// Keep private launcher mode out of caller preflight until the lifecycle
+		// record proves whether this is reuse or a fresh process.
 		privateRuntimeMasks, err = privateRuntimeMasksV1(planned.Docker)
 		if err != nil {
 			return recoverStop(fmt.Errorf("snapshot private runtime masks: %w", err))
@@ -341,8 +338,77 @@ func stopOwnedCurrentWorkloadV1(ctx context.Context, operation *deploy.Operation
 			spec = composeCommandWithProject(installation.TargetDir, installation.ComposeProject, "down", "--remove-orphans")
 		}
 	}
+	record, found, recordErr := operation.ReadWorkloadLifecycleV1()
+	var stateErr error
+	writable := operation.RequireWritable() == nil
+	if recordErr == nil && found && writable {
+		record.State = "stopping"
+		stateErr = operation.WriteWorkloadLifecycleV1(record)
+	}
+	if err := operation.RequireRetirement(); err != nil {
+		return errors.Join(recordErr, stateErr, err)
+	}
 	options.Context = ctx
-	return runRuntimeCommand(spec, options)
+	stopErr := runRuntimeCommand(spec, options)
+	// A command result alone cannot prove shutdown, including recovery when
+	// build validation is unavailable. Inspect only this recorded deployment.
+	checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), privateWorkloadEnvironmentTimeoutV1)
+	defer cancel()
+	inspect, err := RuntimeCommand(dir, "ps")
+	if err != nil {
+		return errors.Join(stopErr, recordErr, stateErr, err)
+	}
+	inspect.Args = append(inspect.Args, "--all", "--quiet")
+	pinned, run, err := bindPinnedDockerCommandRunnerV1(checkCtx, inspect, options.DockerPreflightTimeout)
+	if err != nil {
+		return errors.Join(stopErr, recordErr, stateErr, err)
+	}
+	recordedID := ""
+	if recordErr == nil && found {
+		expected, err := privateWorkloadRecordV1(pinned, record.Runtime)
+		if err != nil || record.Endpoint != expected.Endpoint {
+			return errors.Join(stopErr, recordErr, stateErr, fmt.Errorf("recorded workload shutdown endpoint is unconfirmed"), err)
+		}
+		recordedID = record.ContainerID
+	}
+	if err := confirmRecordedWorkloadStoppedV1(checkCtx, pinned, recordedID, options, run); err != nil {
+		return errors.Join(stopErr, recordErr, stateErr, err)
+	}
+	if recordErr == nil && found && writable {
+		record.State = "down"
+		stateErr = errors.Join(stateErr, operation.WriteWorkloadLifecycleV1(record))
+	}
+	return errors.Join(stopErr, recordErr, stateErr)
+}
+
+func confirmRecordedWorkloadStoppedV1(ctx context.Context, command CommandSpec, recordedID string, options RunOptions, run commandRunner) error {
+	var output bytes.Buffer
+	options.Context, options.Stdin, options.Stdout, options.Stderr = ctx, nil, &output, nil
+	if err := run(command, options); err != nil {
+		return fmt.Errorf("observe recorded deployment shutdown: %w", err)
+	}
+	ids := strings.Fields(output.String())
+	if recordedID != "" {
+		ids = append(ids, recordedID)
+	}
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if len(id) != 64 || strings.Trim(id, "0123456789abcdef") != "" {
+			return fmt.Errorf("recorded deployment shutdown returned invalid container identity")
+		}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		current, err := inspectPrivateWorkloadContainerV1(ctx, command, id, options, run)
+		if err != nil {
+			return err
+		}
+		if current.Running {
+			return fmt.Errorf("recorded deployment shutdown is unconfirmed; workload is still stopping")
+		}
+	}
+	return nil
 }
 
 func currentBuildRecoveryMessageV1(state deploy.StateV1, problem string) string {

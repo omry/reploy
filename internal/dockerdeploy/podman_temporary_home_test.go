@@ -1,6 +1,8 @@
 package dockerdeploy
 
 import (
+	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/deploy"
 	"reflect"
 	"slices"
 	"strings"
@@ -76,5 +78,50 @@ func TestPodmanTemporaryHomeComposeUsesTrustedSetupOnly(t *testing.T) {
 	// A second translation is rejected instead of duplicating setup authority.
 	if err := preparePodmanTemporaryHomeCompose(service); err == nil {
 		t.Fatal("accepted noncanonical translated input")
+	}
+}
+
+func TestPodmanPrivateEnvironmentLauncherRetainsIdentityAndMountRules(t *testing.T) {
+	command := []string{"sandbox-exec", "--uid", "1000", "--gid", "1001", "--public", "deny", "--local", "deny", "--ambiguous", "require-both", "--private-environment", "--", "/bin/echo", "--uid", "9999"}
+	mount, translated, err := podmanTemporaryHome("/mnt/reploy-home:rw,noexec,nosuid,nodev,size=64m,mode=0700,uid=1000,gid=1001", command)
+	if err != nil || strings.Contains(mount, "uid=") || !slices.Equal(translated[2:], command[1:]) {
+		t.Fatal(mount, translated, err)
+	}
+	uid, gid, err := podmanApplicationIdentity(translated)
+	if err != nil || uid != 1000 || gid != 1001 {
+		t.Fatal(uid, gid, err)
+	}
+	duplicate := slices.Insert(slices.Clone(command), 1, "--private-environment")
+	if _, _, err := podmanTemporaryHome("/mnt/reploy-home:rw,noexec,nosuid,nodev,size=64m,mode=0700,uid=1000,gid=1001", duplicate); err == nil {
+		t.Fatal("duplicate boolean startup option accepted")
+	}
+}
+
+func TestPodmanMetadataShadowMountsRemainEmpty(t *testing.T) {
+	dir := t.TempDir()
+	plan := DockerExecutionPlan{ContainerName: "mask", Image: "image", DeploymentDir: dir, Sandbox: newApplicationSandboxPlanV1(RuntimeUserPlan{UID: 1000, GID: 1001, DockerUser: "1000:1001"}), Mounts: []MountExecutionPlan{{Name: "workspace", Mode: blueprint.MountBind, Source: dir, SourceKind: deploy.RuntimeMountSourceDirectory, Target: "/workspace"}}}
+	spec, err := TransientCommandSpec(plan, ResolvedEnvironmentCommand{Argv: []string{"/bin/true"}}, nil, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	translated, err := preparePodmanTemporaryHomeCommand(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical := "/workspace/.reploy:" + privateRuntimeDirectoryMaskOptionsV1
+	if !slices.Contains(spec.Args, canonical) || !slices.Contains(translated.Args, canonical+",notmpcopyup") {
+		t.Fatal("transient mask copied metadata or changed restrictions", translated.Args)
+	}
+	data := "user: '0:0'\nentrypoint: [/reploy-probe]\ncommand: [restricted-exec, --uid, '1000', --gid, '1001', --, /bin/true]\ncap_add: [SETGID, SETUID, SETPCAP]\ntmpfs: ['/mnt/reploy-home:rw,noexec,nosuid,nodev,size=64m,mode=0700,uid=1000,gid=1001', '" + canonical + "', '/unrelated:rw,mode=1777']\n"
+	var document yaml.Node
+	if err := yaml.Unmarshal([]byte(data), &document); err != nil {
+		t.Fatal(err)
+	}
+	if err := preparePodmanTemporaryHomeCompose(document.Content[0]); err != nil {
+		t.Fatal(err)
+	}
+	mounts, _ := composePodmanField(document.Content[0], "tmpfs")
+	if mounts.Content[1].Value != canonical+",notmpcopyup" || mounts.Content[2].Value != "/unrelated:rw,mode=1777" {
+		t.Fatal("Compose mask did not preserve the empty shadow contract")
 	}
 }

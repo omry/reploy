@@ -33,20 +33,22 @@ type CurrentWorkloadLifecycleInputV1 struct {
 }
 
 type currentWorkloadLifecycleBackendV1 struct {
-	acquire      func(context.Context, string) (*deploy.OperationLock, error)
-	planStart    func(CurrentRuntimePlanV1, CurrentBuild) (LifecyclePlan, error)
-	planStop     func(CurrentRuntimePlanV1, CurrentBuild) (LifecyclePlan, error)
-	planRestart  func(CurrentRuntimePlanV1, CurrentBuild) (LifecyclePlan, error)
-	execute      func(context.Context, LifecyclePlan, LifecycleExecutor) error
-	runPublished func(context.Context, PublishedRuntimeContainerInput, PublishedRuntimeContainerRunnerV1) error
-	command      func(string, string) (CommandSpec, error)
-	transient    func(DockerExecutionPlan, ResolvedEnvironmentCommand, *transientOutputMount, bool, bool) (CommandSpec, error)
-	cleanup      func(string) CommandSpec
-	runTemporary func(temporaryCommandRunner, CommandSpec, CommandSpec, RunOptions) error
-	runCommand   func(CommandSpec, RunOptions) error
-	inject       func(context.Context, string, string, ApplicationSandboxPlanV1, privateWorkloadEnvironmentV1, RunOptions, commandRunner) error
-	readiness    func(context.Context, EndpointExecutionPlan, func(context.Context) error) error
-	serviceCheck func(string, string, time.Duration) error
+	acquire       func(context.Context, string) (*deploy.OperationLock, error)
+	planStart     func(CurrentRuntimePlanV1, CurrentBuild) (LifecyclePlan, error)
+	planStop      func(CurrentRuntimePlanV1, CurrentBuild) (LifecyclePlan, error)
+	planRestart   func(CurrentRuntimePlanV1, CurrentBuild) (LifecyclePlan, error)
+	execute       func(context.Context, LifecyclePlan, LifecycleExecutor) error
+	runPublished  func(context.Context, PublishedRuntimeContainerInput, PublishedRuntimeContainerRunnerV1) error
+	command       func(string, string) (CommandSpec, error)
+	transient     func(DockerExecutionPlan, ResolvedEnvironmentCommand, *transientOutputMount, bool, bool) (CommandSpec, error)
+	cleanup       func(string) CommandSpec
+	runTemporary  func(temporaryCommandRunner, CommandSpec, CommandSpec, RunOptions) error
+	runCommand    func(CommandSpec, RunOptions) error
+	bindCommand   func(context.Context, CommandSpec, time.Duration) (CommandSpec, commandRunner, error)
+	inject        func(context.Context, string, string, ApplicationSandboxPlanV1, privateWorkloadEnvironmentV1, RunOptions, commandRunner) error
+	readiness     func(context.Context, EndpointExecutionPlan, func(context.Context) error) error
+	serviceCheck  func(string, string, time.Duration) error
+	publishInputs func(*deploy.OperationLock, string, CurrentRuntimePlanV1) (bool, error)
 }
 
 func RunCurrentWorkloadLifecycleV1(ctx context.Context, input CurrentWorkloadLifecycleInputV1) error {
@@ -61,16 +63,18 @@ func RunCurrentWorkloadLifecycleV1(ctx context.Context, input CurrentWorkloadLif
 		planRestart: func(plan CurrentRuntimePlanV1, current CurrentBuild) (LifecyclePlan, error) {
 			return planLockedRestartLifecycleV1(plan.Document, plan.Docker, current.Lock.Catalog)
 		},
-		execute:      ExecuteLifecycle,
-		runPublished: RunPublishedRuntimeContainerV1,
-		command:      RuntimeCommand,
-		transient:    TransientCommandSpec,
-		cleanup:      TemporaryContainerCleanupCommand,
-		runTemporary: runTemporaryContainerCommand,
-		runCommand:   runRuntimeCommand,
-		inject:       injectPrivateWorkloadEnvironmentV1,
-		readiness:    WaitForHTTPReadinessWithServiceCheck,
-		serviceCheck: requireComposeServiceRunning,
+		execute:       ExecuteLifecycle,
+		runPublished:  RunPublishedRuntimeContainerV1,
+		command:       RuntimeCommand,
+		transient:     TransientCommandSpec,
+		cleanup:       TemporaryContainerCleanupCommand,
+		runTemporary:  runTemporaryContainerCommand,
+		runCommand:    runRuntimeCommand,
+		bindCommand:   bindPinnedDockerCommandRunnerV1,
+		inject:        injectPrivateWorkloadEnvironmentV1,
+		readiness:     WaitForHTTPReadinessWithServiceCheck,
+		serviceCheck:  requireComposeServiceRunning,
+		publishInputs: PublishCurrentRuntimeInputsV1,
 	})
 }
 
@@ -91,7 +95,7 @@ func runCurrentWorkloadLifecycleV1(ctx context.Context, input CurrentWorkloadLif
 	if input.Action != "up" && input.Action != "down" && input.Action != "restart" {
 		return fmt.Errorf("current workload lifecycle action must be up, down, or restart")
 	}
-	if backend.acquire == nil || backend.planStart == nil || backend.planStop == nil || backend.planRestart == nil || backend.execute == nil || backend.runPublished == nil || backend.command == nil || backend.transient == nil || backend.cleanup == nil || backend.runTemporary == nil || backend.runCommand == nil || backend.inject == nil || backend.readiness == nil || backend.serviceCheck == nil {
+	if backend.acquire == nil || backend.planStart == nil || backend.planStop == nil || backend.planRestart == nil || backend.execute == nil || backend.runPublished == nil || backend.command == nil || backend.transient == nil || backend.cleanup == nil || backend.runTemporary == nil || backend.runCommand == nil || backend.bindCommand == nil || backend.inject == nil || backend.readiness == nil || backend.serviceCheck == nil || backend.publishInputs == nil {
 		return fmt.Errorf("run current workload lifecycle requires a complete backend")
 	}
 	var lifecycle LifecyclePlan
@@ -125,8 +129,11 @@ func runCurrentWorkloadLifecycleV1(ctx context.Context, input CurrentWorkloadLif
 		}
 		return run(operation)
 	}
+	var activeOperation *deploy.OperationLock
 	runPublished := func(runCtx context.Context, invocation RuntimeInvocationV1, run PublishedRuntimeContainerRunnerV1) error {
 		return withOperation(runCtx, func(operation *deploy.OperationLock) error {
+			activeOperation = operation
+			defer func() { activeOperation = nil }()
 			return backend.runPublished(runCtx, PublishedRuntimeContainerInput{
 				Operation: operation, Store: input.Store, Environment: input.Environment,
 				DeploymentDir: input.DeploymentDir, DockerPlan: input.Plan.Docker, Invocation: invocation,
@@ -135,6 +142,85 @@ func runCurrentWorkloadLifecycleV1(ctx context.Context, input CurrentWorkloadLif
 	}
 	runOptions := input.RunOptions
 	runOptions.Context = ctx
+	var workload *workloadLifecycleV1
+	runtimeBinding := ""
+	if input.Plan.Docker.Workload != nil || input.PrivateEnvironment.Present {
+		spec, err := backend.command(input.DeploymentDir, "up")
+		if err != nil {
+			return err
+		}
+		pinned, run, err := backend.bindCommand(ctx, spec, runOptions.DockerPreflightTimeout)
+		if err != nil {
+			return err
+		}
+		runtimeBinding, err = workloadRuntimeBindingV1(input.Plan.Docker)
+		if err != nil {
+			return err
+		}
+		workload = &workloadLifecycleV1{command: pinned, containerName: input.Plan.Docker.ContainerName, run: run, options: runOptions, operation: withOperation}
+		reused, changed, err := workload.initialize(ctx, runtimeBinding, input.PrivateEnvironment.Present)
+		if err != nil {
+			return err
+		}
+		if input.PrivateEnvironment.Present && (input.Action == "restart" || !reused) {
+			// A private launcher is needed only for a new process. A confirmed
+			// reuse keeps the attempt mode selected by its lifecycle record.
+			input.Plan.Docker.PrivateEnvironment = true
+			if err := validatePrivateWorkloadEnvironmentIsolationV1(input.DeploymentDir, input.Plan.Docker); err != nil {
+				return err
+			}
+			if err := withOperation(ctx, func(operation *deploy.OperationLock) error {
+				if _, err := backend.publishInputs(operation, input.DeploymentDir, input.Plan); err != nil {
+					return fmt.Errorf("publish fresh private workload runtime inputs: %w", err)
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		if input.Action == "up" && reused {
+			if err := withOperation(ctx, func(operation *deploy.OperationLock) error {
+				return preserveConfirmedWorkloadRuntimeInputsV1(operation, input.DeploymentDir, input.Plan, workload.record, backend.publishInputs)
+			}); err != nil {
+				return err
+			}
+			return nil
+		}
+		if input.Action == "up" && workload.initial.Running {
+			if !changed {
+				return errors.Join(errPrivateWorkloadWasRunning, fmt.Errorf("workload startup is unconfirmed; use `reploy restart`"))
+			}
+			lifecycle, err = backend.planRestart(input.Plan, input.Current)
+			if err != nil {
+				return err
+			}
+		}
+		if input.Action == "down" || input.Action == "restart" {
+			operations := []LifecycleOperation{}
+			for _, operation := range lifecycle.Operations {
+				if !workload.initial.Running || !workload.record.StartupComplete {
+					if operation.Event == "before_stop" || operation.Event == "after_stop" {
+						continue
+					}
+				} else if workload.record.State == "stopping" && operation.Event == "before_stop" {
+					// A prior admitted stop already completed before_stop.
+					// Resume shutdown, then run the unfinished after_stop.
+					continue
+				}
+				operations = append(operations, operation)
+			}
+			lifecycle.Operations = operations
+		}
+		if input.StartCommand != nil {
+			operations := []LifecycleOperation{}
+			for _, operation := range lifecycle.Operations {
+				if operation.Event != "before_start" && operation.Event != "after_start" {
+					operations = append(operations, operation)
+				}
+			}
+			lifecycle.Operations = operations
+		}
+	}
 	executor := LifecycleExecutor{
 		RunCommand: func(commandCtx context.Context, command ResolvedEnvironmentCommand) error {
 			commandPlan, err := effectiveCommandDockerPlanV1(input.Plan.Document, input.Plan.Docker, command.Name)
@@ -193,11 +279,21 @@ func runCurrentWorkloadLifecycleV1(ctx context.Context, input CurrentWorkloadLif
 					}
 					options := runOptions
 					options.Context = runCtx
+					if workload != nil {
+						environment := input.PrivateEnvironment
+						environment.Operation, environment.RuntimeBinding = activeOperation, runtimeBinding
+						spec.Env = workload.command.Env
+						started, err := startAndInjectPrivateWorkloadEnvironmentWithV1(runCtx, spec,
+							input.Plan.Docker.ContainerName, input.Plan.Docker.Sandbox,
+							environment, options, workload.run, backend.inject)
+						workload.started = started
+						return err
+					}
 					return backend.runCommand(spec, options)
 				})
 			}
 			err = launch(startCtx)
-			if err != nil && input.Action == "up" && input.StartCommand == nil && isStaleDockerNetworkError(err) {
+			if err != nil && input.Action == "up" && input.StartCommand == nil && (workload == nil || !workload.started.Owned) && !errors.Is(err, errPrivateWorkloadWasRunning) && isStaleDockerNetworkError(err) {
 				if input.RunOptions.Stderr != nil {
 					fmt.Fprintf(input.RunOptions.Stderr, "%v\n", err)
 				}
@@ -221,27 +317,13 @@ func runCurrentWorkloadLifecycleV1(ctx context.Context, input CurrentWorkloadLif
 			if err != nil {
 				return err
 			}
-			if input.PrivateEnvironment.Present && input.StartCommand == nil {
-				if err := backend.inject(
-					startCtx,
-					spec.Name,
-					input.Plan.Docker.ContainerName,
-					input.Plan.Docker.Sandbox,
-					input.PrivateEnvironment,
-					runOptions,
-					backend.runCommand,
-				); err != nil {
-					down, downErr := backend.command(input.DeploymentDir, "down")
-					if downErr != nil {
-						return errors.Join(err, downErr)
-					}
-					cleanupOptions := runOptions
-					cleanupOptions.Context = context.WithoutCancel(startCtx)
-					cleanupOptions.Stdin = nil
-					cleanupOptions.Stdout = nil
-					cleanupOptions.Stderr = nil
-					return errors.Join(err, cleanupPrivateWorkloadContainerV1(down, cleanupOptions, backend.runCommand))
+			if workload != nil && input.StartCommand != nil {
+				current, err := workload.inspect(startCtx)
+				if err != nil {
+					return err
 				}
+				workload.started = privateWorkloadStartResultV1{ContainerID: current.ID, StartedAt: current.StartedAt,
+					Owned: current.ID != "" && (current.ID != workload.initial.ID || !workload.initial.Running && current.StartedAt != workload.initial.StartedAt)}
 			}
 			return backend.serviceCheck(input.DeploymentDir, "", input.RunOptions.DockerPreflightTimeout)
 		},
@@ -258,10 +340,39 @@ func runCurrentWorkloadLifecycleV1(ctx context.Context, input CurrentWorkloadLif
 			}
 			options := runOptions
 			options.Context = stopCtx
-			return withOperation(stopCtx, func(*deploy.OperationLock) error {
-				return backend.runCommand(spec, options)
-			})
+			stop := func() error {
+				if input.StopCommand != nil {
+					return backend.runCommand(spec, options)
+				}
+				return withOperation(stopCtx, func(*deploy.OperationLock) error {
+					return workloadRunCommand(spec, options, workload, backend.runCommand)
+				})
+			}
+			if workload != nil {
+				return workload.stop(stopCtx, stop)
+			}
+			return stop()
 		},
 	}
-	return backend.execute(ctx, lifecycle, executor)
+	err = backend.execute(ctx, lifecycle, executor)
+	if workload == nil {
+		return err
+	}
+	if err != nil {
+		return workload.rollback(ctx, err)
+	}
+	if input.Action != "down" {
+		if err := workload.complete(ctx); err != nil {
+			return workload.rollback(ctx, err)
+		}
+	}
+	return nil
+}
+
+func workloadRunCommand(spec CommandSpec, options RunOptions, workload *workloadLifecycleV1, run commandRunner) error {
+	if workload != nil {
+		spec.Env = workload.command.Env
+		return workload.run(spec, options)
+	}
+	return run(spec, options)
 }

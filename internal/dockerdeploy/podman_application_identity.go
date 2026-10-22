@@ -42,7 +42,7 @@ func podmanApplicationIdentity(command []string) (uint32, uint32, error) {
 	}
 	ids := map[string]uint32{}
 	for i := 1; i < separator; i++ {
-		if command[i] == podmanPrepareTemporaryHome {
+		if command[i] == podmanPrepareTemporaryHome || command[i] == "--private-environment" {
 			continue
 		}
 		if i+1 >= separator {

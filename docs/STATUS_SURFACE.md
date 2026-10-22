@@ -77,7 +77,7 @@ template error.
 | `{{ app.id }}` | Blueprint app id. |
 | `{{ app.name }}` | Human-facing app name when known; otherwise the app id. |
 | `{{ reploy.phase }}` | Deployment phase, such as `staged` or `deployed`. |
-| `{{ reploy.state }}` | App lifecycle state: `running`, `stopped`, `starting`, `unhealthy`, `unknown`, or `unsupported`. |
+| `{{ reploy.state }}` | Confirmed app lifecycle state: `down`, `starting`, `up`, or `stopping`. If observation fails, render `unknown` rather than treating a last-confirmed state as current. Unsupported backends render `unsupported`; neither value is an additional lifecycle stage. |
 | `{{ reploy.health }}` | Health summary: `pass`, `fail`, `unknown`, `not_declared`, or `unsupported`. |
 | `{{ reploy.url }}` | Primary app URL when Reploy can derive one from installed state or blueprint metadata. |
 | `{{ reploy.install_dir }}` | Installed deployment directory. |
@@ -176,7 +176,7 @@ If a blueprint does not declare a status template, Reploy should print a compact
 default:
 
 ```text
-State: running
+State: up
 Health: unknown
 URL: https://127.0.0.1:8075
 ```

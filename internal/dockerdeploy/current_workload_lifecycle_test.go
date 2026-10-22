@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -179,15 +180,91 @@ func TestRunCurrentWorkloadLifecycleV1InjectsBeforeServiceCheck(t *testing.T) {
 	private := privateWorkloadEnvironmentV1{Present: true, Payload: []byte("TOKEN=value\n\n")}
 	err = runCurrentWorkloadLifecycleV1(t.Context(), CurrentWorkloadLifecycleInputV1{
 		Operation: operation, Environment: "demo", DeploymentDir: dir, Action: "up",
-		Plan:               CurrentRuntimePlanV1{Docker: DockerExecutionPlan{ContainerName: "demo", PrivateEnvironment: true}},
+		Plan:               CurrentRuntimePlanV1{Docker: DockerExecutionPlan{DeploymentDir: dir, ContainerName: "demo", Sandbox: testApplicationSandboxPlanV1(1000, 1000), PrivateEnvironment: true, Workload: &WorkloadExecutionPlan{Argv: []string{"/bin/true"}}}},
 		PrivateEnvironment: private,
 	}, backend)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"plan start", "gate workload", "command up", "run compose-up", "inject private environment", "service check"}
+	want := []string{"plan start", "command up", "gate workload", "command up", "run compose-up", "inject private environment", "service check"}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("private lifecycle order = %v, want %v", order, want)
+	}
+}
+
+func TestRunCurrentWorkloadLifecycleV1RejectsFreshPrivateRestartPoliciesV1(t *testing.T) {
+	for _, action := range []string{"up", "restart"} {
+		for _, policy := range []string{"always", "on-failure"} {
+			t.Run(action+"/"+policy, func(t *testing.T) {
+				fixture := newWorkloadLifecycleFixtureV1(t)
+				dir := filepath.Dir(filepath.Dir(fixture.operation.Path()))
+				order := []string{}
+				backend := currentWorkloadLifecycleTestBackend(t, LifecyclePlan{Operations: []LifecycleOperation{{Kind: LifecycleStart, Event: "start"}}}, &order)
+				backend.command = func(_ string, action string) (CommandSpec, error) {
+					command := fixture.command
+					command.Args = []string{"compose", action}
+					return command, nil
+				}
+				backend.bindCommand = func(_ context.Context, spec CommandSpec, _ time.Duration) (CommandSpec, commandRunner, error) {
+					return spec, fixture.run, nil
+				}
+				input := CurrentWorkloadLifecycleInputV1{
+					Operation: fixture.operation, Environment: "demo", DeploymentDir: dir, Action: action,
+					Plan: CurrentRuntimePlanV1{Docker: DockerExecutionPlan{
+						DeploymentDir: dir, ContainerName: "demo", Restart: policy,
+						Sandbox:  testApplicationSandboxPlanV1(1000, 1000),
+						Workload: &WorkloadExecutionPlan{Argv: []string{"/bin/true"}},
+					}},
+					PrivateEnvironment: fixture.environment,
+				}
+				err := runCurrentWorkloadLifecycleV1(t.Context(), input, backend)
+				if err == nil || !strings.Contains(err.Error(), "Reploy-managed restart") {
+					t.Fatalf("fresh private %s with restart=%s error = %v", action, policy, err)
+				}
+				if fixture.starts != 0 || fixture.stops != 0 || fixture.injections != 0 || strings.Contains(strings.Join(order, ","), "run compose-up") {
+					t.Fatalf("fresh private policy rejection mutated workload: starts=%d stops=%d relays=%d order=%v", fixture.starts, fixture.stops, fixture.injections, order)
+				}
+			})
+		}
+	}
+}
+
+func TestRunCurrentWorkloadLifecycleV1PublishesFreshPrivateModeBeforeStartV1(t *testing.T) {
+	fixture := newWorkloadLifecycleFixtureV1(t)
+	dir := filepath.Dir(filepath.Dir(fixture.operation.Path()))
+	order := []string{}
+	backend := currentWorkloadLifecycleTestBackend(t, LifecyclePlan{Operations: []LifecycleOperation{{Kind: LifecycleStart, Event: "start"}}}, &order)
+	backend.command = func(_ string, action string) (CommandSpec, error) {
+		command := fixture.command
+		command.Args = []string{"compose", action}
+		return command, nil
+	}
+	backend.bindCommand = func(_ context.Context, spec CommandSpec, _ time.Duration) (CommandSpec, commandRunner, error) {
+		return spec, fixture.run, nil
+	}
+	backend.inject = fixture.inject
+	published := 0
+	backend.publishInputs = func(_ *deploy.OperationLock, _ string, plan CurrentRuntimePlanV1) (bool, error) {
+		published++
+		if !plan.Docker.PrivateEnvironment {
+			t.Fatal("fresh private mode was not published before start")
+		}
+		return true, nil
+	}
+	err := runCurrentWorkloadLifecycleV1(t.Context(), CurrentWorkloadLifecycleInputV1{
+		Operation: fixture.operation, Environment: "demo", DeploymentDir: dir, Action: "up",
+		Plan: CurrentRuntimePlanV1{Docker: DockerExecutionPlan{
+			DeploymentDir: dir, ContainerName: "demo", Restart: "no",
+			Sandbox:  testApplicationSandboxPlanV1(1000, 1000),
+			Workload: &WorkloadExecutionPlan{Argv: []string{"/bin/true"}},
+		}},
+		PrivateEnvironment: fixture.environment,
+	}, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if published != 1 || fixture.starts != 1 || fixture.injections != 1 {
+		t.Fatalf("fresh private startup publication: published=%d starts=%d relays=%d", published, fixture.starts, fixture.injections)
 	}
 }
 
@@ -476,7 +553,7 @@ func TestRunCurrentWorkloadLifecycleV1UsesOwnedStopCommand(t *testing.T) {
 
 func currentWorkloadLifecycleTestBackend(t *testing.T, lifecycle LifecyclePlan, order *[]string) currentWorkloadLifecycleBackendV1 {
 	t.Helper()
-	return currentWorkloadLifecycleBackendV1{
+	backend := currentWorkloadLifecycleBackendV1{
 		acquire: func(context.Context, string) (*deploy.OperationLock, error) {
 			t.Fatal("unexpected operation-lock acquisition")
 			return nil, nil
@@ -533,5 +610,26 @@ func currentWorkloadLifecycleTestBackend(t *testing.T, lifecycle LifecyclePlan, 
 			*order = append(*order, "service check")
 			return nil
 		},
+		publishInputs: func(*deploy.OperationLock, string, CurrentRuntimePlanV1) (bool, error) {
+			return true, nil
+		},
 	}
+	backend.bindCommand = func(_ context.Context, start CommandSpec, _ time.Duration) (CommandSpec, commandRunner, error) {
+		started := false
+		return pinDockerEndpointV1(start, "unix:///fixture.sock"), func(spec CommandSpec, options RunOptions) error {
+			if len(spec.Args) >= 2 && spec.Args[0] == "container" && spec.Args[1] == "inspect" {
+				if !started {
+					_, _ = fmt.Fprintln(options.Stderr, "Error response from daemon: No such container: demo")
+					return errors.New("container not found")
+				}
+				_, err := fmt.Fprintf(options.Stdout, `{"id":%q,"running":true,"started_at":"2026-10-20T00:00:00Z"}`, strings.Repeat("a", 64))
+				return err
+			}
+			if spec.Name == "compose-up" {
+				started = true
+			}
+			return backend.runCommand(spec, options)
+		}, nil
+	}
+	return backend
 }

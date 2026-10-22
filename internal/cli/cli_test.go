@@ -2493,6 +2493,14 @@ func TestEmbeddedControlSystemdStopRecoversThroughPublicRuntime(t *testing.T) {
 	if err := os.WriteFile(systemctl, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	dockerScript := "#!/bin/sh\ncase \"$1\" in\nversion) printf '24.0.0\\n';;\ncompose) printf '%s\\n' \"$*\" > \"$REPLOY_TEST_RECOVERY_OBSERVATION\";;\n*) exit 64;;\nesac\n"
+	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(dockerScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	observation := filepath.Join(t.TempDir(), "observation")
+	t.Setenv("DOCKER_CONTEXT", "")
+	t.Setenv("DOCKER_HOST", "unix:///tmp/reploy-test-recovery.sock")
+	t.Setenv("REPLOY_TEST_RECOVERY_OBSERVATION", observation)
 	t.Setenv("PATH", binDir)
 	t.Setenv("REPLOY_TEST_SYSTEMCTL_LOG", logPath)
 
@@ -2506,6 +2514,10 @@ func TestEmbeddedControlSystemdStopRecoversThroughPublicRuntime(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(content)); got != "stop demo-service.service" {
 		t.Fatalf("systemctl args = %q", got)
+	}
+	observed, err := os.ReadFile(observation)
+	if err != nil || !strings.Contains(string(observed), "ps --all --quiet") {
+		t.Fatalf("shutdown was not observed: %q, %v", observed, err)
 	}
 }
 
@@ -3936,7 +3948,7 @@ func TestDirectInstallPrintsSuccessFromResolvedDefaultTarget(t *testing.T) {
 		"[DEPLOYED : demo] installed successfully",
 		"[DEPLOYED : demo] location: " + installTarget,
 		"[DEPLOYED : demo] control: " + filepath.Join(installTarget, "demo"),
-		"[DEPLOYED : demo] status: running",
+		"[DEPLOYED : demo] status: up",
 		"[DEPLOYED : demo] inspector url: http://127.0.0.1:19076",
 	} {
 		if !strings.Contains(stdout, want) {

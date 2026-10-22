@@ -3,12 +3,15 @@
 package probe
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -22,6 +25,44 @@ const (
 	secureNoAmbientRaiseV1       = 1 << 6
 	secureNoAmbientRaiseLockedV1 = 1 << 7
 )
+
+const trustedStartupVerifierExecutableV1 = "/reploy-probe"
+
+func applicationLaunchProofV1(commandLine []byte) error {
+	end := bytes.IndexByte(commandLine, 0)
+	if end <= 0 {
+		return fmt.Errorf("application process command is unavailable")
+	}
+	if string(commandLine[:end]) == trustedStartupVerifierExecutableV1 {
+		return fmt.Errorf("trusted startup verifier has not completed application exec")
+	}
+	return nil
+}
+
+func waitForApplicationLaunchV1() error {
+	deadline := time.Now().Add(privateEnvironmentDeadlineV1)
+	for {
+		// The canonical Compose input explicitly disables init. PID 1 is
+		// therefore the trusted verifier until its direct application exec.
+		// cmdline remains readable after the verifier drops UID/capabilities;
+		// the ptrace-gated /proc/1/exe link does not.
+		process, err := os.Open("/proc/1/cmdline")
+		if err != nil {
+			return fmt.Errorf("read application process command: %w", err)
+		}
+		commandLine, readErr := io.ReadAll(io.LimitReader(process, 65536))
+		closeErr := process.Close()
+		if readErr != nil || closeErr != nil {
+			return fmt.Errorf("read application process command")
+		}
+		if err := applicationLaunchProofV1(commandLine); err == nil {
+			return nil
+		}
+		if err := waitPrivateEnvironmentV1(deadline); err != nil {
+			return fmt.Errorf("application launch proof exceeded its deadline: %w", err)
+		}
+	}
+}
 
 func sandboxAndExecApplicationV1(plan sandboxExecPlanV1) error {
 	// Linux credentials, securebits, and capability bounding sets are
@@ -85,6 +126,9 @@ func sandboxAndExecApplicationV1(plan sandboxExecPlanV1) error {
 	}
 	if err := dropApplicationAuthorityV1(plan.UID, plan.GID, plan.Groups); err != nil {
 		return err
+	}
+	if plan.PrivateEnvironment {
+		return launchPrivateWorkloadEnvironmentV1(plan.Argv, environment)
 	}
 	return verifyAndExecApplication(plan.Argv, readApplicationKernelStatus, func(argv []string) error {
 		return syscall.Exec(argv[0], argv, environment)

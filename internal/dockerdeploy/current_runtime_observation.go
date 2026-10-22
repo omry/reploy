@@ -25,6 +25,7 @@ type currentRuntimeObservationBackendV1 struct {
 	acquire       func(context.Context, string) (*deploy.OperationLock, error)
 	newStore      func(string) (providerstore.Store, error)
 	readState     func(*deploy.OperationLock) (deploy.StateV1, bool, error)
+	readLifecycle func(*deploy.OperationLock) (deploy.WorkloadLifecycleV1, bool, error)
 	loadCurrent   currentBuildLoader
 	plan          func(CurrentRuntimePlanInputV1) (CurrentRuntimePlanV1, error)
 	matches       func(CurrentBuild, DockerExecutionPlan) (bool, error)
@@ -32,7 +33,7 @@ type currentRuntimeObservationBackendV1 struct {
 	command       func(string, string, RuntimeCommandOptions) (CommandSpec, error)
 	containerID   func(context.Context, DockerExecutionPlan, time.Duration) (string, error)
 	logsCommand   func(string, RuntimeCommandOptions) (CommandSpec, error)
-	status        func(context.Context, DockerExecutionPlan, time.Duration) (RuntimeStatusV1, error)
+	status        func(context.Context, *deploy.OperationLock, DockerExecutionPlan, time.Duration) (RuntimeStatusV1, error)
 	run           func(CommandSpec, RunOptions) error
 }
 
@@ -41,10 +42,13 @@ type currentRuntimeObservationBackendV1 struct {
 // providers, build images, check mutable host sources, or repair runtime files.
 func RunCurrentRuntimeObservationV1(ctx context.Context, input CurrentRuntimeObservationInputV1) error {
 	return runCurrentRuntimeObservationV1(ctx, input, currentRuntimeObservationBackendV1{
-		acquire:  deploy.AcquireOperationLock,
+		acquire:  deploy.AcquireExistingOperationLock,
 		newStore: providerstore.NewStore,
 		readState: func(operation *deploy.OperationLock) (deploy.StateV1, bool, error) {
 			return operation.ReadStateV1()
+		},
+		readLifecycle: func(operation *deploy.OperationLock) (deploy.WorkloadLifecycleV1, bool, error) {
+			return operation.ReadWorkloadLifecycleV1()
 		},
 		loadCurrent:   ValidateCurrentBuild,
 		plan:          PlanCurrentRuntimeV1,
@@ -121,6 +125,13 @@ func runCurrentRuntimeObservationV1(
 	if err != nil {
 		return err
 	}
+	if planned.Docker.Workload != nil {
+		environment, err := loadPrivateWorkloadEnvironmentV1(dir)
+		if err != nil {
+			return fmt.Errorf("inspect private workload environment: %w", err)
+		}
+		planned.Docker.PrivateEnvironment = environment.Present
+	}
 	matched, err := backend.matches(current, planned.Docker)
 	if err != nil {
 		return fmt.Errorf("runtime current-build check: %w", err)
@@ -131,11 +142,24 @@ func runCurrentRuntimeObservationV1(
 		}
 		return fmt.Errorf("%s", currentBuildRecoveryMessageV1(state, "runtime build is missing or stale"))
 	}
-	if err := backend.requireInputs(operation, dir, planned); err != nil {
+	runtimeInputsPlan := planned
+	if backend.readLifecycle != nil {
+		record, found, err := backend.readLifecycle(operation)
+		if err != nil {
+			return fmt.Errorf("read runtime lifecycle: %w", err)
+		}
+		if found && record.State == "up" && record.StartupComplete && record.ContainerID != "" &&
+			(!record.TransferClaimed || record.HandoffComplete) {
+			// The published Compose mode belongs to the confirmed process. A
+			// changed .env presence is input for a fresh start only.
+			runtimeInputsPlan.Docker.PrivateEnvironment = record.HandoffComplete
+		}
+	}
+	if err := backend.requireInputs(operation, dir, runtimeInputsPlan); err != nil {
 		return err
 	}
 	if input.Action == "status" {
-		status, err := backend.status(ctx, planned.Docker, input.RunOptions.DockerPreflightTimeout)
+		status, err := backend.status(ctx, operation, runtimeInputsPlan.Docker, input.RunOptions.DockerPreflightTimeout)
 		if err != nil {
 			return err
 		}
@@ -144,7 +168,7 @@ func runCurrentRuntimeObservationV1(
 			phase, color = deployedOutputPhase, deployedOutputColor
 		}
 		label := deploymentOutputLabel(phase, document.Environment.ID)
-		return WriteRuntimeStatusV1(newDeploymentOutputWriter(input.RunOptions.Stdout, label, color), status, planned.Docker)
+		return WriteRuntimeStatusV1(newDeploymentOutputWriter(input.RunOptions.Stdout, label, color), status, runtimeInputsPlan.Docker)
 	}
 	var spec CommandSpec
 	if input.Action == "logs" {

@@ -561,7 +561,7 @@ def run_persistent_install_smoke(
 
         status = run(control_script_command(install_dir, "status"), cwd=workdir, env=env)
         require_contains(completed_output(status), "smoke-app", "installed control status")
-        require_contains(status.stdout, "[DEPLOYED : smoke-app] status: running", "installed control status")
+        require_contains(status.stdout, "[DEPLOYED : smoke-app] status: up", "installed control status")
         require_not_contains(completed_output(status), "[smoke-app]", "installed control status")
 
         logs = run(control_script_command(install_dir, "logs"), cwd=workdir, env=env)

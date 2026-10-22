@@ -11,6 +11,20 @@ import (
 )
 
 func Main(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 1 && args[0] == "application-launch-proof-v1" {
+		if err := waitForApplicationLaunchV1(); err != nil {
+			_, _ = fmt.Fprintf(stderr, "reploy-probe: application startup: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if len(args) == 1 && args[0] == "private-environment-relay-v1" {
+		if err := relayPrivateWorkloadEnvironmentV1(stdin); err != nil {
+			_, _ = fmt.Fprintf(stderr, "reploy-probe: private startup: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 	if len(args) >= 1 && args[0] == "portable-tool-observed-exec-v1" {
 		if err := runPortableToolObservedExecV1(args[1:], stdin, stdout, stderr); err != nil {
 			_, _ = fmt.Fprintf(stderr, "reploy-probe: portable-tool observed exec: %v\n", err)
