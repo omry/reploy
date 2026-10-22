@@ -28,7 +28,7 @@ func readPrivateWorkloadEnvironmentFileV1(deploymentDir string) (content []byte,
 	descriptor, err := unix.Openat(
 		int(directory.Fd()),
 		PrivateWorkloadEnvironmentFileName,
-		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW,
+		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
 		0,
 	)
 	if errors.Is(err, unix.ENOENT) {

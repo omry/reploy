@@ -45,12 +45,9 @@ func startProviderInstallHostV1(ctx context.Context, plan providerInstallationPl
 		if err := validatePrivateWorkloadEnvironmentIsolationV1(plan.Installation.TargetDir, plan.Docker); err != nil {
 			return fmt.Errorf("validate installed private workload environment isolation: %w", err)
 		}
-		cleanup := composeCommandWithProject(plan.Installation.TargetDir, plan.Installation.ComposeProject, "down", "--remove-orphans")
-		cleanup.Name = tools.DockerPath
 		if err := startAndInjectPrivateWorkloadEnvironmentV1(
 			ctx,
 			commands.Start,
-			cleanup,
 			plan.Docker.ContainerName,
 			plan.Docker.Sandbox,
 			environment,

@@ -1,0 +1,2 @@
+kind: Fixed
+body: 'Preserve a running workload on repeated up with a private .env, bound failed secret injection and clean up only the container started by that operation. Restore read-only status, ps and logs checks for private environments.'

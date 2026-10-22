@@ -1983,9 +1983,16 @@ Docker restart policies other than `no` are incompatible with `.env`, because
 Docker cannot privately recreate this one-shot channel. Explicit Reploy
 restart remains supported. Changes to `.env` take effect when Reploy next
 creates or restarts the workload; `up` does not mutate the environment of an
-already-running process. Linux system services run the installed Reploy runtime
-as their systemd service boundary, so every systemd-managed start revalidates
-and reinjects the file before monitoring the workload container.
+already-running process. Repeated `up` preserves the running container and does
+not open a second secret relay. New, restarted and recreated workloads each
+receive one injection. The relay has a 30-second deadline. If injection fails,
+Reploy removes only the container that this startup created or started.
+
+Linux system services run the installed Reploy runtime as their systemd service
+boundary. Each managed start revalidates the file and injects it when the
+workload process starts. A process that is already running keeps its original
+environment. `status`, `ps` and `logs` select the private runtime without
+changing `.env` or creating a missing file.
 
 Installation treats `.env` as a reserved preserved path. An initial install
 copies it with defensive host permissions or ACLs. Later installs preserve the
