@@ -163,6 +163,9 @@ func publishBuild(
 			return deploy.StateV1{}, fmt.Errorf("publication cannot replace another environment's owner context")
 		}
 	}
+	if state.IdentityMapping != nil && state.IdentityMapping.PendingOperation != nil {
+		return deploy.StateV1{}, fmt.Errorf("pending identity mapping operation %s must finish before build publication", state.IdentityMapping.PendingOperation.OperationID)
+	}
 	var old *deploy.EnvironmentGenerationState
 	var oldImage *providers.RealizedImageV1
 	var oldPairs []OwnedImageReferenceV1

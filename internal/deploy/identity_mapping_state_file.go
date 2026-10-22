@@ -125,6 +125,9 @@ func (lock *OperationLock) CommitIdentityMappingV1(expectedGeneration *Environme
 		}
 		next.Revision = "1"
 	} else {
+		if old.PendingOperation != nil {
+			return StateV1{}, fmt.Errorf("pending identity mapping requires its checked operation")
+		}
 		if old.InstallationID != expectedID || mappingDecimalV1(old.Revision) != expectedRevision || expectedRevision == math.MaxUint64 {
 			return StateV1{}, fmt.Errorf("identity owner or revision changed before commit")
 		}
