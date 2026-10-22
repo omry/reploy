@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -476,7 +477,7 @@ func TestRunCurrentWorkloadLifecycleV1UsesOwnedStopCommand(t *testing.T) {
 
 func currentWorkloadLifecycleTestBackend(t *testing.T, lifecycle LifecyclePlan, order *[]string) currentWorkloadLifecycleBackendV1 {
 	t.Helper()
-	return currentWorkloadLifecycleBackendV1{
+	backend := currentWorkloadLifecycleBackendV1{
 		acquire: func(context.Context, string) (*deploy.OperationLock, error) {
 			t.Fatal("unexpected operation-lock acquisition")
 			return nil, nil
@@ -534,4 +535,20 @@ func currentWorkloadLifecycleTestBackend(t *testing.T, lifecycle LifecyclePlan, 
 			return nil
 		},
 	}
+	backend.bindCommand = func(_ context.Context, start CommandSpec, _ time.Duration) (CommandSpec, commandRunner, error) {
+		inspections := 0
+		return start, func(spec CommandSpec, options RunOptions) error {
+			if len(spec.Args) >= 2 && spec.Args[0] == "container" && spec.Args[1] == "inspect" {
+				inspections++
+				if inspections == 1 {
+					_, _ = fmt.Fprintln(options.Stderr, "Error response from daemon: No such container: demo")
+					return errors.New("container not found")
+				}
+				_, err := fmt.Fprintf(options.Stdout, `{"id":%q,"running":true,"started_at":"2026-10-20T00:00:00Z"}`, strings.Repeat("a", 64))
+				return err
+			}
+			return backend.runCommand(spec, options)
+		}, nil
+	}
+	return backend
 }

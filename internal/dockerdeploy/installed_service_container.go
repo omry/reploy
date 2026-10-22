@@ -103,19 +103,23 @@ func RunInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 	if err != nil {
 		return fmt.Errorf("bind installed service Docker endpoint: %w", err)
 	}
-	if err := startAndInjectPrivateWorkloadEnvironmentV1(
+	started, err := startAndInjectPrivateWorkloadEnvironmentWithV1(
 		ctx,
 		start,
-		cleanup,
 		plan.Docker.ContainerName,
 		plan.Docker.Sandbox,
 		environment,
 		options,
 		runDocker,
-	); err != nil {
+		injectPrivateWorkloadEnvironmentV1,
+	)
+	if err != nil {
 		return err
 	}
 	if err := notifyInstalledServiceReadyV1(); err != nil {
+		if environment.Present {
+			return errors.Join(err, cleanupPrivateWorkloadStartV1(ctx, start, started, options, runDocker))
+		}
 		return errors.Join(err, cleanupPrivateWorkloadContainerV1(cleanup, RunOptions{Context: context.WithoutCancel(ctx)}, runDocker))
 	}
 	if err := operation.Unlock(); err != nil {
@@ -129,9 +133,13 @@ func RunInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 	waitOptions.Stdin = nil
 	waitOptions.Stdout = &status
 	waitOptions.Stderr = options.Stderr
+	waitContainer := plan.Docker.ContainerName
+	if started.ContainerID != "" {
+		waitContainer = started.ContainerID
+	}
 	if err := runDocker(CommandSpec{
 		Name: dockerPath,
-		Args: []string{"wait", plan.Docker.ContainerName},
+		Args: []string{"wait", waitContainer},
 	}, waitOptions); err != nil {
 		return fmt.Errorf("wait for installed workload container: %w", err)
 	}
