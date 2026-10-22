@@ -192,6 +192,7 @@ func setDesiredStateV1(
 		Schema: StateSchemaV1, Blueprint: payload, BlueprintSource: blueprintSource,
 		Platform: platform, Overlay: overlay, Current: generation,
 		Staging: staging, Deployment: deployment,
+		IdentityMapping: current.IdentityMapping,
 	}
 	candidateBytes, err := EncodeStateV1(candidate)
 	if err != nil {
