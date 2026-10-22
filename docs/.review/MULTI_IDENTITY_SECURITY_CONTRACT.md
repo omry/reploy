@@ -3,18 +3,18 @@ artifact: swe-design-review-attestation
 schema_version: 4
 scope_key: 84dfc9009e4659d1b853c82e116ec151a71a46124836472b7e702c130fca06e5
 scope: {"kind": "path", "primary_target": "docs/MULTI_IDENTITY_SECURITY_CONTRACT.md", "repository": ".", "selector": "docs/MULTI_IDENTITY_SECURITY_CONTRACT.md"}
-review_content_identity_sha256: ca634111440cbb95c436cfdc8bbd5e08a3500ac81e1ce798857da5eb7af1488b
-target_content_identity_sha256: 5a563948b6b002f0e6037109813665d37283c1c4c414f1b69d292dabbed30e9b
+review_content_identity_sha256: 9e374bde0fd458b9e108546723f12e42a2ec6cc4bdcc0fffb66611fa73bb3d0c
+target_content_identity_sha256: 44a5f16006751c07a51d9b4879dadb7f96ec78e484cd2721c334809c8b8509dc
 baseline_content_identity_sha256: null
-target_documents: [{"executable": false, "path": "docs/MULTI_IDENTITY_SECURITY_CONTRACT.md", "repository": ".", "sha256": "fdf5026f87acfed90a63e18f02bf09d76e64ec1e4dd3b8ddbf4e6f93c030397f"}]
+target_documents: [{"executable": false, "path": "docs/MULTI_IDENTITY_SECURITY_CONTRACT.md", "repository": ".", "sha256": "7be51c521d8613331a6002506a5777ed3aafff5f5d7451b3b4eb4d5d2b369b28"}]
 baseline_documents: []
 design_dependency_documents: []
 document_repository: "."
 document_path: "docs/MULTI_IDENTITY_SECURITY_CONTRACT.md"
 document_revision_provenance: "c5f6b5d81d5222f8c758ac2a9917f6fb8a9a639f"
-document_sha256: fdf5026f87acfed90a63e18f02bf09d76e64ec1e4dd3b8ddbf4e6f93c030397f
+document_sha256: 7be51c521d8613331a6002506a5777ed3aafff5f5d7451b3b4eb4d5d2b369b28
 verdict: clean
-attested_at: 2026-10-22T13:01:08Z
+attested_at: 2026-10-22T12:39:27Z
 ---
 <!-- swe-design-review-attestation:v4 -->
 
