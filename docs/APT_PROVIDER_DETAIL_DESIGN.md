@@ -42,12 +42,16 @@ owns applications and their `os` and `python` package contributions; the
 internal `blueprint.Component` map is a derived provider projection while
 lower-level provider APIs migrate to first-class contribution identities.
 
-Known implementation discrepancies are tracked in [`BACKLOG.md`](BACKLOG.md),
-not silently normalized in this design. The APT install-record parser still
-rejects the valid optional trailing empty ` []` marker emitted by current APT,
-and bundle CLI help and diagnostics still expose obsolete component terminology.
-Those are implementation backlog items; this true-up changes no runtime
-behavior.
+The APT install-record parser accepts one optional trailing empty ` []` marker.
+It continues to validate the package, version, and architecture fields.
+It rejects nonempty, repeated, and malformed markers.
+
+Known implementation discrepancies are tracked in [`BACKLOG.md`](BACKLOG.md).
+Bundle CLI help and diagnostics still expose obsolete component terminology.
+Image-side runtime mount integrity check 2 is also unimplemented, as recorded
+in `BLUEPRINT_ENVIRONMENT_MODEL.md` and the existing P1 backlog item. The
+destination-emptiness rules below remain required design intent, not completion
+evidence for that check.
 
 ## Implemented Behavioral Cutover
 
@@ -780,7 +784,7 @@ Planning rules for the initial registry are exact:
   immutable selected image;
 - all active OS contributions on a Debian-derived image form one `apt` node and
   one dpkg authority;
-- each active application Python contribution forms `python/<application>`;
+- each active application Python contribution forms `python/application/<application>`;
 - an explicit supplier creates a structural edge from the named contribution,
   or the `base` root, to the consumer;
 - cycles among the known structural edges fail before any resolver starts;
@@ -1687,7 +1691,6 @@ The one offline installation argv is:
 -o Dpkg::Options::=--force-confdef
 -o Dpkg::Options::=--force-confold
 --assume-yes
---no-download
 --no-remove
 --no-install-recommends
 -o APT::Install-Suggests=false
@@ -1698,7 +1701,10 @@ install
 The transaction is rendered under backend network policy `none`. Each `.deb`
 operand is a `mounted-artifact` typed argument bound to its manifest/digest;
 the list is sorted by locked logical artifact path and is never split or
-glob-expanded. No option enabling unauthenticated, insecure, downgrade, held
+glob-expanded. The empty private archive cache and network isolation prevent
+undeclared acquisition. `--no-download` is omitted because the supported local
+package transaction rejects that combination, as specified in `APT_PROVIDER.md`.
+No option enabling unauthenticated, insecure, downgrade, held
 package, essential-package removal, or forced confirmation behavior is present.
 
 Any unplanned addition, removal, upgrade, status change, or base-origin change
@@ -2232,8 +2238,9 @@ inspection rejects package payload claims beneath it, and full resulting-image
 validation requires the final image to retain the same condition.
 
 During `reploy build`, after interpolation, phase selection, and generated
-mounts are known, Reploy compiles every runtime plan and full final-image
-validation checks it in this order:
+mounts are known, Reploy compiles every runtime plan. The required final-image
+validation order is below. Checks 1, 3, and 4 are implemented; check 2 remains
+the explicit image-side inspection deferral described above:
 
 1. Every destination is a normalized absolute Linux path other than `/` and
    avoids reserved kernel, Docker, secret, and Reploy namespaces. Destinations
@@ -3089,8 +3096,9 @@ without mutation.
 ## Completed Implementation Slice Acceptance Gates
 
 The provider implementation was organized into six detailed-design slices. All
-six gates were completed during the provider cutover; the table records the
-evidence boundary used for each slice.
+six architectural gates were completed during the provider cutover; the table
+records each slice's evidence boundary. This does not establish completion of
+the deferred image-side runtime mount integrity check 2.
 
 | Detailed-design slice | Acceptance gate |
 | --- | --- |
@@ -3137,6 +3145,6 @@ covered by the provider and deployment test suites. The historical slice gates
 above are the durable delivery record; no separate APT implementation plan is
 required for current work.
 
-The remaining APT parser and public CLI terminology discrepancies are explicit
-backlog items. Their presence is a deferral, not evidence that the implemented
-provider architecture is still a prototype.
+The remaining public CLI terminology discrepancies are explicit backlog items.
+Their presence is a deferral, not evidence that the implemented provider
+architecture is still a prototype.

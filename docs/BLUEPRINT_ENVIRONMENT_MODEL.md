@@ -327,9 +327,10 @@ discovers or copies arbitrary files from the transient container.
 The transient `$HOME` is operation-local workspace, not an output channel.
 Docker backs `/mnt/reploy-home` with a fresh 64 MiB tmpfs for each one-shot
 container. The mount is restricted to mode `0700`, owned by the selected
-runtime UID/GID, and removed with the container. Docker starts the resolved
-executable directly as that final numeric identity; no root bootstrap helper
-is involved. Files survive a one-shot invocation only through its selected
+runtime UID/GID, and removed with the container. Docker starts the trusted
+Reploy helper described under application networking below. The helper applies
+the sandbox policy, drops its setup authority, and executes the application as
+the selected numeric identity. Files survive a one-shot invocation only through its selected
 output contract or another writable mount declared by the blueprint. The
 persistent workload container uses the same bounded tmpfs-home policy at the
 same container path.
