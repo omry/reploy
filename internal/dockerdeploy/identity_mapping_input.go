@@ -5,11 +5,12 @@ import (
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/identitymapping"
 )
 
 // This private metadata seam does not allocate IDs or admit a workload.
 // B5 will bind its candidate to the selected generation and mapping revision.
-func loadStagedIdentityMappingV1(operation *deploy.OperationLock, dir string) (*blueprint.IdentityMappingV1, error) {
+func loadStagedIdentityMappingV1(operation *deploy.OperationLock, dir string) (*identitymapping.Geometry, error) {
 	if operation == nil {
 		return nil, fmt.Errorf("mapping input requires a deployment operation lock")
 	}
@@ -28,5 +29,5 @@ func loadStagedIdentityMappingV1(operation *deploy.OperationLock, dir string) (*
 	if err != nil {
 		return nil, err
 	}
-	return blueprint.ResolveIdentityMappingV1(document, overrides.IdentityMappingOverride())
+	return deploy.ResolveIdentityMappingGeometryV1(document, overrides.IdentityMappingOverride())
 }
