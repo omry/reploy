@@ -44,6 +44,7 @@ type currentWorkloadLifecycleBackendV1 struct {
 	cleanup      func(string) CommandSpec
 	runTemporary func(temporaryCommandRunner, CommandSpec, CommandSpec, RunOptions) error
 	runCommand   func(CommandSpec, RunOptions) error
+	bindCommand  func(context.Context, CommandSpec, time.Duration) (CommandSpec, commandRunner, error)
 	inject       func(context.Context, string, string, ApplicationSandboxPlanV1, privateWorkloadEnvironmentV1, RunOptions, commandRunner) error
 	readiness    func(context.Context, EndpointExecutionPlan, func(context.Context) error) error
 	serviceCheck func(string, string, time.Duration) error
@@ -68,6 +69,7 @@ func RunCurrentWorkloadLifecycleV1(ctx context.Context, input CurrentWorkloadLif
 		cleanup:      TemporaryContainerCleanupCommand,
 		runTemporary: runTemporaryContainerCommand,
 		runCommand:   runRuntimeCommand,
+		bindCommand:  bindPinnedDockerCommandRunnerV1,
 		inject:       injectPrivateWorkloadEnvironmentV1,
 		readiness:    WaitForHTTPReadinessWithServiceCheck,
 		serviceCheck: requireComposeServiceRunning,
@@ -91,7 +93,7 @@ func runCurrentWorkloadLifecycleV1(ctx context.Context, input CurrentWorkloadLif
 	if input.Action != "up" && input.Action != "down" && input.Action != "restart" {
 		return fmt.Errorf("current workload lifecycle action must be up, down, or restart")
 	}
-	if backend.acquire == nil || backend.planStart == nil || backend.planStop == nil || backend.planRestart == nil || backend.execute == nil || backend.runPublished == nil || backend.command == nil || backend.transient == nil || backend.cleanup == nil || backend.runTemporary == nil || backend.runCommand == nil || backend.inject == nil || backend.readiness == nil || backend.serviceCheck == nil {
+	if backend.acquire == nil || backend.planStart == nil || backend.planStop == nil || backend.planRestart == nil || backend.execute == nil || backend.runPublished == nil || backend.command == nil || backend.transient == nil || backend.cleanup == nil || backend.runTemporary == nil || backend.runCommand == nil || backend.bindCommand == nil || backend.inject == nil || backend.readiness == nil || backend.serviceCheck == nil {
 		return fmt.Errorf("run current workload lifecycle requires a complete backend")
 	}
 	var lifecycle LifecyclePlan
@@ -193,11 +195,21 @@ func runCurrentWorkloadLifecycleV1(ctx context.Context, input CurrentWorkloadLif
 					}
 					options := runOptions
 					options.Context = runCtx
+					if input.PrivateEnvironment.Present {
+						pinned, run, err := backend.bindCommand(runCtx, spec, options.DockerPreflightTimeout)
+						if err != nil {
+							return err
+						}
+						_, err = startAndInjectPrivateWorkloadEnvironmentWithV1(runCtx, pinned,
+							input.Plan.Docker.ContainerName, input.Plan.Docker.Sandbox,
+							input.PrivateEnvironment, options, run, backend.inject)
+						return err
+					}
 					return backend.runCommand(spec, options)
 				})
 			}
 			err = launch(startCtx)
-			if err != nil && input.Action == "up" && input.StartCommand == nil && isStaleDockerNetworkError(err) {
+			if err != nil && input.Action == "up" && input.StartCommand == nil && !errors.Is(err, errPrivateWorkloadWasRunning) && isStaleDockerNetworkError(err) {
 				if input.RunOptions.Stderr != nil {
 					fmt.Fprintf(input.RunOptions.Stderr, "%v\n", err)
 				}
@@ -220,28 +232,6 @@ func runCurrentWorkloadLifecycleV1(ctx context.Context, input CurrentWorkloadLif
 			}
 			if err != nil {
 				return err
-			}
-			if input.PrivateEnvironment.Present && input.StartCommand == nil {
-				if err := backend.inject(
-					startCtx,
-					spec.Name,
-					input.Plan.Docker.ContainerName,
-					input.Plan.Docker.Sandbox,
-					input.PrivateEnvironment,
-					runOptions,
-					backend.runCommand,
-				); err != nil {
-					down, downErr := backend.command(input.DeploymentDir, "down")
-					if downErr != nil {
-						return errors.Join(err, downErr)
-					}
-					cleanupOptions := runOptions
-					cleanupOptions.Context = context.WithoutCancel(startCtx)
-					cleanupOptions.Stdin = nil
-					cleanupOptions.Stdout = nil
-					cleanupOptions.Stderr = nil
-					return errors.Join(err, cleanupPrivateWorkloadContainerV1(down, cleanupOptions, backend.runCommand))
-				}
 			}
 			return backend.serviceCheck(input.DeploymentDir, "", input.RunOptions.DockerPreflightTimeout)
 		},

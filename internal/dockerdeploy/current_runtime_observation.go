@@ -121,6 +121,13 @@ func runCurrentRuntimeObservationV1(
 	if err != nil {
 		return err
 	}
+	if planned.Docker.Workload != nil {
+		environment, err := loadPrivateWorkloadEnvironmentV1(dir)
+		if err != nil {
+			return fmt.Errorf("inspect private workload environment: %w", err)
+		}
+		planned.Docker.PrivateEnvironment = environment.Present
+	}
 	matched, err := backend.matches(current, planned.Docker)
 	if err != nil {
 		return fmt.Errorf("runtime current-build check: %w", err)

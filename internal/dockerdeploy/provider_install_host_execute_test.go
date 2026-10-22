@@ -3,6 +3,7 @@ package dockerdeploy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -126,14 +127,25 @@ func TestStartProviderInstallHostV1BindsPrivateEnvironmentStartupOnce(t *testing
 	previousBind := bindProviderInstallHostCommandRunner
 	t.Cleanup(func() { bindProviderInstallHostCommandRunner = previousBind })
 	binds := 0
+	inspections := 0
+	containerID := strings.Repeat("b", 64)
 	var operations []string
 	bindProviderInstallHostCommandRunner = func(bindCtx context.Context, spec CommandSpec, timeout time.Duration) (commandRunner, error) {
 		binds++
 		if bindCtx != t.Context() || spec.Name != dockerPath || timeout != 3*time.Second {
 			t.Fatalf("bind context=%v spec=%#v timeout=%v", bindCtx, spec, timeout)
 		}
-		return func(spec CommandSpec, _ RunOptions) error {
+		return func(spec CommandSpec, options RunOptions) error {
 			operations = append(operations, strings.Join(spec.Args, " "))
+			if len(spec.Args) > 1 && spec.Args[0] == "container" && spec.Args[1] == "inspect" {
+				inspections++
+				if inspections == 1 {
+					_, _ = fmt.Fprintln(options.Stderr, "Error response from daemon: No such container: "+plan.Docker.ContainerName)
+					return errors.New("container missing")
+				}
+				_, err := fmt.Fprintf(options.Stdout, `{"id":%q,"running":true,"started_at":"2026-10-20T00:00:00Z"}`, containerID)
+				return err
+			}
 			if len(spec.Args) > 0 && spec.Args[0] == "exec" {
 				return errors.New("relay failed")
 			}
@@ -153,7 +165,7 @@ func TestStartProviderInstallHostV1BindsPrivateEnvironmentStartupOnce(t *testing
 	if binds != 1 {
 		t.Fatalf("Docker runner binds = %d, want 1", binds)
 	}
-	if len(operations) != 3 || !strings.HasPrefix(operations[0], "compose ") || !strings.HasPrefix(operations[1], "exec -i ") || !strings.HasPrefix(operations[2], "compose ") {
+	if !containsRuntimeObservationStep(operations, "container rm --force "+containerID) || strings.Contains(strings.Join(operations, "\n"), "down --remove-orphans") {
 		t.Fatalf("operations = %#v", operations)
 	}
 }

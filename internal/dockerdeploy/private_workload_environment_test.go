@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -287,17 +288,27 @@ func readAllForPrivateEnvironmentTest(options RunOptions) ([]byte, error) {
 
 func TestStartAndInjectPrivateWorkloadEnvironmentV1CleansFailedContainer(t *testing.T) {
 	order := []string{}
+	inspections := 0
+	containerID := strings.Repeat("a", 64)
 	environment := privateWorkloadEnvironmentV1{Present: true, Payload: []byte("TOKEN=value\n\n")}
 	err := startAndInjectPrivateWorkloadEnvironmentV1(
 		t.Context(),
 		CommandSpec{Name: "docker", Args: []string{"compose", "up"}},
-		CommandSpec{Name: "docker", Args: []string{"compose", "down"}},
 		"demo",
 		testApplicationSandboxPlanV1(1000, 1000),
 		environment,
 		RunOptions{},
-		func(spec CommandSpec, _ RunOptions) error {
+		func(spec CommandSpec, options RunOptions) error {
 			order = append(order, strings.Join(spec.Args, " "))
+			if len(spec.Args) >= 2 && spec.Args[0] == "container" && spec.Args[1] == "inspect" {
+				inspections++
+				if inspections == 1 {
+					_, _ = fmt.Fprintln(options.Stderr, "Error response from daemon: No such container: demo")
+					return errors.New("container not found")
+				}
+				_, err := fmt.Fprintf(options.Stdout, `{"id":%q,"running":true,"started_at":"2026-10-20T00:00:00Z"}`, containerID)
+				return err
+			}
 			if len(spec.Args) > 0 && spec.Args[0] == "exec" {
 				return errors.New("relay failed")
 			}
@@ -307,7 +318,7 @@ func TestStartAndInjectPrivateWorkloadEnvironmentV1CleansFailedContainer(t *test
 	if err == nil || !strings.Contains(err.Error(), "one-shot FIFO relay") {
 		t.Fatalf("error = %v", err)
 	}
-	if len(order) != 3 || order[0] != "compose up" || !strings.HasPrefix(order[1], "exec -i demo "+deploy.ApplicationStartupVerifierPathV1+" restricted-exec ") || order[2] != "compose down" {
+	if !containsRuntimeObservationStep(order, "container rm --force "+containerID) || containsRuntimeObservationStep(order, "compose down") {
 		t.Fatalf("order = %#v", order)
 	}
 }
