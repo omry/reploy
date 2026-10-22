@@ -2,10 +2,12 @@ package dockerdeploy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -164,6 +166,49 @@ func TestRestageCurrentDesiredPlatformV1SkipsProbeForExplicitOrSingleTarget(t *t
 				t.Fatalf("result = %#v, want platform %#v", result, want)
 			}
 		})
+	}
+}
+
+func TestForceRestageLegacyRejectsUndeclaredMappingOverridesBeforeEffects(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := operation.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := json.Marshal(map[string]any{
+		"schema":   blueprint.ResolvedDocumentSchemaV1,
+		"document": map[string]any{"Environment": map[string]any{"ID": "legacy-demo", "Components": map[string]any{}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := "blueprint: {schema: 1, version: 0.1.0, compatibility: {platforms: [linux/amd64]}}\nenvironment:\n  id: legacy-demo\n  components:\n    base: {image: debian:12-slim}\ndocker: {}\n"
+	content, err := json.Marshal(map[string]any{
+		"schema": deploy.StateSchemaV1, "blueprint": string(resolved), "blueprint_source": source,
+		"platform": targetPlatform(t, "linux/amd64"), "current": nil, "deployment": nil,
+		"staging": map[string]any{"schema": deploy.StagingStateSchemaV1},
+		"overlay": map[string]any{"schema": deploy.RequestOverlaySchemaV1, "selected_options": []any{}, "direct_packages": []any{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, StateFileName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	overrides := "environment:\n  id: legacy-demo\n  runtime:\n    identity_mapping:\n      uids: [{container_start: 0, host_start: 100000, count: 16}]\n"
+	if err := os.WriteFile(filepath.Join(dir, deploy.PackageOverridesFilename), []byte(overrides), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := identityGuardTreeV1(t, dir)
+	_, err = ForceRestageCurrentDesiredPlatformV1(t.Context(), dir, "linux/amd64", RunOptions{})
+	if err == nil || !strings.Contains(err.Error(), "override requires a blueprint declaration") {
+		t.Fatalf("forced legacy recovery bypassed mapping validation: %v", err)
+	}
+	if after := identityGuardTreeV1(t, dir); !reflect.DeepEqual(before, after) {
+		t.Fatal("rejected forced recovery changed deployment metadata")
 	}
 }
 
