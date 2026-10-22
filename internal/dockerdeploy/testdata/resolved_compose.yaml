@@ -1,6 +1,7 @@
 name: demo-staging-abcd
 services:
     environment:
+        init: false
         image: reploy/demo:staging
         pull_policy: never
         container_name: demo-staging-abcd

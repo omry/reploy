@@ -65,7 +65,7 @@ func TestStatusReportsAccountMismatchBeforeDocker(t *testing.T) {
 	backend.matches = func(current CurrentBuild, plan DockerExecutionPlan) (bool, error) {
 		return CurrentBuildMatchesRuntimeV1(current, plan)
 	}
-	backend.status = func(context.Context, DockerExecutionPlan, time.Duration) (RuntimeStatusV1, error) {
+	backend.status = func(context.Context, *deploy.OperationLock, DockerExecutionPlan, time.Duration) (RuntimeStatusV1, error) {
 		t.Fatal("account mismatch reached Docker status")
 		return RuntimeStatusV1{}, nil
 	}

@@ -34,10 +34,12 @@ type privateRuntimeMaskV1 struct {
 }
 
 type privateWorkloadEnvironmentV1 struct {
-	Exists  bool
-	Present bool
-	Payload []byte
-	Raw     []byte
+	Operation      *deploy.OperationLock
+	RuntimeBinding string
+	Exists         bool
+	Present        bool
+	Payload        []byte
+	Raw            []byte
 }
 
 func loadPrivateWorkloadEnvironmentV1(deploymentDir string) (privateWorkloadEnvironmentV1, error) {

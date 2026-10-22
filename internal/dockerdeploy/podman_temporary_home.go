@@ -24,7 +24,15 @@ func podmanTemporaryHome(mount string, command []string) (string, []string, erro
 		return "", nil, fmt.Errorf("invalid trusted startup arguments")
 	}
 	identity := map[string]string{}
-	for index := 1; index < separator; index += 2 {
+	privateEnvironment := false
+	for index := 1; index < separator; index++ {
+		if command[index] == "--private-environment" {
+			if privateEnvironment {
+				return "", nil, fmt.Errorf("duplicate private workload environment option")
+			}
+			privateEnvironment = true
+			continue
+		}
 		if index+1 >= separator || command[index] == podmanPrepareTemporaryHome {
 			return "", nil, fmt.Errorf("invalid canonical trusted startup options")
 		}
@@ -36,6 +44,7 @@ func podmanTemporaryHome(mount string, command []string) (string, []string, erro
 			}
 			identity[key] = value
 		}
+		index++
 	}
 	base := "/mnt/reploy-home:rw,noexec,nosuid,nodev,size=64m,mode=0700"
 	if identity["--uid"] == "" || identity["--gid"] == "" || mount != base+",uid="+identity["--uid"]+",gid="+identity["--gid"] {
@@ -71,6 +80,11 @@ func preparePodmanTemporaryHomeCommand(spec CommandSpec) (CommandSpec, error) {
 	}
 	args := append([]string{}, spec.Args[:entrypoint+3]...)
 	args[home] = mount
+	for index := 1; index+1 < entrypoint; index++ {
+		if args[index] == "--tmpfs" {
+			args[index+1] = podmanPrivateDirectoryMaskV1(args[index+1])
+		}
+	}
 	// Insert setup authority among engine options, never into application argv.
 	args = append(args[:entrypoint], append([]string{"--cap-add", "CHOWN"}, args[entrypoint:]...)...)
 	spec.Args = append(args, command...)
@@ -122,6 +136,7 @@ func preparePodmanTemporaryHomeCompose(service *yaml.Node) error {
 	}
 	var home *yaml.Node
 	for _, mount := range fields["tmpfs"].Content {
+		mount.Value = podmanPrivateDirectoryMaskV1(mount.Value)
 		if strings.HasPrefix(mount.Value, "/mnt/reploy-home:") {
 			if home != nil {
 				return fmt.Errorf("duplicate Compose private home mount")
@@ -145,4 +160,15 @@ func preparePodmanTemporaryHomeCompose(service *yaml.Node) error {
 	fields["command"].Content = slices.Insert(fields["command"].Content, 1, argument)
 	fields["cap_add"].Content = append(fields["cap_add"].Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "CHOWN"})
 	return nil
+}
+
+// The qualified Podman 6.1.4+ path must explicitly disable its default
+// copy-up for Reploy's empty metadata shadow mounts. Keeping copied host
+// files can also exhaust the deliberately small mask filesystem.
+// https://docs.podman.io/en/stable/markdown/podman-run.1.html
+func podmanPrivateDirectoryMaskV1(mount string) string {
+	if strings.HasSuffix(mount, ":"+privateRuntimeDirectoryMaskOptionsV1) {
+		return mount + ",notmpcopyup"
+	}
+	return mount
 }

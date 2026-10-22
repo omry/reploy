@@ -32,6 +32,7 @@ type CommandSpec struct {
 }
 
 type RunOptions struct {
+	workloadLifecycle      *workloadLifecycleV1
 	Context                context.Context
 	Stdin                  io.Reader
 	Stdout                 io.Writer
