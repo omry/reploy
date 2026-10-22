@@ -14,7 +14,7 @@ import (
 	"github.com/omry/reploy/internal/providerstore"
 )
 
-var bindInstalledServiceCommandRunner = bindDockerCommandRunnerV1
+var bindInstalledServiceCommandRunner = bindPinnedDockerCommandRunnerV1
 
 // RunInstalledServiceContainerV1 is the system-service container boundary. It
 // deliberately bypasses the public control surface because systemd itself is
@@ -77,12 +77,6 @@ func RunInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 	if err != nil {
 		return fmt.Errorf("prepare private workload environment: %w", err)
 	}
-	if environment.Present {
-		if err := validatePrivateWorkloadEnvironmentIsolationV1(deploymentDir, plan.Docker); err != nil {
-			return err
-		}
-		plan.Docker.PrivateEnvironment = true
-	}
 	invocation, err := WorkloadRuntimeInvocationV1(plan.Docker)
 	if err != nil {
 		return err
@@ -98,26 +92,70 @@ func RunInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 	}
 	start := composeCommandWithProject(deploymentDir, installation.ComposeProject, "up", "--pull", "never", "-d")
 	start.Name = dockerPath
-	cleanup := composeCommandWithProject(deploymentDir, installation.ComposeProject, "down", "--remove-orphans")
-	cleanup.Name = dockerPath
-	runDocker, err := bindInstalledServiceCommandRunner(ctx, start, options.DockerPreflightTimeout)
+	start, runDocker, err := bindInstalledServiceCommandRunner(ctx, start, options.DockerPreflightTimeout)
 	if err != nil {
 		return fmt.Errorf("bind installed service Docker endpoint: %w", err)
 	}
-	if err := startAndInjectPrivateWorkloadEnvironmentV1(
-		ctx,
-		start,
-		cleanup,
-		plan.Docker.ContainerName,
-		plan.Docker.Sandbox,
-		environment,
-		options,
-		runDocker,
-	); err != nil {
+	lifecycle := &workloadLifecycleV1{command: start, containerName: plan.Docker.ContainerName, run: runDocker, options: options,
+		operation: func(_ context.Context, action func(*deploy.OperationLock) error) error { return action(operation) }}
+	binding, err := workloadRuntimeBindingV1(plan.Docker)
+	if err != nil {
 		return err
 	}
+	reused, _, err := lifecycle.initialize(ctx, binding, environment.Present)
+	if err != nil {
+		return err
+	}
+	if !reused && environment.Present {
+		plan.Docker.PrivateEnvironment = true
+		if err := validatePrivateWorkloadEnvironmentIsolationV1(deploymentDir, plan.Docker); err != nil {
+			return err
+		}
+		invocation, err = WorkloadRuntimeInvocationV1(plan.Docker)
+		if err != nil {
+			return err
+		}
+		if err := RequireRuntimeReady(RuntimeReadinessInput{
+			Current: current, DockerPlan: plan.Docker,
+			PlanID: invocation.PlanID, Sources: invocation.Sources,
+		}); err != nil {
+			return err
+		}
+		if _, err := PublishCurrentRuntimeInputsV1(operation, deploymentDir, plan); err != nil {
+			return err
+		}
+	}
+	if reused {
+		if err := preserveConfirmedWorkloadRuntimeInputsV1(operation, deploymentDir, CurrentRuntimePlanV1{Document: document, Docker: plan.Docker}, lifecycle.record, PublishCurrentRuntimeInputsV1); err != nil {
+			return err
+		}
+	}
+	started := privateWorkloadStartResultV1{ContainerID: lifecycle.initial.ID, StartedAt: lifecycle.initial.StartedAt}
+	if !reused {
+		if lifecycle.initial.Running {
+			return fmt.Errorf("installed workload startup is unconfirmed; use `reploy restart`")
+		}
+		startup, err := planLockedStartLifecycleV1(plan.Document, plan.Docker, current.Lock.Catalog)
+		if err != nil {
+			return err
+		}
+		executor := environmentLifecycleExecutor(RuntimeOptions{Dir: deploymentDir, DockerPreflightTimeout: options.DockerPreflightTimeout}, plan.Document, plan.Docker, current.Lock.RuntimePolicy, options.Stdout, options.Stderr)
+		executor.Start = func(startCtx context.Context) error {
+			environment.Operation, environment.RuntimeBinding = operation, binding
+			var err error
+			started, err = startAndInjectPrivateWorkloadEnvironmentWithV1(startCtx, start, plan.Docker.ContainerName, plan.Docker.Sandbox, environment, options, runDocker, injectPrivateWorkloadEnvironmentV1)
+			lifecycle.started = started
+			return err
+		}
+		if err := ExecuteLifecycle(ctx, startup, executor); err != nil {
+			return lifecycle.rollback(ctx, err)
+		}
+		if err := lifecycle.complete(ctx); err != nil {
+			return lifecycle.rollback(ctx, err)
+		}
+	}
 	if err := notifyInstalledServiceReadyV1(); err != nil {
-		return errors.Join(err, cleanupPrivateWorkloadContainerV1(cleanup, RunOptions{Context: context.WithoutCancel(ctx)}, runDocker))
+		return lifecycle.rollback(ctx, err)
 	}
 	if err := operation.Unlock(); err != nil {
 		return err
@@ -130,9 +168,13 @@ func RunInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 	waitOptions.Stdin = nil
 	waitOptions.Stdout = &status
 	waitOptions.Stderr = options.Stderr
+	waitContainer := plan.Docker.ContainerName
+	if started.ContainerID != "" {
+		waitContainer = started.ContainerID
+	}
 	if err := runDocker(CommandSpec{
 		Name: dockerPath,
-		Args: []string{"wait", plan.Docker.ContainerName},
+		Args: []string{"wait", waitContainer},
 	}, waitOptions); err != nil {
 		return fmt.Errorf("wait for installed workload container: %w", err)
 	}

@@ -191,6 +191,13 @@ func buildApplicationStartupVerifierIntegrationImageFromBase(
 	base string,
 ) (string, blueprint.Platform) {
 	t.Helper()
+	return buildApplicationStartupVerifierIntegrationImageForAccount(t, ctx, base, deploy.ApplicationLocalAccountV1{
+		Schema: deploy.ApplicationLocalAccountSchemaV1, Name: "reploy", UID: "12345", GID: "23456", Home: environmentTemporaryHome,
+	})
+}
+
+func buildApplicationStartupVerifierIntegrationImageForAccount(t *testing.T, ctx context.Context, base string, account deploy.ApplicationLocalAccountV1) (string, blueprint.Platform) {
+	t.Helper()
 	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
 		t.Skipf("startup verifier Docker integration does not build a helper for %s", runtime.GOARCH)
 	}
@@ -253,10 +260,6 @@ func buildApplicationStartupVerifierIntegrationImageFromBase(
 	store, err := providerstore.NewStore(deploymentRoot)
 	if err != nil {
 		t.Fatal(err)
-	}
-	account := deploy.ApplicationLocalAccountV1{
-		Schema: deploy.ApplicationLocalAccountSchemaV1, Name: "reploy",
-		UID: "12345", GID: "23456", Home: environmentTemporaryHome,
 	}
 	built, err := BuildApplicationRuntimeLayerCandidate(store, ApplicationRuntimeLayerBuildRequest{
 		Source: source, Verifier: verifier, Account: account, Platform: platform,

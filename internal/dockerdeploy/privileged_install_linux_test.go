@@ -180,7 +180,7 @@ func TestPrivilegedInstallLeavesRealControllerUsable(t *testing.T) {
 			cmd.Env = append(os.Environ(), "PATH="+base+":/usr/bin:/bin", "DOCKER_HOST=unix:///disposable-test-no-daemon.sock", "DOCKER_CONTEXT=")
 			cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: 1000, Gid: 1000, Groups: []uint32{1000}}}
 			output, err := cmd.CombinedOutput()
-			if err != nil || !strings.Contains(string(output), "status: stopped") {
+			if err != nil || !strings.Contains(string(output), "status: down") {
 				t.Fatalf("actual operator controller status: %v\n%s", err, output)
 			}
 		})

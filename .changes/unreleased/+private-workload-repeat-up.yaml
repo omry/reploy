@@ -1,0 +1,2 @@
+kind: Fixed
+body: 'Make repeated up preserve a confirmed running application without resending private environment values or repeating startup hooks. Keep startup evidence outside application HOME, distinguish starting and stopping from up and down, and retain stopped failed startups for logs. Restore read-only status, ps and logs for private environments.'

@@ -1983,9 +1983,19 @@ Docker restart policies other than `no` are incompatible with `.env`, because
 Docker cannot privately recreate this one-shot channel. Explicit Reploy
 restart remains supported. Changes to `.env` take effect when Reploy next
 creates or restarts the workload; `up` does not mutate the environment of an
-already-running process. Linux system services run the installed Reploy runtime
-as their systemd service boundary, so every systemd-managed start revalidates
-and reinjects the file before monitoring the workload container.
+already-running process. Repeated `up` preserves the running container and does
+not open a second secret relay. Each new, restarted or recreated process is a
+fresh startup attempt and accepts at most one transfer. The relay has a
+30-second deadline. Reploy never retries a transfer with an uncertain outcome.
+If a new startup fails, Reploy stops only the workload owned by that attempt
+and retains the stopped container for logs, as defined by the Workload State
+and Start/Stop Contract below.
+
+Linux system services run the installed Reploy runtime as their systemd service
+boundary. Each managed start revalidates the file and injects it when the
+workload process starts. A process that is already running keeps its original
+environment. `status`, `ps` and `logs` select the private runtime without
+changing `.env` or creating a missing file.
 
 Installation treats `.env` as a reserved preserved path. An initial install
 copies it with defensive host permissions or ACLs. Later installs preserve the
@@ -2358,6 +2368,97 @@ all later events, and fails the operation. If installation does not request a
 start, the sequence ends after `environment.install.after_install`. A standalone
 runtime start or stop runs only its workload runtime events. Each event uses the
 canonical ordered-step shape above.
+
+### Workload State and Start/Stop Contract
+
+The public workload states are `down`, `starting`, `up`, and `stopping`.
+Engine container state is evidence for this model, not a substitute for it.
+A container that is running its launcher and waiting for private values is
+still `starting`.
+
+```mermaid
+stateDiagram-v2
+    down --> starting: up
+    starting --> up: ready
+    starting --> stopping: failure or down
+    up --> stopping: down
+    stopping --> down: stopped
+```
+
+`up` means that the application was launched and all declared startup
+requirements and `after_start` actions passed. Without a declared readiness
+check, this does not establish functional application health. Startup success
+is not a promise of continued health or periodic monitoring.
+
+Each fresh process start is a separate startup attempt. Reploy sends private
+values at most once for that attempt, and the receiver accepts only one
+transfer. An explicit restart completes shutdown before beginning a new
+attempt. It never reuses an uncertain transfer to the previous attempt.
+
+These transitions apply after the existing control-admission rules above.
+They do not let a request overtake another live lifecycle operation. Default
+conflicts still fail clearly; `--wait` retains its existing queue behavior.
+A repeated request never creates a competing start or stop merely to observe
+the existing operation.
+
+For unchanged effective workload inputs, repeated `up` preserves an already-up
+process and its original environment. It does not open another relay or replay
+completed start hooks. An admitted caller observes the existing startup state;
+a caller queued with `--wait` rechecks that state after admission. Replacing a
+process for changed runtime inputs follows the stop/start transitions and begins
+a fresh attempt; an old startup record cannot establish the replacement's `up`.
+If controller loss leaves secret delivery or startup completion unproved,
+Reploy reports an interrupted startup and requires an explicit restart. It
+never retries an uncertain secret transfer or destroys a possibly healthy
+existing workload merely because observation failed.
+
+Startup evidence is secret-free and belongs to Reploy, outside application
+control. It must identify the selected engine, immutable container identity,
+and process-start identity; a record for a previous process cannot authorize
+reuse. Transfer completion and application/startup completion are different
+facts. A successful send alone is not proof that application launch or the
+startup checks succeeded. The application must not need to preserve a file
+in its writable home or temporary directory. No private variable names or
+values are recorded as lifecycle state.
+
+After `down` is admitted, an up application enters `stopping`. If an unfinished
+startup remains after its controller has exited, the admitted stop cancels and
+coordinates that attempt so it cannot later launch the application or publish
+`up`. This does not bypass a live controller's admission ownership. A repeated
+`down` obeys the same admission rules and observes the existing stop after it
+is admitted; it does not issue a conflicting stop. An already-down workload does
+not run another start or secret transfer; completed stop hooks are not replayed.
+`down` may still remove the exact retained stopped container for that deployment.
+
+Normal shutdown retains the ordered `before_stop`, stop, `after_stop` lifecycle.
+A failed `before_stop` action aborts normal shutdown and reports the error;
+this design adds no hook bypass. A failed `after_stop` action reports command
+failure while the confirmed workload state remains `down`. The existing
+recorded-deployment recovery stop when build/runtime validation is broken
+remains explicitly diagnosed and does not make shutdown depend on rebuilding.
+
+Reploy reports `down` only after the selected backend confirms that the target
+workload process has stopped or the container is absent. A successful command
+return without the required postcondition is insufficient. A stop timeout,
+cancellation, or transport error is reported; it must not fabricate `down`.
+Observation errors are separate from lifecycle state and must identify an
+unconfirmed or last-confirmed state rather than asserting live state from a
+stale record. Existing backend graceful-stop and escalation policy remains
+unchanged by this contract.
+
+A failed new startup enters `stopping`, stops only the workload owned by that
+attempt, and becomes `down` only after shutdown is confirmed. It retains the
+stopped container for diagnostics; explicit `down` or replacement by a fresh
+startup removes it. It does not remove application data or unrelated resources.
+The original startup error remains visible alongside any stop error. Cleanup
+uses its own bounded context so caller cancellation does not silently abandon
+shutdown. It does not run ordinary stop hooks that assume successful startup
+when that prerequisite was never satisfied.
+
+Command outcome and workload state are independent. A failed startup may end
+with a confirmed `down` state; a failed observation may leave the application
+running; a failed `after_stop` hook may leave it stopped. Backend-specific status
+detail remains diagnostic information and does not add public lifecycle stages.
 
 ### Install Success Output
 

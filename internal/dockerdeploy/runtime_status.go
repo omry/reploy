@@ -2,8 +2,8 @@ package dockerdeploy
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"github.com/omry/reploy/internal/deploy"
 	"io"
 	"net"
 	"sort"
@@ -14,54 +14,57 @@ import (
 type RuntimeStatusV1 struct {
 	Status  string
 	Started string
+	Detail  string
 }
 
-func ObserveRuntimeStatusV1(ctx context.Context, plan DockerExecutionPlan, dockerPreflightTimeout time.Duration) (RuntimeStatusV1, error) {
-	if ctx == nil {
-		return RuntimeStatusV1{}, fmt.Errorf("observe runtime status requires a context")
+func ObserveRuntimeStatusV1(ctx context.Context, operation *deploy.OperationLock, plan DockerExecutionPlan, timeout time.Duration) (RuntimeStatusV1, error) {
+	if ctx == nil || operation == nil || strings.TrimSpace(plan.ContainerName) == "" {
+		return RuntimeStatusV1{}, fmt.Errorf("runtime status requires a context, operation lock, and container name")
 	}
-	if strings.TrimSpace(plan.ContainerName) == "" {
-		return RuntimeStatusV1{}, fmt.Errorf("observe runtime status requires a container name")
-	}
-	output, err := commandOutput(
-		CommandSpec{
-			Name: "docker",
-			Args: []string{"inspect", "--format", "{{json .State}}", plan.ContainerName},
-		},
-		RunOptions{Context: ctx, DockerPreflightTimeout: dockerPreflightTimeout},
-	)
-	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "no such object") {
-			return RuntimeStatusV1{Status: "stopped"}, nil
-		}
-		return RuntimeStatusV1{}, fmt.Errorf("inspect runtime status: %w", err)
-	}
-	result, err := decodeRuntimeStatusV1(output, time.Now())
+	command, run, err := bindPinnedDockerCommandRunnerV1(ctx, CommandSpec{Name: "docker"}, timeout)
 	if err != nil {
 		return RuntimeStatusV1{}, err
 	}
-	return result, nil
+	binding, err := workloadRuntimeBindingV1(plan)
+	if err != nil {
+		return RuntimeStatusV1{}, err
+	}
+	expected, err := privateWorkloadRecordV1(command, binding)
+	if err != nil {
+		return RuntimeStatusV1{}, err
+	}
+	record, found, err := operation.ReadWorkloadLifecycleV1()
+	if err != nil {
+		return RuntimeStatusV1{}, err
+	}
+	current, err := inspectPrivateWorkloadContainerV1(ctx, command, plan.ContainerName, RunOptions{DockerPreflightTimeout: timeout}, run)
+	if err != nil {
+		return RuntimeStatusV1{}, err
+	}
+	return workloadRuntimeStatusV1(record, found, expected, current, plan.PrivateEnvironment, time.Now()), nil
 }
 
-func decodeRuntimeStatusV1(output []byte, now time.Time) (RuntimeStatusV1, error) {
-	var state struct {
-		Running   bool   `json:"Running"`
-		Status    string `json:"Status"`
-		StartedAt string `json:"StartedAt"`
+func workloadRuntimeStatusV1(record deploy.WorkloadLifecycleV1, found bool, expected deploy.WorkloadLifecycleV1, current privateWorkloadContainerV1, private bool, now time.Time) RuntimeStatusV1 {
+	if !current.Running {
+		return RuntimeStatusV1{Status: "down"}
 	}
-	if err := json.Unmarshal(output, &state); err != nil {
-		return RuntimeStatusV1{}, fmt.Errorf("decode runtime container status: %w", err)
+	result := RuntimeStatusV1{Status: "starting", Detail: "Startup completion is unconfirmed; use `reploy restart` if startup was interrupted."}
+	started, err := time.Parse(time.RFC3339Nano, current.StartedAt)
+	if err == nil {
+		result.Started = runtimeElapsedDescription(now.Sub(started))
 	}
-	result := RuntimeStatusV1{Status: "stopped"}
-	if state.Running {
-		result.Status = "running"
-		startedAt, err := time.Parse(time.RFC3339Nano, state.StartedAt)
-		if err != nil {
-			return RuntimeStatusV1{}, fmt.Errorf("decode runtime container start time: %w", err)
-		}
-		result.Started = runtimeElapsedDescription(now.Sub(startedAt))
+	same := found && record.Endpoint == expected.Endpoint && record.ContainerID == current.ID && record.StartedAt == current.StartedAt
+	if same && record.State == "stopping" {
+		result.Status, result.Detail = "stopping", ""
 	}
-	return result, nil
+	// A confirmed record describes the active process and its original
+	// startup mode. Current .env presence applies only to a fresh process;
+	// claimed private transfers still require completed handoff evidence.
+	if same && record.Runtime == expected.Runtime && record.State == "up" && record.StartupComplete &&
+		(!record.TransferClaimed || record.HandoffComplete) {
+		result.Status, result.Detail = "up", ""
+	}
+	return result
 }
 
 func WriteRuntimeStatusV1(output io.Writer, status RuntimeStatusV1, plan DockerExecutionPlan) error {
@@ -75,12 +78,17 @@ func WriteRuntimeStatusV1(output io.Writer, status RuntimeStatusV1, plan DockerE
 	if _, err := fmt.Fprintf(output, "status: %s\n", value); err != nil {
 		return err
 	}
+	if status.Detail != "" {
+		if _, err := fmt.Fprintln(output, status.Detail); err != nil {
+			return err
+		}
+	}
 	if status.Started != "" {
 		if _, err := fmt.Fprintf(output, "started: %s\n", status.Started); err != nil {
 			return err
 		}
 	}
-	if value != "running" || plan.Workload == nil {
+	if value != "up" || plan.Workload == nil {
 		return nil
 	}
 	names := make([]string, 0, len(plan.Workload.Endpoints))

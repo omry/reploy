@@ -49,6 +49,7 @@ type composePlanNetwork struct {
 }
 
 type composePlanService struct {
+	Init          bool               `yaml:"init"`
 	Image         string             `yaml:"image"`
 	PullPolicy    string             `yaml:"pull_policy"`
 	ContainerName string             `yaml:"container_name"`
@@ -75,28 +76,6 @@ type composePlanMount struct {
 	Target   string `yaml:"target"`
 	ReadOnly bool   `yaml:"read_only,omitempty"`
 }
-
-const privateWorkloadEnvironmentLauncherV1 = `set -eu
-reploy_private_environment_pipe="$HOME/.reploy-private-environment"
-umask 077
-rm -f "$reploy_private_environment_pipe"
-mkfifo "$reploy_private_environment_pipe"
-trap 'rm -f "$reploy_private_environment_pipe"' EXIT
-reploy_private_environment_ready=
-exec 3< "$reploy_private_environment_pipe"
-while IFS= read -r reploy_private_environment_line <&3; do
-  if [ -z "$reploy_private_environment_line" ]; then
-    reploy_private_environment_ready=1
-    break
-  fi
-  export "$reploy_private_environment_line"
-done
-exec 3<&-
-[ "$reploy_private_environment_ready" = 1 ] || exit 70
-rm -f "$reploy_private_environment_pipe"
-trap - EXIT
-exec "$@" </dev/null
-`
 
 const privateRuntimeDirectoryMaskOptionsV1 = "ro,noexec,nosuid,nodev,size=4096,mode=000"
 
@@ -129,10 +108,13 @@ func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerR
 		if strings.TrimSpace(plan.Restart) != "" && strings.TrimSpace(plan.Restart) != "no" {
 			return DockerRenderedInputs{}, fmt.Errorf("private workload environment injection does not support Docker restart policy %q", plan.Restart)
 		}
-		composeLauncher := strings.ReplaceAll(privateWorkloadEnvironmentLauncherV1, "$", "$$")
-		launcher := []string{"/bin/sh", "-c", composeLauncher, "reploy-private-environment"}
-		launcher = append(launcher, plan.Workload.Argv...)
-		service.Command = sandboxApplicationArgvV1(plan, launcher, true, applicationInboundTCPPortsV1(plan))
+		service.Command = sandboxApplicationArgvV1(plan, plan.Workload.Argv, true, applicationInboundTCPPortsV1(plan))
+		for index, argument := range service.Command {
+			if argument == "--" {
+				service.Command = append(service.Command[:index:index], append([]string{"--private-environment"}, service.Command[index:]...)...)
+				break
+			}
+		}
 		service.StdinOpen = true
 	}
 	volumes := map[string]any{}

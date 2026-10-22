@@ -85,8 +85,8 @@ func TestRunCurrentWorkloadV1KeepsPrivateEnvironmentOutOfPublishedStateAndPasses
 	}
 	backend.publishInputs = func(_ *deploy.OperationLock, _ string, plan CurrentRuntimePlanV1) (bool, error) {
 		order = append(order, "publish")
-		if !plan.Docker.PrivateEnvironment {
-			t.Fatal("published Compose plan did not enable the private launcher")
+		if plan.Docker.PrivateEnvironment {
+			t.Fatal("caller preflight enabled the private launcher before lifecycle admission")
 		}
 		return true, nil
 	}
@@ -105,6 +105,53 @@ func TestRunCurrentWorkloadV1KeepsPrivateEnvironmentOutOfPublishedStateAndPasses
 		Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1000, GID: 1000},
 	}, backend); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRunCurrentWorkloadV1DefersPrivateRestartPolicyUntilLifecycleAdmissionV1(t *testing.T) {
+	for _, policy := range []string{"no", "always", "on-failure"} {
+		t.Run(policy, func(t *testing.T) {
+			dir := t.TempDir()
+			current, _ := runtimeCurrentBuildFixture(t)
+			document, err := blueprint.DecodeResolvedDocumentV1(current.State.Blueprint)
+			if err != nil {
+				t.Fatal(err)
+			}
+			document.Environment.Workload = &blueprint.Workload{Command: "serve"}
+			current.State.Blueprint, err = blueprint.EncodeResolvedDocumentV1(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			planned := CurrentRuntimePlanV1{
+				Document: document,
+				Docker: DockerExecutionPlan{
+					EnvironmentID: "demo", Phase: blueprint.PhaseStaged, Image: current.Generation.Reference,
+					ContainerName: "demo", NetworkName: "demo", Restart: policy, Workload: &WorkloadExecutionPlan{Command: "serve"},
+				},
+			}
+			private := privateWorkloadEnvironmentV1{Present: true, Payload: []byte("TOKEN=private-value\n\n"), Raw: []byte("TOKEN=private-value\n")}
+			order := []string{}
+			backend := currentWorkloadRunTestBackend(t, dir, current, planned, &order)
+			backend.privateEnvironment = func(string) (privateWorkloadEnvironmentV1, error) { return private, nil }
+			backend.publishInputs = func(_ *deploy.OperationLock, _ string, plan CurrentRuntimePlanV1) (bool, error) {
+				if plan.Docker.PrivateEnvironment {
+					t.Fatal("caller preflight enabled private launcher before lifecycle admission")
+				}
+				return true, nil
+			}
+			backend.runLifecycle = func(_ context.Context, input CurrentWorkloadLifecycleInputV1) error {
+				if !reflect.DeepEqual(input.PrivateEnvironment, private) {
+					t.Fatalf("lifecycle private environment = %#v", input.PrivateEnvironment)
+				}
+				return nil
+			}
+			if err := runCurrentWorkloadV1(t.Context(), CurrentWorkloadRunInputV1{
+				DeploymentDir: dir, Action: "up",
+				Runtime: StagedProviderBuildRuntimeV1{Host: blueprint.HostLinux, UID: 1000, GID: 1000},
+			}, backend); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -438,12 +485,28 @@ func TestCurrentWorkloadCommandsV1UsesRecordedSystemService(t *testing.T) {
 }
 
 func TestStopOwnedCurrentWorkloadV1UsesRecordedComposeProject(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("recorded Compose CLI fixture requires a POSIX shell")
+	}
+	binDir := t.TempDir()
+	observation := filepath.Join(t.TempDir(), "observation")
+	script := "#!/bin/sh\ncase \"$1\" in\nversion) printf '24.0.0\\n';;\ncompose) printf '%s\\n' \"$*\" > \"$REPLOY_TEST_RECOVERY_OBSERVATION\";;\n*) exit 64;;\nesac\n"
+	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	t.Setenv("DOCKER_CONTEXT", "")
+	t.Setenv("DOCKER_HOST", "unix:///tmp/reploy-test-recovery.sock")
+	t.Setenv("REPLOY_TEST_RECOVERY_OBSERVATION", observation)
 	dir := t.TempDir()
 	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = operation.Unlock() })
+	if err := os.WriteFile(filepath.Join(dir, DockerEnvFileName), []byte("REPLOY_CONTAINER_NAME=demo-owned\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	state := deploy.StateV1{Deployment: &deploy.DeploymentStateV1{Installation: deploy.InstallationStateV1{
 		Scope: "user", TargetDir: dir, ComposeProject: "demo-owned",
 	}}}
@@ -459,6 +522,10 @@ func TestStopOwnedCurrentWorkloadV1UsesRecordedComposeProject(t *testing.T) {
 	}
 	if got.Dir != dir || !containsAdjacent(got.Args, "--project-name", "demo-owned") || !containsAdjacent(got.Args, "down", "--remove-orphans") {
 		t.Fatalf("owned stop command = %#v", got)
+	}
+	observed, err := os.ReadFile(observation)
+	if err != nil || !strings.Contains(string(observed), "--project-name demo-owned") || !strings.Contains(string(observed), "ps --all --quiet") {
+		t.Fatalf("owned shutdown observation = %q, %v", observed, err)
 	}
 }
 
