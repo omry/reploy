@@ -19,6 +19,15 @@ recreating containers just because Reploy ran again. Existing data is checked
 before use; unsafe directories, symlinks, altered permissions or altered bytes
 cause an error. Temporary translated Compose files are removed after use.
 
+Generated Linux system services use a systemd-managed, `0700` controller cache
+under `/var/cache/reploy`. The unit sets
+`XDG_CACHE_HOME` to that cache before the controller starts, so it does not need
+a login shell's `HOME` or cache environment. The path stays stable across
+service restarts. This cache holds common pinned public data for the root
+controller account. Removing one installation keeps that cache available to
+other installations. Existing system services must be reinstalled to regenerate
+their units. The pinned profile and all ownership/integrity checks are unchanged.
+
 ## Engine scope
 
 Stock Podman 6.1.4 is affected: `builtin` is treated as a filename, and Docker
