@@ -1,6 +1,7 @@
 package dockerdeploy
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -68,6 +69,9 @@ func providerInstallSystemdFileV1(plan providerInstallationPlanV1, dockerPath st
 	if includeDockerUnit {
 		dockerUnit = "Requires=docker.service\nAfter=docker.service\n"
 	}
+	// systemd creates this controller-owned cache before ExecStart. Hash the
+	// installation path so free-form names cannot expand specifiers or paths.
+	cacheDirectory := fmt.Sprintf("reploy/%x", sha256.Sum256([]byte(plan.Installation.TargetDir)))
 	content := fmt.Sprintf(`[Unit]
 Description=Reploy Docker service (%s)
 # Managed-By: reploy
@@ -78,6 +82,9 @@ Description=Reploy Docker service (%s)
 [Service]
 Type=notify
 NotifyAccess=main
+CacheDirectory=%s
+CacheDirectoryMode=0700
+Environment="XDG_CACHE_HOME=%%C/%s"
 WorkingDirectory=%s
 ExecStart=%s
 ExecStop=%s
@@ -85,7 +92,7 @@ Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
-`, plan.Installation.Service, plan.Installation.Service, systemdPath(plan.Installation.TargetDir), plan.Installation.ComposeProject, dockerUnit, workingDirectory, start, stop)
+`, plan.Installation.Service, plan.Installation.Service, systemdPath(plan.Installation.TargetDir), plan.Installation.ComposeProject, dockerUnit, cacheDirectory, cacheDirectory, workingDirectory, start, stop)
 	return []providerInstallFileCandidateV1{{
 		Path: plan.Installation.UnitPath, Content: []byte(content), Mode: 0o644,
 	}}, nil

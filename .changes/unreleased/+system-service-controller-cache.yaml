@@ -1,0 +1,2 @@
+kind: Fixed
+body: 'Give Linux system services a private controller cache so Podman startup does not depend on HOME or XDG_CACHE_HOME from a login shell. Reinstall existing system services to regenerate their units. Preserve the pinned seccomp policy and its ownership and integrity checks.'
