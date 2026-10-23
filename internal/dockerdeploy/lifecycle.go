@@ -110,16 +110,23 @@ func appendLifecycleStepsWithResolver(
 }
 
 type LifecycleExecutor struct {
-	Materialize func(context.Context) error
-	RunCommand  func(context.Context, ResolvedEnvironmentCommand) error
-	Readiness   func(context.Context, EndpointExecutionPlan) error
-	Start       func(context.Context) error
-	Stop        func(context.Context) error
-	Success     func(context.Context, []string) error
+	beforeOperation func(int, LifecycleOperation)
+	Materialize     func(context.Context) error
+	RunCommand      func(context.Context, ResolvedEnvironmentCommand) error
+	Readiness       func(context.Context, EndpointExecutionPlan) error
+	Start           func(context.Context) error
+	Stop            func(context.Context) error
+	Success         func(context.Context, []string) error
 }
 
 func ExecuteLifecycle(ctx context.Context, plan LifecyclePlan, executor LifecycleExecutor) error {
 	for index, operation := range plan.Operations {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if executor.beforeOperation != nil {
+			executor.beforeOperation(index, operation)
+		}
 		var err error
 		switch operation.Kind {
 		case LifecycleMaterialize:
@@ -148,6 +155,9 @@ func ExecuteLifecycle(ctx context.Context, plan LifecyclePlan, executor Lifecycl
 			}
 		default:
 			err = fmt.Errorf("unknown lifecycle operation %q", operation.Kind)
+		}
+		if err == nil {
+			err = ctx.Err()
 		}
 		if err != nil {
 			return fmt.Errorf("lifecycle %s operation %d (%s): %w", operation.Event, index, operation.Kind, err)

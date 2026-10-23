@@ -1,0 +1,2 @@
+kind: Fixed
+body: Linux system installations retain their selected local container engine for service start and stop. Startup allows 90 seconds total for the deployment lock, setup and engine readiness, then 60 seconds for the full application startup, including custom events. Timeout diagnostics include a time breakdown without command arguments or private values. Reinstall existing system services to regenerate their units.

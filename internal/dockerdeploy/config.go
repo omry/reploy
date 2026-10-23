@@ -174,6 +174,16 @@ func appCommandError(err error) error {
 }
 
 func runTemporaryContainerCommand(run temporaryCommandRunner, runSpec CommandSpec, cleanupSpec CommandSpec, runOptions RunOptions) error {
+	return runTemporaryContainerCommandWithCleanupHookV1(run, runSpec, cleanupSpec, runOptions, nil)
+}
+
+func runTemporaryContainerCommandWithCleanupHookV1(
+	run temporaryCommandRunner,
+	runSpec CommandSpec,
+	cleanupSpec CommandSpec,
+	runOptions RunOptions,
+	beforeCleanup func(error, func(context.Context) error),
+) error {
 	parent := runOptions.Context
 	if parent == nil {
 		parent = context.Background()
@@ -199,12 +209,21 @@ func runTemporaryContainerCommand(run temporaryCommandRunner, runSpec CommandSpe
 		}
 	}
 	var cleanupErr error
+	var cleanup func(context.Context) error
 	if cleanupSpec.Name != "" && runErr != nil {
-		cleanupOptions := runOptions
-		cleanupOptions.Context, cleanupOptions.Stdin, cleanupOptions.Stdout, cleanupOptions.Stderr = context.Background(), nil, nil, nil
-		cleanupErr = run(cleanupSpec, cleanupOptions)
-		if cleanupErr != nil && isMissingContainerCleanupError(cleanupErr) {
-			cleanupErr = nil
+		cleanup = func(cleanupContext context.Context) error {
+			cleanupOptions := runOptions
+			cleanupOptions.Context, cleanupOptions.Stdin, cleanupOptions.Stdout, cleanupOptions.Stderr = cleanupContext, nil, nil, nil
+			cleanupErr := run(cleanupSpec, cleanupOptions)
+			if cleanupErr != nil && isMissingContainerCleanupError(cleanupErr) {
+				return nil
+			}
+			return cleanupErr
+		}
+		if beforeCleanup != nil {
+			beforeCleanup(runErr, cleanup)
+		} else {
+			cleanupErr = cleanup(context.Background())
 		}
 	}
 	if runErr != nil && cleanupErr != nil {

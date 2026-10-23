@@ -9,6 +9,18 @@ import (
 )
 
 func environmentLifecycleExecutor(options RuntimeOptions, document blueprint.Document, plan DockerExecutionPlan, policy deploy.RuntimePolicyV1, stdout io.Writer, stderr io.Writer) LifecycleExecutor {
+	return environmentLifecycleExecutorWithCleanupHookV1(options, document, plan, policy, stdout, stderr, nil)
+}
+
+func environmentLifecycleExecutorWithCleanupHookV1(
+	options RuntimeOptions,
+	document blueprint.Document,
+	plan DockerExecutionPlan,
+	policy deploy.RuntimePolicyV1,
+	stdout io.Writer,
+	stderr io.Writer,
+	beforeCleanup func(error, func(context.Context) error),
+) LifecycleExecutor {
 	return LifecycleExecutor{
 		RunCommand: func(ctx context.Context, command ResolvedEnvironmentCommand) error {
 			commandPlan, err := effectiveCommandDockerPlanV1(document, plan, command.Name)
@@ -21,15 +33,17 @@ func environmentLifecycleExecutor(options RuntimeOptions, document blueprint.Doc
 			if _, err := preparePrivateWorkloadEnvironmentV1(options.Dir); err != nil {
 				return err
 			}
-			spec, err := TransientCommandSpec(commandPlan, command, nil, false, false)
+			containerName := transientCommandContainerName(commandPlan)
+			spec, err := transientContainerCommandSpecV1("run", containerName, commandPlan, command, nil, false, false)
 			if err != nil {
 				return err
 			}
-			return runTemporaryContainerCommand(
+			return runTemporaryContainerCommandWithCleanupHookV1(
 				runRuntimeCommand,
 				spec,
-				TemporaryContainerCleanupCommand(transientCommandContainerName(plan)),
+				TemporaryContainerCleanupCommand(containerName),
 				RunOptions{Context: ctx, Stdout: stdout, Stderr: stderr, DockerPreflightTimeout: options.DockerPreflightTimeout},
+				beforeCleanup,
 			)
 		},
 		Readiness: func(ctx context.Context, endpoint EndpointExecutionPlan) error {
