@@ -129,13 +129,13 @@ func TestRunCurrentRuntimeObservationV1NormalizesStagedAndDeployedStatusButNotLo
 		want     string
 	}{
 		{name: "staged status", action: "status", want: strings.Join([]string{
-			"[STAGING : demo] status: running",
+			"[STAGING : demo] status: up",
 			"[STAGING : demo] started: 5 seconds ago",
 			"[STAGING : demo] endpoint http: http://127.0.0.1:18076",
 			"",
 		}, "\n")},
 		{name: "deployed status", action: "status", deployed: true, want: strings.Join([]string{
-			"[DEPLOYED : demo] status: running",
+			"[DEPLOYED : demo] status: up",
 			"[DEPLOYED : demo] started: 5 seconds ago",
 			"[DEPLOYED : demo] endpoint http: http://127.0.0.1:18076",
 			"",
@@ -244,9 +244,9 @@ func currentRuntimeObservationTestBackend(
 			}
 			return RuntimeContainerLogsCommandV1(containerID, options)
 		},
-		status: func(context.Context, DockerExecutionPlan, time.Duration) (RuntimeStatusV1, error) {
+		status: func(context.Context, *deploy.OperationLock, DockerExecutionPlan, time.Duration) (RuntimeStatusV1, error) {
 			*order = append(*order, "status")
-			return RuntimeStatusV1{Status: "running", Started: "5 seconds ago"}, nil
+			return RuntimeStatusV1{Status: "up", Started: "5 seconds ago"}, nil
 		},
 		run: func(spec CommandSpec, options RunOptions) error {
 			*order = append(*order, "run")

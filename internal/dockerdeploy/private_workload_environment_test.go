@@ -224,19 +224,14 @@ func TestRenderDockerInputsUsesSecretFreePrivateLauncher(t *testing.T) {
 	}
 	compose := string(rendered.Compose)
 	for _, want := range []string{
-		"stdin_open: true", "reploy_private_environment_ready", "/opt/demo", "serve",
-		"entrypoint: [/reploy-probe]", "command: [sandbox-exec, --uid", "--public, deny", "--local, deny", "/bin/sh, -c",
+		"stdin_open: true", "--private-environment", "/opt/demo", "serve",
+		"entrypoint: [/reploy-probe]", "command: [sandbox-exec, --uid", "--public, deny", "--local, deny", "--private-environment, --",
 		"source: /dev/null", "target: /deployment/.env", "read_only: true",
 		"/deployment/.reploy:" + privateRuntimeDirectoryMaskOptionsV1,
 	} {
 		if !strings.Contains(compose, want) {
 			t.Fatalf("Compose missing %q:\n%s", want, compose)
 		}
-	}
-	if !strings.Contains(compose, "$$reploy_private_environment_line") ||
-		!strings.Contains(compose, "$$@") ||
-		!strings.Contains(compose, "</dev/null") {
-		t.Fatalf("Compose launcher does not escape variable references from Compose interpolation:\n%s", compose)
 	}
 	for _, unwanted := range []string{"env_file:", "TOKEN=", "private value"} {
 		if strings.Contains(compose, unwanted) {
@@ -265,8 +260,7 @@ func TestInjectPrivateWorkloadEnvironmentV1UsesOnlyStdin(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotSpec.Args, []string{
 		"exec", "-i", "demo", sandbox.StartupVerifier.Path,
-		"restricted-exec", "--uid", "1000", "--gid", "1000", "--", "/bin/sh", "-c", privateWorkloadEnvironmentRelayV1,
-		"reploy-private-environment", privateWorkloadEnvironmentFIFOPathV1,
+		"restricted-exec", "--uid", "1000", "--gid", "1000", "--", sandbox.StartupVerifier.Path, "private-environment-relay-v1",
 	}) {
 		t.Fatalf("relay command = %#v", gotSpec)
 	}
@@ -283,33 +277,6 @@ func readAllForPrivateEnvironmentTest(options RunOptions) ([]byte, error) {
 	var output bytes.Buffer
 	_, err := output.ReadFrom(options.Stdin)
 	return output.Bytes(), err
-}
-
-func TestStartAndInjectPrivateWorkloadEnvironmentV1CleansFailedContainer(t *testing.T) {
-	order := []string{}
-	environment := privateWorkloadEnvironmentV1{Present: true, Payload: []byte("TOKEN=value\n\n")}
-	err := startAndInjectPrivateWorkloadEnvironmentV1(
-		t.Context(),
-		CommandSpec{Name: "docker", Args: []string{"compose", "up"}},
-		CommandSpec{Name: "docker", Args: []string{"compose", "down"}},
-		"demo",
-		testApplicationSandboxPlanV1(1000, 1000),
-		environment,
-		RunOptions{},
-		func(spec CommandSpec, _ RunOptions) error {
-			order = append(order, strings.Join(spec.Args, " "))
-			if len(spec.Args) > 0 && spec.Args[0] == "exec" {
-				return errors.New("relay failed")
-			}
-			return nil
-		},
-	)
-	if err == nil || !strings.Contains(err.Error(), "one-shot FIFO relay") {
-		t.Fatalf("error = %v", err)
-	}
-	if len(order) != 3 || order[0] != "compose up" || !strings.HasPrefix(order[1], "exec -i demo "+deploy.ApplicationStartupVerifierPathV1+" restricted-exec ") || order[2] != "compose down" {
-		t.Fatalf("order = %#v", order)
-	}
 }
 
 func TestPlanAndApplyPrivateEnvironmentInstallPreservesThenReplaces(t *testing.T) {
@@ -458,7 +425,6 @@ func TestPrivateWorkloadEnvironmentRealDockerIsolation(t *testing.T) {
 	t.Cleanup(func() {
 		remove()
 	})
-	script := privateWorkloadEnvironmentLauncherV1
 	create := CommandSpec{Name: "docker", Args: []string{
 		"create", "--name", container, "-i", "--user", "0:0",
 		"--cap-drop", "ALL", "--cap-add", "NET_ADMIN", "--cap-add", "SETGID", "--cap-add", "SETPCAP", "--cap-add", "SETUID",
@@ -467,8 +433,8 @@ func TestPrivateWorkloadEnvironmentRealDockerIsolation(t *testing.T) {
 		"--env", "HOME=" + environmentTemporaryHome,
 		"--mount", "type=bind,source=" + probe.HostExecutable + ",target=" + sandbox.StartupVerifier.Path + ",readonly",
 		"--entrypoint", sandbox.StartupVerifier.Path, "python:3.11-slim",
-		"sandbox-exec", "--uid", "65532", "--gid", "65532", "--public", "deny", "--local", "deny", "--ambiguous", "require-both", "--", "/bin/sh", "-c", script, "reploy-private-environment",
-		"python", "-c", `import os,time; name="REPLOY_"+"PRIVATE_"+"TEST"; value=os.environ.get(name); data=os.read(0, 1); print("ENV_PRESENT", value is not None, "LENGTH", len(value or ""), "STDIN_EOF", data == b"", flush=True); time.sleep(20)`,
+		"sandbox-exec", "--uid", "65532", "--gid", "65532", "--public", "deny", "--local", "deny", "--ambiguous", "require-both", "--private-environment", "--",
+		"/usr/local/bin/python", "-c", `import os,time; name="REPLOY_"+"PRIVATE_"+"TEST"; value=os.environ.get(name); data=os.read(0, 1); print("ENV_PRESENT", value is not None, "LENGTH", len(value or ""), "STDIN_EOF", data == b"", flush=True); time.sleep(20)`,
 	}}
 	if err := run(create, RunOptions{}); err != nil {
 		t.Fatal(err)
@@ -505,5 +471,24 @@ func TestPrivateWorkloadEnvironmentRealDockerIsolation(t *testing.T) {
 			t.Fatalf("workload did not observe injected environment:\n%s", logs.String())
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func TestLoadPrivateWorkloadEnvironmentV1PreservesFileLimitWithFraming(t *testing.T) {
+	for _, ending := range []string{"", "\n"} {
+		t.Run("terminal-newline-"+strconv.FormatBool(ending != ""), func(t *testing.T) {
+			dir := t.TempDir()
+			raw := []byte("TOKEN=" + strings.Repeat("x", privateWorkloadEnvironmentMaxBytes-len("TOKEN=")-len(ending)) + ending)
+			if _, err := publishPrivateWorkloadEnvironmentFileV1(filepath.Join(dir, PrivateWorkloadEnvironmentFileName), raw, false); err != nil {
+				t.Fatal(err)
+			}
+			environment, err := loadPrivateWorkloadEnvironmentV1(dir)
+			if err != nil || !environment.Present || len(environment.Payload) != privateWorkloadEnvironmentMaxBytes+2-len(ending) {
+				t.Fatalf("raw bytes=%d payload bytes=%d: %v", len(raw), len(environment.Payload), err)
+			}
+		})
+	}
+	if _, err := parsePrivateWorkloadEnvironmentV1([]byte("TOKEN=" + strings.Repeat("x", privateWorkloadEnvironmentMaxBytes+1-len("TOKEN=")))); err == nil {
+		t.Fatal("oversized host file accepted")
 	}
 }

@@ -3,9 +3,8 @@ package dockerdeploy
 import (
 	"context"
 	"fmt"
+	"github.com/omry/reploy/internal/deploy"
 )
-
-var bindProviderInstallHostCommandRunner = bindDockerCommandRunnerV1
 
 func configureProviderInstallHostV1(ctx context.Context, plan providerInstallationPlanV1, tools providerInstallHostToolsV1, options RunOptions) error {
 	commands, err := planProviderInstallHostCommandsV1(plan, tools.DockerPath, tools.SystemctlPath)
@@ -31,37 +30,29 @@ func startProviderInstallHostV1(ctx context.Context, plan providerInstallationPl
 			return fmt.Errorf("validate installed private runtime isolation: %w", err)
 		}
 	}
-	run := commandRunner(runCommandWithoutDockerPreflight)
-	if plan.Backend == installBackendDockerDesktop || plan.Backend == installBackendDockerManaged {
-		run, err = bindProviderInstallHostCommandRunner(ctx, commands.Start, options.DockerPreflightTimeout)
-		if err != nil {
-			return fmt.Errorf("bind install host Docker endpoint: %w", err)
-		}
-	}
-	if plan.Docker.PrivateEnvironment && plan.Backend != installBackendLinuxSystemd {
-		if !environment.Present {
+	if plan.Backend != installBackendLinuxSystemd {
+		if plan.Docker.PrivateEnvironment && !environment.Present {
 			return fmt.Errorf("installed private workload environment disappeared before startup")
 		}
-		if err := validatePrivateWorkloadEnvironmentIsolationV1(plan.Installation.TargetDir, plan.Docker); err != nil {
-			return fmt.Errorf("validate installed private workload environment isolation: %w", err)
+		if environment.Present {
+			if err := validatePrivateWorkloadEnvironmentIsolationV1(plan.Installation.TargetDir, plan.Docker); err != nil {
+				return err
+			}
 		}
-		cleanup := composeCommandWithProject(plan.Installation.TargetDir, plan.Installation.ComposeProject, "down", "--remove-orphans")
-		cleanup.Name = tools.DockerPath
-		if err := startAndInjectPrivateWorkloadEnvironmentV1(
-			ctx,
-			commands.Start,
-			cleanup,
-			plan.Docker.ContainerName,
-			plan.Docker.Sandbox,
-			environment,
-			options,
-			run,
-		); err != nil {
-			return fmt.Errorf("install host startup: %w", err)
+		lifecycle := options.workloadLifecycle
+		if lifecycle == nil {
+			return fmt.Errorf("install host startup requires controller-owned lifecycle evidence")
 		}
-		return nil
+		commands.Start.Env = lifecycle.command.Env
+		return lifecycle.operation(ctx, func(operation *deploy.OperationLock) error {
+			environment.Operation, environment.RuntimeBinding = operation, lifecycle.binding.Runtime
+			started, err := startAndInjectPrivateWorkloadEnvironmentWithV1(ctx, commands.Start, plan.Docker.ContainerName, plan.Docker.Sandbox, environment, options, lifecycle.run, injectPrivateWorkloadEnvironmentV1)
+			lifecycle.started = started
+			return err
+		})
 	}
-	return startProviderInstallHostWithV1(ctx, commands, options, run)
+
+	return startProviderInstallHostWithV1(ctx, commands, options, runCommandWithoutDockerPreflight)
 }
 
 func configureProviderInstallHostWithV1(ctx context.Context, commands providerInstallHostCommandsV1, options RunOptions, run commandRunner) error {

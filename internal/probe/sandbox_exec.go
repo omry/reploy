@@ -15,6 +15,7 @@ type sandboxExecPlanV1 struct {
 	Groups                 []uint32
 	EnvironmentProfile     string
 	ContractEnvironment    []EnvironmentVariableV1
+	PrivateEnvironment     bool
 	RecordExitStatus       bool
 	PrepareTemporaryHome   bool
 	AllowPublic            bool
@@ -47,6 +48,7 @@ func parseSandboxExecPlanV1(args []string, installRules bool) (sandboxExecPlanV1
 	contractEnvironment := new(contractEnvironmentFlagV1)
 	set.Var(contractEnvironment, "environment-entry", "additional NAME=VALUE contract runtime environment entry")
 	prepareHome := set.Bool("prepare-temporary-home", false, "prepare fixed private home tmpfs ownership for the Podman uid/gid compatibility gap")
+	privateEnvironment := set.Bool("private-environment", false, "receive the private workload environment once before application exec")
 	recordExitStatus := set.Bool("record-exit-status", false, "record the observed application exit status through the fixed trusted channel")
 	public := set.String("public", "", "public network policy")
 	local := set.String("local", "", "local network policy")
@@ -92,6 +94,9 @@ func parseSandboxExecPlanV1(args []string, installRules bool) (sandboxExecPlanV1
 	if err != nil {
 		return sandboxExecPlanV1{}, fmt.Errorf("parse --environment-entry: %w", err)
 	}
+	if *privateEnvironment && (*recordExitStatus || *environmentProfile != "") {
+		return sandboxExecPlanV1{}, fmt.Errorf("private workload environment cannot use portable-tool execution")
+	}
 	if *recordExitStatus && (installRules || *environmentProfile != PortableToolEnvironmentProfileV1) {
 		return sandboxExecPlanV1{}, fmt.Errorf("--record-exit-status requires restricted-exec with environment profile %s", PortableToolEnvironmentProfileV1)
 	}
@@ -126,7 +131,7 @@ func parseSandboxExecPlanV1(args []string, installRules bool) (sandboxExecPlanV1
 	}
 	return sandboxExecPlanV1{
 		UID: parsedUID, GID: parsedGID, Groups: parsedGroups, EnvironmentProfile: *environmentProfile,
-		ContractEnvironment: parsedContractEnvironment, RecordExitStatus: *recordExitStatus, PrepareTemporaryHome: *prepareHome,
+		PrivateEnvironment: *privateEnvironment, ContractEnvironment: parsedContractEnvironment, RecordExitStatus: *recordExitStatus, PrepareTemporaryHome: *prepareHome,
 		AllowPublic: allowPublic, AllowLocal: allowLocal, AllowAmbiguous: allowAmbiguous,
 		InboundTCP: ports, SessionNetworkPrefixes: *sessionNetworkPrefixes, SessionNetworkPeer: *sessionNetworkPeer, InstallRules: installRules,
 		Argv: append([]string(nil), argv...),

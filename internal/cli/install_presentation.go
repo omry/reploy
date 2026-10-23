@@ -21,9 +21,9 @@ func writeInstallResult(output io.Writer, result dockerdeploy.ProviderInstallRes
 	if result.ControlScript != "" {
 		fmt.Fprintf(output, "%s control: %s\n", prefix, filepath.Join(result.TargetDir, result.ControlScript))
 	}
-	status := "stopped"
+	status := "down"
 	if result.Started {
-		status = "running"
+		status = "up"
 	}
 	fmt.Fprintf(output, "%s status: %s\n", prefix, status)
 	if result.State.Deployment != nil {
