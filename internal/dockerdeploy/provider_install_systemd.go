@@ -33,6 +33,13 @@ func providerInstallSystemdFileV1(plan providerInstallationPlanV1, dockerPath st
 	if strings.ContainsRune(dockerPath, '"') {
 		return nil, fmt.Errorf("install systemd file Docker path contains a double quote unsupported by systemd executable paths")
 	}
+	if !localDockerEndpointV1(plan.ServiceEngineEndpoint) {
+		return nil, fmt.Errorf("install systemd file requires the verified local service engine endpoint")
+	}
+	engineEnvironment, err := systemdInstallEnvironmentV1("DOCKER_HOST=" + plan.ServiceEngineEndpoint)
+	if err != nil {
+		return nil, fmt.Errorf("install systemd engine environment: %w", err)
+	}
 
 	workingDirectory, err := systemdInstallWorkingDirectoryV1(systemdPath(plan.Installation.TargetDir))
 	if err != nil {
@@ -68,6 +75,9 @@ func providerInstallSystemdFileV1(plan providerInstallationPlanV1, dockerPath st
 	if includeDockerUnit {
 		dockerUnit = "Requires=docker.service\nAfter=docker.service\n"
 	}
+	// Reploy enforces independent engine/startup deadlines. Leave the existing
+	// failed-start cleanup budget before systemd's final startup safety limit.
+	startupLimit := installedServiceEngineTimeoutV1 + installedServiceStartupTimeoutV1 + privateWorkloadEnvironmentTimeoutV1
 	// systemd prepares one private cache for the root controller account.
 	content := fmt.Sprintf(`[Unit]
 Description=Reploy Docker service (%s)
@@ -79,9 +89,12 @@ Description=Reploy Docker service (%s)
 [Service]
 Type=notify
 NotifyAccess=main
+TimeoutStartSec=%.0fs
 CacheDirectory=reploy
 CacheDirectoryMode=0700
 Environment="XDG_CACHE_HOME=%%C/reploy"
+Environment=%s
+Environment="DOCKER_CONTEXT="
 WorkingDirectory=%s
 ExecStart=%s
 ExecStop=%s
@@ -89,7 +102,7 @@ Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
-`, plan.Installation.Service, plan.Installation.Service, systemdPath(plan.Installation.TargetDir), plan.Installation.ComposeProject, dockerUnit, workingDirectory, start, stop)
+`, plan.Installation.Service, plan.Installation.Service, systemdPath(plan.Installation.TargetDir), plan.Installation.ComposeProject, dockerUnit, startupLimit.Seconds(), engineEnvironment, workingDirectory, start, stop)
 	return []providerInstallFileCandidateV1{{
 		Path: plan.Installation.UnitPath, Content: []byte(content), Mode: 0o644,
 	}}, nil
@@ -102,6 +115,15 @@ func systemdInstallWorkingDirectoryV1(value string) (string, error) {
 		}
 	}
 	return strings.ReplaceAll(value, "%", "%%"), nil
+}
+
+func systemdInstallEnvironmentV1(assignment string) (string, error) {
+	value, err := systemdInstallWorkingDirectoryV1(assignment)
+	if err != nil {
+		return "", err
+	}
+	// Environment= expands unit specifiers, but does not expand dollar signs.
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value) + `"`, nil
 }
 
 func systemdInstallCommandV1(arguments []string) (string, error) {

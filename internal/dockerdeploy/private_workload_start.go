@@ -86,6 +86,18 @@ func startAndInjectPrivateWorkloadEnvironmentWithV1(
 	sandbox ApplicationSandboxPlanV1, environment privateWorkloadEnvironmentV1,
 	options RunOptions, run commandRunner, inject privateWorkloadEnvironmentInjectorV1,
 ) (result privateWorkloadStartResultV1, err error) {
+	return startAndInjectPrivateWorkloadEnvironmentWithFailureCleanupHookV1(ctx, start, containerName, sandbox, environment, options, run, inject, nil)
+}
+
+// The installed service supplies this hook so failure classification is frozen
+// before cancellation-surviving inspection and cleanup. The hook's context is
+// also reused by the caller's ownership-checked rollback.
+func startAndInjectPrivateWorkloadEnvironmentWithFailureCleanupHookV1(
+	ctx context.Context, start CommandSpec, containerName string,
+	sandbox ApplicationSandboxPlanV1, environment privateWorkloadEnvironmentV1,
+	options RunOptions, run commandRunner, inject privateWorkloadEnvironmentInjectorV1,
+	failureCleanupHook func(error) context.Context,
+) (result privateWorkloadStartResultV1, err error) {
 	if ctx == nil || start.Name == "" || containerName == "" || run == nil || inject == nil {
 		return result, fmt.Errorf("private workload startup requires a context and complete runner")
 	}
@@ -136,10 +148,42 @@ func startAndInjectPrivateWorkloadEnvironmentWithV1(
 		return result, err
 	}
 	startErr := run(start, startOptions)
+	var failureCleanupContext context.Context
+	var failureCleanupStarted bool
+	beginFailureCleanup := func(cause error) context.Context {
+		if failureCleanupHook == nil || failureCleanupStarted {
+			return failureCleanupContext
+		}
+		failureCleanupStarted = true
+		failureCleanupContext = failureCleanupHook(cause)
+		return failureCleanupContext
+	}
+	startupFailure := errors.Join(startErr, ctx.Err())
+	if startupFailure != nil {
+		beginFailureCleanup(startupFailure)
+	}
 	// A failed or cancelled Compose command can still have started its
 	// container. The bounded ownership inspection must survive cancellation.
-	after, err := inspectPrivateWorkloadContainerV1(context.WithoutCancel(ctx), start, containerName, options, run)
+	inspectionContext := context.WithoutCancel(ctx)
+	if failureCleanupContext != nil {
+		inspectionContext = failureCleanupContext
+	}
+	var inspectionCancel context.CancelFunc
+	if failureCleanupHook != nil {
+		if startupDeadline, ok := ctx.Deadline(); ok {
+			inspectionContext, inspectionCancel = context.WithDeadline(inspectionContext, startupDeadline.Add(privateWorkloadEnvironmentTimeoutV1))
+		}
+	}
+	if inspectionCancel != nil {
+		defer inspectionCancel()
+	}
+	after, err := inspectPrivateWorkloadContainerV1(inspectionContext, start, containerName, options, run)
 	if err != nil {
+		cause := errors.Join(startupFailure, ctx.Err(), err)
+		beginFailureCleanup(cause)
+		if failureCleanupHook != nil {
+			return result, cause
+		}
 		return result, errors.Join(startErr, ctx.Err(), err)
 	}
 	result = privateWorkloadStartResultV1{
@@ -150,18 +194,32 @@ func startAndInjectPrivateWorkloadEnvironmentWithV1(
 		if cause == nil {
 			return cause
 		}
+		if failureCleanupHook != nil {
+			return cause
+		}
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), privateWorkloadEnvironmentTimeoutV1)
 		defer cancel()
 		return errors.Join(cause, stopFailedPrivateWorkloadStartV1(cleanupCtx, start, result, environment.Operation, record, options, run))
 	}
-	if startErr != nil || ctx.Err() != nil {
-		return result, cleanup(errors.Join(startErr, ctx.Err()))
+	if startupFailure != nil {
+		if failureCleanupHook == nil {
+			return result, cleanup(errors.Join(startErr, ctx.Err()))
+		}
+		return result, cleanup(startupFailure)
+	}
+	if inspectionFailure := ctx.Err(); inspectionFailure != nil {
+		beginFailureCleanup(inspectionFailure)
+		return result, cleanup(inspectionFailure)
 	}
 	if !after.Running {
-		return result, cleanup(fmt.Errorf("private workload exited before environment injection; inspect workload logs"))
+		cause := fmt.Errorf("private workload exited before environment injection; inspect workload logs")
+		beginFailureCleanup(cause)
+		return result, cleanup(cause)
 	}
 	if !result.Owned {
-		return result, fmt.Errorf("workload startup process identity is unconfirmed; use `reploy restart`")
+		cause := fmt.Errorf("workload startup process identity is unconfirmed; use `reploy restart`")
+		beginFailureCleanup(cause)
+		return result, cleanup(cause)
 	}
 	record.ContainerID, record.StartedAt = after.ID, after.StartedAt
 	if environment.Present {
@@ -169,23 +227,30 @@ func startAndInjectPrivateWorkloadEnvironmentWithV1(
 		// an existing process never receives a second transfer.
 		record.TransferClaimed = true
 		if err := environment.Operation.WriteWorkloadLifecycleV1(record); err != nil {
+			beginFailureCleanup(err)
 			return result, cleanup(err)
 		}
 		if err := inject(ctx, start.Name, after.ID, sandbox, environment, options, run); err != nil {
+			beginFailureCleanup(err)
 			return result, cleanup(err)
 		}
 		current, err := inspectPrivateWorkloadContainerV1(ctx, start, after.ID, options, run)
 		if err != nil {
+			beginFailureCleanup(err)
 			return result, cleanup(err)
 		}
 		if !current.Running || current.ID != after.ID || current.StartedAt != after.StartedAt {
-			return result, cleanup(fmt.Errorf("workload process changed during private startup"))
+			cause := fmt.Errorf("workload process changed during private startup")
+			beginFailureCleanup(cause)
+			return result, cleanup(cause)
 		}
 		record.HandoffComplete = true
 	} else if err := confirmApplicationLaunchV1(ctx, start, after, options, run); err != nil {
+		beginFailureCleanup(err)
 		return result, cleanup(err)
 	}
 	if err := environment.Operation.WriteWorkloadLifecycleV1(record); err != nil {
+		beginFailureCleanup(err)
 		return result, cleanup(err)
 	}
 	return result, nil

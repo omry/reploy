@@ -68,6 +68,23 @@ groups still map to subordinate host groups. Host files requiring supplementary
 group access can remain inaccessible. Reploy does not import additional host
 group authority or repair existing subordinate-owned data automatically.
 
+Linux system service units retain the local engine endpoint selected during
+installation for both start and stop. Startup waits up to 90 seconds for that
+engine. It then allows 60 seconds for the complete application startup sequence,
+including validation, custom `before_start` and `after_start` events, private
+environment delivery, and readiness checks. These are separate time limits.
+Timeout errors report the engine wait, startup time, and individual startup
+events by command name, without command arguments or private values.
+
+The generated systemd unit has a 180-second outer startup limit. This covers the
+two limits plus the existing 30-second failed-start cleanup allowance; cleanup
+does not extend the application's startup budget. Restart and stop timing are
+unchanged. Reinstall existing system services to regenerate their units.
+
+If you select a custom engine endpoint, configure its engine to start at boot.
+Reploy does not infer a host service from an arbitrary socket path. This startup
+handling does not establish Docker Desktop on WSL or full Podman compatibility.
+
 ## Install
 
 Install the latest release binary:

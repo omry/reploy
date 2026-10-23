@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
@@ -54,6 +55,28 @@ func RunInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 	if err != nil {
 		return err
 	}
+	start := composeCommandWithProject(deploymentDir, installation.ComposeProject, "up", "--pull", "never", "-d")
+	start.Name = dockerPath
+	engineStarted := time.Now()
+	start, runDocker, err := waitInstalledServiceEngineV1(ctx, start, options, installedServiceEngineWaitV1{
+		bind: bindInstalledServiceCommandRunner, timeout: installedServiceEngineTimeoutV1, interval: time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("bind installed service Docker endpoint; engine wait=%s (limit %s); application startup=not started: %w", time.Since(engineStarted).Round(time.Millisecond), installedServiceEngineTimeoutV1, err)
+	}
+	serviceCtx := ctx
+	startupCtx, timing, finishBudget := newInstalledServiceStartupBudgetV1(ctx, time.Since(engineStarted), installedServiceStartupTimeoutV1, options.Stderr)
+	var lifecycle *workloadLifecycleV1
+	var deferredCleanup func(context.Context) error
+	var failureCleanupContext context.Context
+	var failureCleanupCancel context.CancelFunc
+	defer func() {
+		err = timing.finish(startupCtx, err, finishBudget, func(cause error) error {
+			return cleanupInstalledServiceStartupFailureV1(serviceCtx, lifecycle, deferredCleanup, failureCleanupContext, failureCleanupCancel, cause)
+		})
+	}()
+	ctx = startupCtx
+	timing.step("build validation")
 	current, currentFound, err := ValidateCurrentBuild(ctx, operation, store, document.Environment.ID, deploymentDir)
 	if err != nil {
 		return fmt.Errorf("installed service current build: %w", err)
@@ -61,6 +84,7 @@ func RunInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 	if !currentFound {
 		return fmt.Errorf("installed service build is missing; rerun the original `reploy install` command")
 	}
+	timing.step("runtime preparation")
 	runtime, err := CurrentStagedProviderBuildRuntimeV1()
 	if err != nil {
 		return err
@@ -73,6 +97,7 @@ func RunInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 	if err != nil {
 		return err
 	}
+	timing.step("private environment preparation")
 	environment, err := preparePrivateWorkloadEnvironmentV1(deploymentDir)
 	if err != nil {
 		return fmt.Errorf("prepare private workload environment: %w", err)
@@ -87,26 +112,23 @@ func RunInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 	}); err != nil {
 		return err
 	}
+	timing.step("publish runtime inputs")
 	if _, err := PublishCurrentRuntimeInputsV1(operation, deploymentDir, plan); err != nil {
 		return err
 	}
-	start := composeCommandWithProject(deploymentDir, installation.ComposeProject, "up", "--pull", "never", "-d")
-	start.Name = dockerPath
-	start, runDocker, err := bindInstalledServiceCommandRunner(ctx, start, options.DockerPreflightTimeout)
-	if err != nil {
-		return fmt.Errorf("bind installed service Docker endpoint: %w", err)
-	}
-	lifecycle := &workloadLifecycleV1{command: start, containerName: plan.Docker.ContainerName, run: runDocker, options: options,
+	lifecycle = &workloadLifecycleV1{command: start, containerName: plan.Docker.ContainerName, run: runDocker, options: options,
 		operation: func(_ context.Context, action func(*deploy.OperationLock) error) error { return action(operation) }}
 	binding, err := workloadRuntimeBindingV1(plan.Docker)
 	if err != nil {
 		return err
 	}
+	timing.step("inspect existing workload")
 	reused, _, err := lifecycle.initialize(ctx, binding, environment.Present)
 	if err != nil {
 		return err
 	}
 	if !reused && environment.Present {
+		timing.step("prepare private workload runtime")
 		plan.Docker.PrivateEnvironment = true
 		if err := validatePrivateWorkloadEnvironmentIsolationV1(deploymentDir, plan.Docker); err != nil {
 			return err
@@ -135,28 +157,50 @@ func RunInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 		if lifecycle.initial.Running {
 			return fmt.Errorf("installed workload startup is unconfirmed; use `reploy restart`")
 		}
+		timing.step("plan startup events")
 		startup, err := planLockedStartLifecycleV1(plan.Document, plan.Docker, current.Lock.Catalog)
 		if err != nil {
 			return err
 		}
-		executor := environmentLifecycleExecutor(RuntimeOptions{Dir: deploymentDir, DockerPreflightTimeout: options.DockerPreflightTimeout}, plan.Document, plan.Docker, current.Lock.RuntimePolicy, options.Stdout, options.Stderr)
+		cleanupHook := installedServiceCustomEventCleanupHookV1(startupCtx, timing, finishBudget, &deferredCleanup)
+		executor := environmentLifecycleExecutorWithCleanupHookV1(
+			RuntimeOptions{Dir: deploymentDir, DockerPreflightTimeout: options.DockerPreflightTimeout},
+			plan.Document, plan.Docker, current.Lock.RuntimePolicy, options.Stdout, options.Stderr,
+			cleanupHook,
+		)
+		executor.Readiness = lifecycle.waitInstalledServiceReadiness
 		executor.Start = func(startCtx context.Context) error {
 			environment.Operation, environment.RuntimeBinding = operation, binding
 			var err error
-			started, err = startAndInjectPrivateWorkloadEnvironmentWithV1(startCtx, start, plan.Docker.ContainerName, plan.Docker.Sandbox, environment, options, runDocker, injectPrivateWorkloadEnvironmentV1)
+			started, err = startAndInjectPrivateWorkloadEnvironmentWithFailureCleanupHookV1(
+				startCtx, start, plan.Docker.ContainerName, plan.Docker.Sandbox, environment, options, runDocker,
+				injectPrivateWorkloadEnvironmentV1,
+				installedServiceFailureCleanupHookV1(serviceCtx, startupCtx, timing, finishBudget, &failureCleanupContext, &failureCleanupCancel),
+			)
 			lifecycle.started = started
 			return err
 		}
+		executor.beforeOperation = timing.lifecycleStep
 		if err := ExecuteLifecycle(ctx, startup, executor); err != nil {
-			return lifecycle.rollback(ctx, err)
+			return err
 		}
+		timing.step("confirm application startup")
 		if err := lifecycle.complete(ctx); err != nil {
-			return lifecycle.rollback(ctx, err)
+			return err
 		}
 	}
-	if err := notifyInstalledServiceReadyV1(); err != nil {
-		return lifecycle.rollback(ctx, err)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
+	timing.step("notify service readiness")
+	if err := notifyInstalledServiceReadyV1(); err != nil {
+		return err
+	}
+	timing.mu.Lock()
+	timing.ready = true
+	timing.mu.Unlock()
+	finishBudget()
+	ctx = serviceCtx
 	if err := operation.Unlock(); err != nil {
 		return err
 	}
@@ -186,4 +230,46 @@ func RunInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 		return fmt.Errorf("installed workload container exited with status %d", exitCode)
 	}
 	return nil
+}
+
+func cleanupInstalledServiceStartupFailureV1(serviceCtx context.Context, lifecycle *workloadLifecycleV1, deferredCleanup func(context.Context) error, failureCleanupContext context.Context, failureCleanupCancel context.CancelFunc, cause error) error {
+	if failureCleanupCancel != nil {
+		defer failureCleanupCancel()
+	}
+	if lifecycle == nil {
+		return cause
+	}
+	if deferredCleanup != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(serviceCtx), privateWorkloadEnvironmentTimeoutV1)
+		defer cancel()
+		rollbackErr := lifecycle.rollbackWithCleanupContextV1(cleanupCtx, cause)
+		return errors.Join(rollbackErr, deferredCleanup(cleanupCtx))
+	}
+	if failureCleanupContext != nil {
+		return lifecycle.rollbackWithCleanupContextV1(failureCleanupContext, cause)
+	}
+	return lifecycle.rollback(serviceCtx, cause)
+}
+
+func installedServiceCustomEventCleanupHookV1(startupCtx context.Context, timing *installedServiceStartupTimingsV1, stop func(), deferredCleanup *func(context.Context) error) func(error, func(context.Context) error) {
+	return func(failure error, cleanup func(context.Context) error) {
+		timing.failBeforeCleanup(startupCtx, failure, stop)
+		*deferredCleanup = cleanup
+	}
+}
+
+func installedServiceFailureCleanupHookV1(serviceCtx, startupCtx context.Context, timing *installedServiceStartupTimingsV1, stop func(), cleanupContext *context.Context, cleanupCancel *context.CancelFunc) func(error) context.Context {
+	return func(failure error) context.Context {
+		startupDeadline, hasStartupDeadline := startupCtx.Deadline()
+		timing.failBeforeCleanup(startupCtx, failure, stop)
+		if *cleanupContext == nil {
+			cleanupBase := context.WithoutCancel(serviceCtx)
+			cleanupDeadline := time.Now().Add(privateWorkloadEnvironmentTimeoutV1)
+			if hasStartupDeadline && startupDeadline.Add(privateWorkloadEnvironmentTimeoutV1).Before(cleanupDeadline) {
+				cleanupDeadline = startupDeadline.Add(privateWorkloadEnvironmentTimeoutV1)
+			}
+			*cleanupContext, *cleanupCancel = context.WithDeadline(cleanupBase, cleanupDeadline)
+		}
+		return *cleanupContext
+	}
 }
