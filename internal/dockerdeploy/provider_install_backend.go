@@ -28,7 +28,17 @@ func newProviderInstallRunBackendV1() providerInstallRunBackend {
 		ensureDestination:    ensureProviderInstallDestinationV1,
 		cleanupDestination:   cleanupFailedProviderInstallDestinationV1,
 		prepareDestination: func(ctx context.Context, locked lockedProviderInstallV1) (preparedProviderInstallFilesV1, error) {
-			return prepareProviderInstallDestinationV1(ctx, locked, locked.HostTools.DockerPath, locked.HostTools.IncludeDockerUnit)
+			includeDockerUnit := locked.HostTools.IncludeDockerUnit
+			if locked.Plan.Backend == installBackendLinuxSystemd {
+				builder, err := selectGeneratedImageBuilder(ctx, locked.Input.RunOptions)
+				if err != nil {
+					return preparedProviderInstallFilesV1{}, fmt.Errorf("select installed service engine: %w", err)
+				}
+				locked.Plan.ServiceEngineEndpoint = builder.endpoint
+				includeDockerUnit = includeDockerUnit && builder.engine == "Docker" &&
+					(builder.endpoint == "unix:///var/run/docker.sock" || builder.endpoint == "unix:///run/docker.sock")
+			}
+			return prepareProviderInstallDestinationV1(ctx, locked, locked.HostTools.DockerPath, includeDockerUnit)
 		},
 		stopDestination: stopProviderInstallDestinationV1,
 		publish:         PublishInstalledBuildV1,

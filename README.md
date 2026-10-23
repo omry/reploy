@@ -68,6 +68,16 @@ groups still map to subordinate host groups. Host files requiring supplementary
 group access can remain inaccessible. Reploy does not import additional host
 group authority or repair existing subordinate-owned data automatically.
 
+Linux system service units retain the local engine endpoint selected during
+installation for both start and stop. Startup waits up to one minute for that
+engine before it starts the application or sends private environment values.
+Persistent engine errors still fail startup. Reinstall existing system services
+to regenerate their units with this behavior.
+
+If you select a custom engine endpoint, configure its engine to start at boot.
+Reploy does not infer a host service from an arbitrary socket path. This startup
+handling does not establish Docker Desktop on WSL or full Podman compatibility.
+
 ## Install
 
 Install the latest release binary:

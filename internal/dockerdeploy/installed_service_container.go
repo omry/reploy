@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
@@ -54,6 +55,14 @@ func RunInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 	if err != nil {
 		return err
 	}
+	start := composeCommandWithProject(deploymentDir, installation.ComposeProject, "up", "--pull", "never", "-d")
+	start.Name = dockerPath
+	start, runDocker, err := waitInstalledServiceEngineV1(ctx, start, options, installedServiceEngineWaitV1{
+		bind: bindInstalledServiceCommandRunner, timeout: time.Minute, interval: time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("bind installed service Docker endpoint: %w", err)
+	}
 	current, currentFound, err := ValidateCurrentBuild(ctx, operation, store, document.Environment.ID, deploymentDir)
 	if err != nil {
 		return fmt.Errorf("installed service current build: %w", err)
@@ -89,12 +98,6 @@ func RunInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 	}
 	if _, err := PublishCurrentRuntimeInputsV1(operation, deploymentDir, plan); err != nil {
 		return err
-	}
-	start := composeCommandWithProject(deploymentDir, installation.ComposeProject, "up", "--pull", "never", "-d")
-	start.Name = dockerPath
-	start, runDocker, err := bindInstalledServiceCommandRunner(ctx, start, options.DockerPreflightTimeout)
-	if err != nil {
-		return fmt.Errorf("bind installed service Docker endpoint: %w", err)
 	}
 	lifecycle := &workloadLifecycleV1{command: start, containerName: plan.Docker.ContainerName, run: runDocker, options: options,
 		operation: func(_ context.Context, action func(*deploy.OperationLock) error) error { return action(operation) }}
