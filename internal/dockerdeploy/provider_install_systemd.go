@@ -68,6 +68,7 @@ func providerInstallSystemdFileV1(plan providerInstallationPlanV1, dockerPath st
 	if includeDockerUnit {
 		dockerUnit = "Requires=docker.service\nAfter=docker.service\n"
 	}
+	// systemd prepares one private cache for the root controller account.
 	content := fmt.Sprintf(`[Unit]
 Description=Reploy Docker service (%s)
 # Managed-By: reploy
@@ -78,6 +79,9 @@ Description=Reploy Docker service (%s)
 [Service]
 Type=notify
 NotifyAccess=main
+CacheDirectory=reploy
+CacheDirectoryMode=0700
+Environment="XDG_CACHE_HOME=%%C/reploy"
 WorkingDirectory=%s
 ExecStart=%s
 ExecStop=%s
