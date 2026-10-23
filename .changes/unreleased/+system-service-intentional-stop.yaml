@@ -1,0 +1,2 @@
+kind: Fixed
+body: Linux system services no longer report a failed unit solely because an intentional systemd stop produces a nonzero container exit. Reploy confirms that systemd is stopping the exact controller and retains the container exit code in the journal. Unexpected container failures and stop-command failures remain errors.
