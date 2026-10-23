@@ -143,11 +143,13 @@ func runCurrentRuntimeObservationV1(
 		return fmt.Errorf("%s", currentBuildRecoveryMessageV1(state, "runtime build is missing or stale"))
 	}
 	runtimeInputsPlan := planned
+	stoppedWorkload := false
 	if backend.readLifecycle != nil {
 		record, found, err := backend.readLifecycle(operation)
 		if err != nil {
 			return fmt.Errorf("read runtime lifecycle: %w", err)
 		}
+		stoppedWorkload = found && record.State == "down" && planned.Docker.Workload != nil
 		if found && record.State == "up" && record.StartupComplete && record.ContainerID != "" &&
 			(!record.TransferClaimed || record.HandoffComplete) {
 			// The published Compose mode belongs to the confirmed process. A
@@ -156,7 +158,17 @@ func runCurrentRuntimeObservationV1(
 		}
 	}
 	if err := backend.requireInputs(operation, dir, runtimeInputsPlan); err != nil {
-		return err
+		if !stoppedWorkload {
+			return err
+		}
+		// Normal stop may publish ordinary inputs; failed startup can retain
+		// private-launcher inputs. Accept only an exact current rendering.
+		alternate := runtimeInputsPlan
+		alternate.Docker.PrivateEnvironment = !alternate.Docker.PrivateEnvironment
+		if alternateErr := backend.requireInputs(operation, dir, alternate); alternateErr != nil {
+			return err
+		}
+		runtimeInputsPlan = alternate
 	}
 	if input.Action == "status" {
 		status, err := backend.status(ctx, operation, runtimeInputsPlan.Docker, input.RunOptions.DockerPreflightTimeout)
@@ -219,6 +231,9 @@ func CurrentRuntimeContainerIDV1(ctx context.Context, plan DockerExecutionPlan, 
 		RunOptions{Context: ctx, DockerPreflightTimeout: dockerPreflightTimeout},
 	)
 	if err != nil {
+		if ctx.Err() == nil && privateWorkloadContainerMissingV1(strings.ToLower(strings.TrimSpace(string(output)))) {
+			return "", fmt.Errorf("runtime container %q no longer exists; its logs are unavailable", plan.ContainerName)
+		}
 		return "", fmt.Errorf("inspect runtime container %q: %w", plan.ContainerName, err)
 	}
 	containerID := strings.TrimSpace(string(output))

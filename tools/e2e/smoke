@@ -455,6 +455,23 @@ def run_port_conflict_probe(reploy: Path, deploy_dir: Path, workdir: Path, env: 
     require_contains(completed_output(up).lower(), "port", "port conflict output")
 
 
+def check_stopped_observations(deploy_dir: Path, workdir: Path, env: dict[str, str]) -> None:
+    paths = [deploy_dir / name for name in (".env", ".reploy/docker.env", ".reploy/runtime/compose.yaml")]
+    before = [(path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns) for path in paths]
+    status = run(control_script_command(deploy_dir, "status"), cwd=workdir, env=env)
+    require_contains(status.stdout, "status: down", "stopped private workload status")
+    logs = run_expect_failure(
+        control_script_command(deploy_dir, "logs", "--tail", "50"),
+        cwd=workdir,
+        env=env,
+        context="logs after normal container removal",
+    )
+    require_contains(completed_output(logs), "no longer exists; its logs are unavailable", "removed workload logs")
+    after = [(path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns) for path in paths]
+    if before != after:
+        raise RuntimeError("stopped observation changed private or runtime inputs")
+
+
 def run_runtime_smoke(reploy: Path, deploy_dir: Path, workdir: Path, env: dict[str, str]) -> None:
     # Staging publication is blueprint-owned in the environment model. Installed
     # publication remains overridable through `reploy install --port` below.
@@ -513,6 +530,13 @@ def run_runtime_smoke(reploy: Path, deploy_dir: Path, workdir: Path, env: dict[s
         )
         require_contains(restarted_health.stdout, f"ok: https://127.0.0.1:{host_port}/_health_", "health check after restart")
 
+        private_environment = deploy_dir / ".env"
+        private_environment.write_text("REPLOY_STOP_OBSERVATION=synthetic\n", encoding="utf-8")
+        private_environment.chmod(0o600)
+        run_reused_lifecycle(control_script_command(deploy_dir, "restart"))
+        run([str(reploy), "stop", "--dir", str(deploy_dir)], cwd=workdir, env=env)
+        started = False
+        check_stopped_observations(deploy_dir, workdir, env)
         run([str(reploy), "down", "--dir", str(deploy_dir)], cwd=workdir, env=env)
         started = False
         run_reused_lifecycle(control_script_command(deploy_dir, "up"))
@@ -572,8 +596,13 @@ def run_persistent_install_smoke(
         require_contains(completed_output(live_check), '"check": "pass"', "installed live config check")
         require_not_contains(completed_output(live_check), "[smoke-app]", "installed live config check")
 
+        private_environment = install_dir / ".env"
+        private_environment.write_text("REPLOY_STOP_OBSERVATION=synthetic\n", encoding="utf-8")
+        private_environment.chmod(0o600)
+        run(control_script_command(install_dir, "restart"), cwd=workdir, env=env)
         stop = run(control_script_command(install_dir, "stop"), cwd=workdir, env=env)
         require_not_contains(completed_output(stop), "[smoke-app]", "installed control stop")
+        check_stopped_observations(install_dir, workdir, env)
     finally:
         if installed:
             run(
