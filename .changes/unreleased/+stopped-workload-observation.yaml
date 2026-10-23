@@ -1,0 +1,2 @@
+kind: Fixed
+body: Keep status and logs usable after stopping a workload with a private environment, while preserving runtime input validation and read-only observation.
