@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestProviderInstallSystemdFileV1RendersRestartWithoutTimingPolicy(t *testing.T) {
+func TestProviderInstallSystemdFileV1RendersStartupBudgetWithoutRestartTimingPolicy(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("systemd installation rendering is Linux-specific")
 	}
@@ -27,7 +27,7 @@ func TestProviderInstallSystemdFileV1RendersRestartWithoutTimingPolicy(t *testin
 	unit := string(files[0].Content)
 	for _, want := range []string{
 		"Requires=docker.service\nAfter=docker.service\n",
-		"Type=notify\nNotifyAccess=main\n",
+		"Type=notify\nNotifyAccess=main\nTimeoutStartSec=180s\n",
 		"WorkingDirectory=" + destinationDir + "\n",
 		"ExecStart=\"" + systemdPath(destinationDir, embeddedRuntimeFileName()) + "\" \"_service-container\"",
 		"\"--dir\" \"" + systemdPath(destinationDir) + "\"",
@@ -40,7 +40,7 @@ func TestProviderInstallSystemdFileV1RendersRestartWithoutTimingPolicy(t *testin
 			t.Fatalf("unit missing %q:\n%s", want, unit)
 		}
 	}
-	for _, unwanted := range []string{"RestartSec=", "TimeoutStartSec=", "TimeoutStopSec="} {
+	for _, unwanted := range []string{"RestartSec=", "TimeoutStopSec="} {
 		if strings.Contains(unit, unwanted) {
 			t.Fatalf("unit contains timing policy %q:\n%s", unwanted, unit)
 		}

@@ -188,6 +188,13 @@ func (lifecycle *workloadLifecycleV1) rollback(ctx context.Context, cause error)
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), privateWorkloadEnvironmentTimeoutV1)
 	defer cancel()
+	return lifecycle.rollbackWithCleanupContextV1(cleanupCtx, cause)
+}
+
+func (lifecycle *workloadLifecycleV1) rollbackWithCleanupContextV1(cleanupCtx context.Context, cause error) error {
+	if !lifecycle.started.Owned {
+		return cause
+	}
 	err := lifecycle.operation(cleanupCtx, func(operation *deploy.OperationLock) error {
 		record, found, readErr := operation.ReadWorkloadLifecycleV1()
 		if readErr != nil || !found {

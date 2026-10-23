@@ -1174,8 +1174,9 @@ func providerInstallRunBuildFixture(t *testing.T, sourceDir string) (deploy.Stat
 func providerInstallRunPlanFixture(destinationDir string, references EnvironmentImageReferences) providerInstallationPlanV1 {
 	scope := blueprint.InstallScopeSystem
 	return providerInstallationPlanV1{
-		Installation:  installedBuildPublicationInstallation(destinationDir),
-		ControlScript: "democtl",
+		Installation:          installedBuildPublicationInstallation(destinationDir),
+		ServiceEngineEndpoint: "unix:///var/run/docker.sock",
+		ControlScript:         "democtl",
 		Docker: DockerExecutionPlan{
 			Phase: blueprint.PhaseInstalled, Scope: &scope, Image: references.Generation,
 			ContainerName: "demo", NetworkName: "demo", Sandbox: testApplicationSandboxPlanV1(1000, 1000),
