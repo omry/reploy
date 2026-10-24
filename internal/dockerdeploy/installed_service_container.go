@@ -1,13 +1,10 @@
 package dockerdeploy
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/omry/reploy/internal/blueprint"
@@ -230,30 +227,11 @@ func runInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 	}
 	operation = nil
 
-	var status bytes.Buffer
-	waitOptions := options
-	waitOptions.Context = ctx
-	waitOptions.Stdin = nil
-	waitOptions.Stdout = &status
-	waitOptions.Stderr = options.Stderr
 	waitContainer := plan.Docker.ContainerName
 	if started.ContainerID != "" {
 		waitContainer = started.ContainerID
 	}
-	if err := runDocker(CommandSpec{
-		Name: dockerPath,
-		Args: []string{"wait", waitContainer},
-	}, waitOptions); err != nil {
-		return fmt.Errorf("wait for installed workload container: %w", err)
-	}
-	exitCode, err := strconv.Atoi(strings.TrimSpace(status.String()))
-	if err != nil {
-		return fmt.Errorf("Docker returned an invalid workload exit status")
-	}
-	if exitCode != 0 {
-		return fmt.Errorf("installed workload container exited with status %d", exitCode)
-	}
-	return nil
+	return waitInstalledServiceWorkloadV1(ctx, dockerPath, waitContainer, installation.Service, options, runDocker)
 }
 
 func cleanupInstalledServiceStartupFailureV1(serviceCtx context.Context, lifecycle *workloadLifecycleV1, deferredCleanup func(context.Context) error, failureCleanupContext context.Context, failureCleanupCancel context.CancelFunc, cause error) error {
