@@ -620,17 +620,28 @@ func ReadPackageOverridesV1(deploymentDir string) (PackageOverridesV1, bool, err
 	if err != nil {
 		return PackageOverridesV1{}, false, err
 	}
-	info, err := os.Lstat(path)
+	return ReadPackageOverridesFileV1(path)
+}
+
+// ReadPackageOverridesFileV1 captures one explicitly selected override file.
+// Callers decide whether absence is allowed and bind its environment/declaration.
+func ReadPackageOverridesFileV1(path string) (PackageOverridesV1, bool, error) {
+	file, err := openPackageOverridesFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return PackageOverridesV1{}, false, nil
 	}
 	if err != nil {
+		return PackageOverridesV1{}, false, fmt.Errorf("open package overrides: %w", err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
 		return PackageOverridesV1{}, false, fmt.Errorf("inspect package overrides: %w", err)
 	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+	if !info.Mode().IsRegular() {
 		return PackageOverridesV1{}, false, fmt.Errorf("package overrides path must be a regular file: %s", path)
 	}
-	content, err := os.ReadFile(path)
+	content, err := io.ReadAll(file)
 	if err != nil {
 		return PackageOverridesV1{}, false, fmt.Errorf("read package overrides: %w", err)
 	}
