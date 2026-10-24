@@ -32,6 +32,8 @@ func retainedIdentityRecordV1(t *testing.T, dir string, state deploy.StateV1, va
 	}
 	values := []deploy.IdentityMappingIntervalV1{{ContainerStart: "0", HostStart: "100000", Count: "16"}}
 	switch variant {
+	case "retained":
+		m.UIDAssignments, m.GIDAssignments = values, values
 	case "pending":
 		m.PendingOperation = &deploy.IdentityMappingOperationV1{OperationID: "operation-fixture", Kind: "configure", ExpectedRevision: "7", ExpectedGeneration: state.Current,
 			Candidate: deploy.IdentityMappingGeometryV1{Profile: "exact", UIDs: values, GIDs: values}, Phase: "effects-pending", Inhibited: true}
@@ -403,7 +405,7 @@ func TestRetainedIdentityBuildPublicationPreservesRecordV1(t *testing.T) {
 	defer op.Unlock()
 	input := publicationInput(t, dir, lock)
 	state := deploy.StateV1{Schema: deploy.StateSchemaV1, Blueprint: testResolvedBlueprintV1(t, input.Document), BlueprintSource: "retained source", Platform: lock.Platform, Overlay: deploy.EmptyRequestOverlayV1(), Staging: &deploy.StagingStateV1{Schema: deploy.StagingStateSchemaV1}}
-	state = retainedIdentityRecordV1(t, dir, state, "pending")
+	state = retainedIdentityRecordV1(t, dir, state, "retained")
 	references := fixedPublicationReferences(t, dir, 0x51)
 	result, err := publishBuild(t.Context(), op, store, input, buildPublicationBackend{
 		newReferences: func(string, string) (EnvironmentImageReferences, error) { return references, nil },
@@ -418,7 +420,52 @@ func TestRetainedIdentityBuildPublicationPreservesRecordV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.Current == nil || !reflect.DeepEqual(state.IdentityMapping, result.IdentityMapping) {
-		t.Fatal("explicit portable publication lost mapping or pending intent")
+		t.Fatal("explicit portable publication lost retained mapping authority")
+	}
+}
+
+func TestPendingIdentityBuildPublicationRejectsBeforeEffectsV1(t *testing.T) {
+	for _, phase := range []string{"intent", "effects-pending", "verified"} {
+		t.Run(phase, func(t *testing.T) {
+			dir := t.TempDir()
+			store, lock := publicationLockFixture(t, dir, "4", "5", "6")
+			op, err := deploy.AcquireOperationLock(t.Context(), dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer op.Unlock()
+			input := publicationInput(t, dir, lock)
+			state := deploy.StateV1{Schema: deploy.StateSchemaV1, Blueprint: testResolvedBlueprintV1(t, input.Document), BlueprintSource: "retained source", Platform: lock.Platform, Overlay: deploy.EmptyRequestOverlayV1(), Staging: &deploy.StagingStateV1{Schema: deploy.StagingStateSchemaV1}}
+			state = retainedIdentityRecordV1(t, dir, state, "pending")
+			state.IdentityMapping.PendingOperation.Phase = phase
+			content, err := deploy.EncodeStateV1(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, StateFileName), content, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			before := identityGuardTreeV1(t, dir)
+			effects := 0
+			references := fixedPublicationReferences(t, dir, 0x51)
+			_, err = publishBuild(t.Context(), op, store, input, buildPublicationBackend{
+				newReferences: func(string, string) (EnvironmentImageReferences, error) { return references, nil },
+				createReference: func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error {
+					effects++
+					return nil
+				},
+				removeReference: func(context.Context, providers.RealizedImageV1, EnvironmentImageReferences, EnvironmentReferenceKind, string, string) error {
+					effects++
+					return nil
+				},
+			})
+			if err == nil || !strings.Contains(err.Error(), "pending identity mapping") || effects != 0 {
+				t.Fatalf("publication did not reject before effects: effects=%d err=%v", effects, err)
+			}
+			if after := identityGuardTreeV1(t, dir); !reflect.DeepEqual(after, before) {
+				t.Fatal("rejected publication changed pending state or build metadata")
+			}
+		})
 	}
 }
 
