@@ -83,6 +83,12 @@ func publishInstalledBuildV1(
 	if err := destinationOperation.RequireWritable(); err != nil {
 		return deploy.StateV1{}, err
 	}
+	if err := sourceOperation.RequireNoRetainedIdentityV1(); err != nil {
+		return deploy.StateV1{}, err
+	}
+	if err := destinationOperation.RequireNoRetainedIdentityV1(); err != nil {
+		return deploy.StateV1{}, err
+	}
 	if backend.transferClosure == nil || backend.createReference == nil || backend.removeReference == nil {
 		return deploy.StateV1{}, fmt.Errorf("publish installed build requires a complete backend")
 	}

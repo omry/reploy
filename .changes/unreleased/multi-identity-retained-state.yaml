@@ -1,0 +1,2 @@
+kind: Added
+body: Preserve deployment-local identity mapping authority under the deployment lock. Reject copied mapping state, unsupported mapped execution, and destructive replacement or directory removal until checked release is available.

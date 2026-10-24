@@ -80,6 +80,11 @@ func runProviderUninstallV1(
 		err = errors.Join(err, releaseErr)
 	}()
 
+	if input.RemoveDir {
+		if err := operation.RequireNoRetainedIdentityV1(); err != nil {
+			return err
+		}
+	}
 	state, found, err := operation.ReadStateV1()
 	if err != nil || !found || state.Deployment == nil || state.Current == nil || state.Deployment.Installation.TargetDir != deploymentDir {
 		return errors.Join(fmt.Errorf("installed uninstall state is missing or invalid"), err)
@@ -145,6 +150,9 @@ func runProviderUninstallV1(
 	}
 	if operation != previousOperation {
 		if input.RemoveDir {
+			if err := operation.RequireNoRetainedIdentityV1(); err != nil {
+				return err
+			}
 			if err := backend.recoverPending(ctx, operation, deploymentDir); err != nil {
 				return fmt.Errorf("recover publication after waiting for uninstall: %w", err)
 			}
