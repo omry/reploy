@@ -173,7 +173,7 @@ func forceReplaceStagedDesiredStateV1(
 		// A prior replacement may have committed before storage cleanup failed.
 		// Its committed state has no current or validated owner. Leave ordinary
 		// owner-bearing staging to stageSame, including deferred reference cleanup.
-		if state.Current == nil {
+		if state.Current == nil && state.IdentityMapping == nil {
 			_, validated, err := operation.ReadValidatedBuildV1()
 			if err != nil {
 				return result, err
@@ -193,6 +193,9 @@ func forceReplaceStagedDesiredStateV1(
 		}
 		operation = nil
 		return backend.stageSame(ctx, desired)
+	}
+	if err := operation.RequireNoRetainedIdentityV1(); err != nil {
+		return result, err
 	}
 	store, err := backend.newStore(dir)
 	if err != nil {
@@ -311,6 +314,9 @@ func forceReplaceStagedDesiredStateV1(
 	operation = admitted.Operation
 	markerID = admitted.Marker.ID
 	controlLease = admitted.Lease
+	if err := operation.RequireNoRetainedIdentityV1(); err != nil {
+		return result, err
+	}
 
 	state, found, oldEnvironment, err = readForceReplacementStateV1(operation)
 	if err != nil {
