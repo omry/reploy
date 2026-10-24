@@ -91,6 +91,10 @@ func admitControlOperationV1(
 		_, err := releaseControlAdmissionLockV1(operation, fmt.Errorf("admit control operation requires a complete backend"))
 		return result, err
 	}
+	if err := requireUnmappedControlDeploymentV1(operation, input.Operation); err != nil {
+		_, releaseErr := releaseControlAdmissionLockV1(operation, err)
+		return result, releaseErr
+	}
 	id, err := backend.newID()
 	if err != nil {
 		_, releaseErr := releaseControlAdmissionLockV1(operation, err)
