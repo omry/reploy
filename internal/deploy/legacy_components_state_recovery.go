@@ -95,6 +95,9 @@ func (lock *OperationLock) PrepareLegacyComponentsStagingRecoveryV1(
 		return LegacyComponentsStagingRecoveryV1{}, err
 	}
 	if overridesFound {
+		if err := overrides.CheckIdentityMappingDeclaration(recovery.Document); err != nil {
+			return LegacyComponentsStagingRecoveryV1{}, fmt.Errorf("retain package overrides for recovered blueprint: %w", err)
+		}
 		if _, err := EffectiveBaseImageV1(recovery.Document, overrides); err != nil {
 			return LegacyComponentsStagingRecoveryV1{}, fmt.Errorf(
 				"retain package overrides for recovered blueprint: %w",
