@@ -45,8 +45,9 @@ type EnvironmentSyntax struct {
 }
 
 type EnvironmentRuntimeSyntax struct {
-	User    string               `yaml:"user"`
-	Network RuntimeNetworkSyntax `yaml:"network"`
+	User            string               `yaml:"user"`
+	Network         RuntimeNetworkSyntax `yaml:"network"`
+	IdentityMapping *IdentityMappingV1   `yaml:"identity_mapping,omitempty"`
 }
 
 type RuntimeNetworkSyntax struct {

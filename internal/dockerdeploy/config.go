@@ -150,7 +150,7 @@ func validateCurrentAppCommandRequestV1(dir string, arguments []string, deployed
 	if err != nil {
 		return err
 	}
-	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	document, err := unmappedRuntimeDocumentV1(state)
 	if err != nil {
 		return fmt.Errorf("app command blueprint: %w", err)
 	}

@@ -6,6 +6,31 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func (runtime *EnvironmentRuntimeSyntax) UnmarshalYAML(node *yaml.Node) error {
+	if _, err := validateSyntaxMapping(node, "environment runtime", map[string]bool{
+		"user": true, "network": true, "identity_mapping": true,
+	}); err != nil {
+		return err
+	}
+	for i := 0; i < len(node.Content); i += 2 {
+		if node.Content[i].Value == "identity_mapping" && node.Content[i+1].Kind != yaml.MappingNode {
+			return fmt.Errorf("%s must be a mapping", identityMappingPathV1)
+		}
+	}
+	type plain EnvironmentRuntimeSyntax
+	return node.Decode((*plain)(runtime))
+}
+
+func (network *RuntimeNetworkSyntax) UnmarshalYAML(node *yaml.Node) error {
+	if _, err := validateSyntaxMapping(node, "runtime network", map[string]bool{
+		"public": true, "local": true, "ambiguous": true,
+	}); err != nil {
+		return err
+	}
+	type plain RuntimeNetworkSyntax
+	return node.Decode((*plain)(network))
+}
+
 func (base *BaseSyntax) UnmarshalYAML(node *yaml.Node) error {
 	if _, err := validateSyntaxMapping(node, "base", map[string]bool{
 		"image": true, "exports": true,

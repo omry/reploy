@@ -72,7 +72,7 @@ func runDirectProviderInstallEntryV1(
 		if err != nil {
 			return fmt.Errorf("read direct install source: %w", err)
 		}
-		document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+		document, err := unmappedRuntimeDocumentV1(state)
 		if err != nil {
 			return fmt.Errorf("decode direct install blueprint: %w", err)
 		}
