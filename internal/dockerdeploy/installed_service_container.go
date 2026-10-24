@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/providerstore"
 )
@@ -42,13 +41,13 @@ func RunInstalledServiceContainerV1(ctx context.Context, deploymentDir string, a
 	if !found || state.Deployment == nil || state.Deployment.Installation.Scope != string(InstallScopeSystem) {
 		return fmt.Errorf("installed service container requires a system installation")
 	}
+	document, err := unmappedRuntimeDocumentV1(state)
+	if err != nil {
+		return fmt.Errorf("installed service blueprint: %w", err)
+	}
 	installation := state.Deployment.Installation
 	if dockerPath == "" || !filepath.IsAbs(dockerPath) || filepath.Clean(dockerPath) != dockerPath {
 		return fmt.Errorf("installed service container requires an absolute Docker path")
-	}
-	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
-	if err != nil {
-		return fmt.Errorf("installed service blueprint: %w", err)
 	}
 	store, err := providerstore.NewStore(deploymentDir)
 	if err != nil {
