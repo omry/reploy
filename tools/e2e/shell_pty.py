@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify interactive ``reploy shell`` behavior through a real Unix PTY."""
+"""Verify interactive ``reploy shell`` or ``reploy app`` through a real Unix PTY."""
 
 from __future__ import annotations
 
@@ -26,6 +26,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--reploy", required=True, help="Path to the Reploy binary.")
     parser.add_argument("--dir", required=True, help="Prepared environment deployment directory.")
+    parser.add_argument("--container-prefix", required=True, help="Exact generated container-name prefix for this disposable deployment.")
+    parser.add_argument("--app-command", help="Test this declared app command instead of reploy shell; it must print REPLOY_PTY_APP_READY then launch an interactive POSIX shell.")
     parser.add_argument("--timeout", type=float, default=30.0, help="Per-operation timeout in seconds.")
     return parser.parse_args()
 
@@ -43,13 +45,18 @@ def main() -> int:
     if not reploy.is_file() or not os.access(reploy, os.X_OK):
         raise SystemExit(f"[shell-pty] Reploy binary is not executable: {reploy}")
 
-    container_prefix = docker_env_value(deployment / ".reploy" / "docker.env", "REPLOY_CONTAINER_NAME")
+    container_prefix = args.container_prefix
+    if not container_prefix or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-" for c in container_prefix):
+        raise SystemExit("[shell-pty] invalid container-name prefix")
     assert_no_shell_containers(container_prefix, deployment)
 
     env = os.environ.copy()
     env["TERM"] = "xterm-256color"
+    argv = [str(reploy), "shell", "--dir", str(deployment)]
+    if args.app_command:
+        argv = [str(reploy), "app", args.app_command, "--dir", str(deployment)]
     session = PTYSession(
-        [str(reploy), "shell", "--dir", str(deployment)],
+        argv,
         cwd=deployment,
         env=env,
         rows=INITIAL_ROWS,
@@ -57,14 +64,23 @@ def main() -> int:
     )
     primary_error: BaseException | None = None
     try:
+        if args.app_command:
+            session.wait_for("REPLOY_PTY_APP_READY", args.timeout)
         session.send(b"stty -echo\n")
         session.send(
             b"printf 'REPLOY_PTY_READY '; "
-            b"if test -t 0 && test -t 1 && test -t 2; then printf 'tty '; else printf 'notty '; fi; "
-            b"stty size\n"
+            b"if test -t 0 && test -t 1 && test -t 2; then printf 'tty\\n'; else printf 'notty\\n'; fi\n"
         )
-        session.wait_for(f"REPLOY_PTY_READY tty {INITIAL_ROWS} {INITIAL_COLUMNS}", args.timeout)
+        session.wait_for("REPLOY_PTY_READY tty", args.timeout)
+        # Docker starts its resize monitor after attachment. Wait for the first
+        # size update rather than racing it with the shell's first command.
+        verify_dimensions(session, INITIAL_ROWS, INITIAL_COLUMNS, args.timeout)
         wait_for_shell_container(container_prefix, deployment, args.timeout)
+
+        # Exercise alternate-screen, clear, cursor-home and carriage-return bytes
+        # through the real app path. A line prefix would corrupt this frame.
+        session.send(b"printf '\\033[?1049h\\033[2J\\033[HREPLOY_PTY_SCREEN\\rREPLOY_PTY_REDRAW\\n\\033[?1049l'\n")
+        session.wait_for("\x1b[?1049h\x1b[2J\x1b[HREPLOY_PTY_SCREEN\rREPLOY_PTY_REDRAW\r\n\x1b[?1049l", args.timeout)
 
         verify_resize(session, args.timeout)
 
@@ -82,6 +98,8 @@ def main() -> int:
             )
         session.assert_terminal_restored()
         wait_for_no_shell_containers(container_prefix, deployment, args.timeout)
+        if "[STAGING :" in session.output_text() or "[DEPLOYED :" in session.output_text():
+            raise AssertionError(f"deployment labels corrupted terminal output\n{session.output_text()}")
     except BaseException as error:
         primary_error = error
         raise
@@ -91,6 +109,7 @@ def main() -> int:
             cleanup_shell_containers(container_prefix, deployment)
 
     print("[shell-pty] verified TTY allocation")
+    print("[shell-pty] verified alternate-screen and redraw bytes without deployment labels")
     print(f"[shell-pty] verified resize propagation: {INITIAL_ROWS}x{INITIAL_COLUMNS} -> {RESIZED_ROWS}x{RESIZED_COLUMNS}")
     print("[shell-pty] verified Ctrl-C forwarding with status 130")
     print("[shell-pty] verified terminal restoration and shell exit status 42")
@@ -100,14 +119,18 @@ def main() -> int:
 
 def verify_resize(session: "PTYSession", timeout: float) -> None:
     session.resize(RESIZED_ROWS, RESIZED_COLUMNS)
+    verify_dimensions(session, RESIZED_ROWS, RESIZED_COLUMNS, timeout)
+
+
+def verify_dimensions(session: "PTYSession", rows: int, columns: int, timeout: float) -> None:
     deadline = time.monotonic() + timeout
     attempt = 0
     while time.monotonic() < deadline:
         attempt += 1
-        marker = f"REPLOY_PTY_RESIZE_{attempt}"
+        marker = f"REPLOY_PTY_SIZE_{rows}_{columns}_{attempt}"
         session.send(f"printf '{marker} '; stty size\n".encode())
         line = session.wait_for_line(marker, min(2.0, max(0.1, deadline - time.monotonic())))
-        if line.strip() == f"{marker} {RESIZED_ROWS} {RESIZED_COLUMNS}":
+        if line.strip() == f"{marker} {rows} {columns}":
             return
         time.sleep(0.1)
     raise AssertionError(
@@ -284,19 +307,9 @@ class PTYSession:
                 return
 
 
-def docker_env_value(path: Path, key: str) -> str:
-    prefix = key + "="
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.startswith(prefix):
-            value = line[len(prefix) :].strip()
-            if value:
-                return value
-    raise SystemExit(f"[shell-pty] missing {key} in {path}")
-
-
 def shell_containers(prefix: str, cwd: Path) -> list[str]:
     completed = subprocess.run(
-        ["docker", "ps", "-a", "--filter", f"name={prefix}-command-", "--format", "{{.Names}}"],
+        ["docker", "ps", "-a", "--filter", f"name=^{prefix}-run-", "--format", "{{.Names}}"],
         cwd=cwd,
         text=True,
         encoding="utf-8",
@@ -308,7 +321,7 @@ def shell_containers(prefix: str, cwd: Path) -> list[str]:
     )
     if completed.returncode != 0:
         raise SystemExit(f"[shell-pty] docker ps failed: {completed.stderr.strip()}")
-    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    return [line.strip() for line in completed.stdout.splitlines() if line.strip().startswith(prefix + "-run-")]
 
 
 def assert_no_shell_containers(prefix: str, cwd: Path) -> None:

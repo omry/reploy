@@ -200,13 +200,18 @@ func runCurrentAppCommandV1(ctx context.Context, input CurrentAppCommandRunInput
 		return abort(err)
 	}
 	runOptions := input.RunOptions
-	phase, color := stagingOutputPhase, stagingOutputColor
-	if state.Deployment != nil {
-		phase, color = deployedOutputPhase, deployedOutputColor
+	interactive := runOptions.Stdin != nil
+	tty := interactive && input.TTY
+	// Preserve terminal file descriptors and control sequences for interactive apps.
+	if !tty {
+		phase, color := stagingOutputPhase, stagingOutputColor
+		if state.Deployment != nil {
+			phase, color = deployedOutputPhase, deployedOutputColor
+		}
+		label := deploymentOutputLabel(phase, document.Environment.ID)
+		runOptions.Stdout = newDeploymentOutputWriter(runOptions.Stdout, label, color)
+		runOptions.Stderr = newDeploymentOutputWriter(runOptions.Stderr, label, color)
 	}
-	label := deploymentOutputLabel(phase, document.Environment.ID)
-	runOptions.Stdout = newDeploymentOutputWriter(runOptions.Stdout, label, color)
-	runOptions.Stderr = newDeploymentOutputWriter(runOptions.Stderr, label, color)
 	runOptions.Context = ctx
 	published := PublishedRuntimeContainerInput{
 		Operation: operation, Store: store, Environment: document.Environment.ID,
@@ -221,8 +226,7 @@ func runCurrentAppCommandV1(ctx context.Context, input CurrentAppCommandRunInput
 				"deployment generation changed while live run %q was waiting; retry the command", runID,
 			))
 		}
-		interactive := runOptions.Stdin != nil
-		execution, err := backend.execution(commandDockerPlan, command, output.mount, runID, interactive, interactive && input.TTY)
+		execution, err := backend.execution(commandDockerPlan, command, output.mount, runID, interactive, tty)
 		if err != nil {
 			return removeAdmittedTransientBeforeCreateV1(operation, runID, err)
 		}

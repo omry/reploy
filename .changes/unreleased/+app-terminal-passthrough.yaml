@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve terminal streams for interactive app commands so full-screen interfaces receive terminal dimensions and control sequences without deployment labels.

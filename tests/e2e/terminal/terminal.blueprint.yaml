@@ -1,0 +1,32 @@
+blueprint:
+  schema: 1
+  version: 0.1.0
+  compatibility:
+    platforms: [linux/amd64, linux/arm64]
+
+environment:
+  id: terminal-smoke
+  base:
+    image: debian:13-slim
+  applications:
+    shell:
+      packages:
+        os:
+          - package: bash
+            exports:
+              shell:
+                executable: /usr/bin/bash
+      executables:
+        shell:
+          source: os
+          binary: shell
+  commands:
+    terminal:
+      executable: shell.shell
+      trigger: [terminal]
+      native_command: true
+      argv:
+        - -c
+        - "printf 'REPLOY_PTY_APP_READY\\n'; exec /usr/bin/bash --noprofile --norc -i"
+
+docker: {}
