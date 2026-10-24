@@ -52,6 +52,12 @@ func (lock *OperationLock) CommitStateV1(expected *EnvironmentGenerationState, s
 	if !reflect.DeepEqual(observed, expected) {
 		return fmt.Errorf("state current generation changed before commit")
 	}
+	if !reflect.DeepEqual(current.IdentityMapping, state.IdentityMapping) {
+		return fmt.Errorf("identity authority changed or was omitted before state commit")
+	}
+	if err := validateMappingOwnerPathV1(path, state); err != nil {
+		return err
+	}
 	content, err := EncodeStateV1(state)
 	if err != nil {
 		return err
@@ -86,6 +92,9 @@ func readStateV1Path(path string) (StateV1, bool, error) {
 	}
 	state, err := DecodeStateV1(content)
 	if err != nil {
+		return StateV1{}, false, err
+	}
+	if err := validateMappingOwnerPathV1(path, state); err != nil {
 		return StateV1{}, false, err
 	}
 	return state, true, nil

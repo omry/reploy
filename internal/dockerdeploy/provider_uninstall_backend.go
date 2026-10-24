@@ -98,11 +98,22 @@ func executeProviderUninstallWithV1(
 	if _, pending, err := operation.ReadPendingBuild(); err != nil || pending {
 		return fmt.Errorf("uninstall requires completed publication: %v", err)
 	}
+	state, found, err := operation.ReadStateV1()
+	if err != nil || !found {
+		return fmt.Errorf("uninstall state is missing or invalid: %v", err)
+	}
+	if plan.RemoveDir {
+		if err := operation.RequireNoRetainedIdentityV1(); err != nil {
+			return err
+		}
+	} else if _, err := deploy.RetainedStagingAfterUninstallV1(state, plan.Installation); err != nil {
+		return err
+	}
 	if err := cleanupHost(ctx, plan, options); err != nil {
 		return err
 	}
 	if !plan.RemoveDir {
-		state, changed, err := operation.ClearInstallationStateV1(plan.Installation)
+		state, changed, err := operation.ClearInstallationStateV1(plan.Installation, state.IdentityMapping)
 		if err != nil {
 			return fmt.Errorf("mark provider deployment staged after uninstall: %w", err)
 		}

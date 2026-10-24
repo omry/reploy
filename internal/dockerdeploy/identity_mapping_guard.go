@@ -14,7 +14,7 @@ func unmappedRuntimeDocumentV1(state deploy.StateV1) (blueprint.Document, error)
 	if err != nil {
 		return blueprint.Document{}, err
 	}
-	if document.Environment.Runtime.IdentityMapping != nil {
+	if state.IdentityMapping != nil || document.Environment.Runtime.IdentityMapping != nil {
 		return blueprint.Document{}, fmt.Errorf("environment %q: environment.runtime.identity_mapping requires multi-identity runtime admission, which is not yet available; stage and explicit build remain available", document.Environment.ID)
 	}
 	return document, nil
@@ -35,7 +35,7 @@ func requireUnmappedDeploymentV1(operation *deploy.OperationLock) error {
 // B4 must check retained identity authority before this declaration exception.
 func requireUnmappedControlDeploymentV1(operation *deploy.OperationLock, kind deploy.ControlOperationV1) error {
 	if kind == deploy.ControlOperationStageV1 {
-		return nil
+		return operation.RequireNoRetainedIdentityV1()
 	}
 	return requireUnmappedDeploymentV1(operation)
 }

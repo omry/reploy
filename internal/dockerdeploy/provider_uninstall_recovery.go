@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/omry/reploy/internal/blueprint"
+	"github.com/omry/reploy/internal/deploy"
 )
 
 type ProviderUninstallRecoveryInputV1 struct {
@@ -49,7 +50,7 @@ type providerUninstallRecoveryApplyBackendV1 struct {
 func RecoverMissingProviderUninstallV1(ctx context.Context, input ProviderUninstallRecoveryInputV1) error {
 	return recoverMissingProviderUninstallV1(ctx, input, providerUninstallRecoveryBackendV1{
 		unitDir: uninstallSystemdUnitDir,
-		apply:   applyProviderUninstallRecovery,
+		apply:   applyProviderUninstallRecoveryHostV1,
 	})
 }
 
@@ -131,14 +132,16 @@ func recoverMissingProviderUninstallV1(ctx context.Context, input ProviderUninst
 	if project == "" || dockerNameSlug(project, "") != project {
 		return fmt.Errorf("Reploy service unit %s does not record a valid Compose project", unitSourcePath)
 	}
-	return backend.apply(ctx, providerUninstallRecoveryPlanV1{
+	plan := providerUninstallRecoveryPlanV1{
 		TargetDir: target, Service: service, UnitPath: unitPath, ComposeProject: project,
 		PendingUnitRemoval: pendingUnitRemoval,
-	}, input.RunOptions)
+	}
+	return withUnmappedPendingRemovalV1(ctx, plan, func() error { return backend.apply(ctx, plan, input.RunOptions) })
 }
 
-func applyProviderUninstallRecovery(ctx context.Context, plan providerUninstallRecoveryPlanV1, options RunOptions) error {
-	return applyProviderUninstallRecoveryV1(ctx, plan, options, providerUninstallRecoveryApplyBackendV1{
+// The recovery entry holds the retained-state guard around this host callback.
+func applyProviderUninstallRecoveryHostV1(ctx context.Context, plan providerUninstallRecoveryPlanV1, options RunOptions) error {
+	return applyProviderUninstallRecoveryEffectsV1(ctx, plan, options, providerUninstallRecoveryApplyBackendV1{
 		lookPath:            uninstallLookPath,
 		runHost:             uninstallRunCommand,
 		removeDockerProject: removeDockerComposeProjectByLabelV1,
@@ -148,6 +151,41 @@ func applyProviderUninstallRecovery(ctx context.Context, plan providerUninstallR
 }
 
 func applyProviderUninstallRecoveryV1(ctx context.Context, plan providerUninstallRecoveryPlanV1, options RunOptions, backend providerUninstallRecoveryApplyBackendV1) error {
+	return withUnmappedPendingRemovalV1(ctx, plan, func() error { return applyProviderUninstallRecoveryEffectsV1(ctx, plan, options, backend) })
+}
+
+func withUnmappedPendingRemovalV1(ctx context.Context, plan providerUninstallRecoveryPlanV1, apply func() error) (err error) {
+	if ctx == nil {
+		return fmt.Errorf("pending uninstall recovery requires a context")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	pending, found, err := locatePendingProviderUninstallRemovalV1(plan.TargetDir)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return apply()
+	}
+	operation, err := deploy.AcquireExistingOperationLock(ctx, pending.StateRoot)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, operation.Unlock()) }()
+	if err := operation.RequireNoRetainedIdentityV1(); err != nil {
+		return err
+	}
+	state, found, err := operation.ReadStateV1()
+	if err != nil || !found || state.Deployment == nil || state.Current == nil ||
+		state.Deployment.Installation.TargetDir != plan.TargetDir || state.Deployment.Installation.Service != plan.Service || state.Deployment.Installation.ComposeProject != plan.ComposeProject {
+		return errors.Join(fmt.Errorf("service recovery requires exact retained installed authority"), err)
+	}
+	return apply()
+}
+
+// Only guarded entry points call the effect body; do not reacquire its lock.
+func applyProviderUninstallRecoveryEffectsV1(ctx context.Context, plan providerUninstallRecoveryPlanV1, options RunOptions, backend providerUninstallRecoveryApplyBackendV1) error {
 	if ctx == nil {
 		return fmt.Errorf("apply provider uninstall recovery requires a context")
 	}
