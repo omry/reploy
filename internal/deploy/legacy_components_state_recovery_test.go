@@ -151,6 +151,45 @@ func TestPrepareLegacyComponentsStagingRecoveryV1RejectsIncompatiblePreservedOve
 	}
 }
 
+func TestPrepareLegacyComponentsStagingRecoveryV1RejectsUndeclaredMappingOverrides(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := AcquireOperationLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operation.Unlock()
+	content, _ := legacyComponentsStagingStateFixtureV1(t)
+	statePath := filepath.Join(dir, ".reploy", stateFilenameV1)
+	if err := os.WriteFile(statePath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	overrides := []byte("environment:\n  id: legacy-demo\n  runtime:\n    identity_mapping:\n      uids: [{container_start: 0, host_start: 100000, count: 16}]\n")
+	overridesPath := filepath.Join(dir, PackageOverridesFilename)
+	if err := os.WriteFile(overridesPath, overrides, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	_, err = operation.PrepareLegacyComponentsStagingRecoveryV1(
+		func(document blueprint.Document) (blueprint.Platform, error) {
+			calls++
+			return document.Blueprint.Compatibility.Platforms[0], nil
+		},
+		func(blueprint.ComponentType, providers.CanonicalPackageRequest) error {
+			calls++
+			return nil
+		}, false,
+	)
+	if err == nil || !strings.Contains(err.Error(), "override requires a blueprint declaration") || calls != 0 {
+		t.Fatalf("undeclared overrides reached recovery preparation: calls=%d err=%v", calls, err)
+	}
+	for path, want := range map[string][]byte{statePath: content, overridesPath: overrides} {
+		got, err := os.ReadFile(path)
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("rejected recovery changed %s: %v", path, err)
+		}
+	}
+}
+
 func TestCommitLegacyComponentsStagingRecoveryV1RejectsChangedSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	operation, err := AcquireOperationLock(t.Context(), dir)
