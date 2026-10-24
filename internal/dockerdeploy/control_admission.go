@@ -87,6 +87,9 @@ func awaitControlAdmissionV1(
 	if backend.acquire == nil || backend.wait == nil {
 		return releaseControlAdmissionLockV1(operation, fmt.Errorf("control admission requires a complete backend"))
 	}
+	if err := requireUnmappedControlDeploymentV1(operation, candidate.Operation); err != nil {
+		return releaseControlAdmissionLockV1(operation, err)
+	}
 	if err := operation.RequireQueueEntryLeaseHeldV1(candidate.ID); err != nil {
 		return releaseControlAdmissionLockV1(operation, fmt.Errorf("control admission ownership: %w", err))
 	}
@@ -121,6 +124,9 @@ func awaitControlAdmissionV1(
 		operation, err = backend.acquire(ctx, absoluteDir)
 		if err != nil {
 			return cancelControlAdmissionV1(ctx, absoluteDir, nil, candidate, backend, err)
+		}
+		if err := requireUnmappedControlDeploymentV1(operation, candidate.Operation); err != nil {
+			return cancelControlAdmissionV1(ctx, absoluteDir, operation, candidate, backend, err)
 		}
 		if _, err := recoverLiveRunQueueV1(ctx, operation, notice, backend.removeContainer); err != nil {
 			return cancelControlAdmissionV1(ctx, absoluteDir, operation, candidate, backend, err)

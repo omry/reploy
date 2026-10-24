@@ -12,12 +12,15 @@ import (
 func resolveSyntaxVariables(source Syntax, variables map[string]any) (Syntax, error) {
 	source = cloneSyntaxValue(reflect.ValueOf(source)).Interface().(Syntax)
 	saved := source.Environment.Vars
+	mapping := source.Environment.Runtime.IdentityMapping
 	source.Environment.Vars = nil
+	source.Environment.Runtime.IdentityMapping = nil
 	value := reflect.ValueOf(&source).Elem()
 	if err := resolveSyntaxVariableValue(value, variables, "blueprint"); err != nil {
 		return Syntax{}, err
 	}
 	source.Environment.Vars = saved
+	source.Environment.Runtime.IdentityMapping = mapping
 	return source, nil
 }
 
