@@ -55,6 +55,9 @@ func (lock *OperationLock) CommitStateV1(expected *EnvironmentGenerationState, s
 	if !reflect.DeepEqual(current.IdentityMapping, state.IdentityMapping) {
 		return fmt.Errorf("identity authority changed or was omitted before state commit")
 	}
+	if current.IdentityMapping != nil && current.IdentityMapping.PendingOperation != nil && !reflect.DeepEqual(observed, state.Current) {
+		return fmt.Errorf("pending identity mapping operation %s must finish before changing the current generation", current.IdentityMapping.PendingOperation.OperationID)
+	}
 	if err := validateMappingOwnerPathV1(path, state); err != nil {
 		return err
 	}
