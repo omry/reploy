@@ -20,6 +20,9 @@ func preflightProviderInstallDestinationV1(destination, service string) error {
 	if !found {
 		return nil
 	}
+	if _, err := unmappedRuntimeDocumentV1(state); err != nil {
+		return err
+	}
 	if state.Deployment == nil {
 		return fmt.Errorf("destination contains a staging deployment at %s; choose a different install target", statePath)
 	}

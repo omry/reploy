@@ -118,7 +118,7 @@ func runCurrentAppCommandV1(ctx context.Context, input CurrentAppCommandRunInput
 	if input.DeployedOnly && state.Deployment == nil {
 		return fmt.Errorf("deployed-only app commands require an installed deployment")
 	}
-	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	document, err := unmappedRuntimeDocumentV1(state)
 	if err != nil {
 		return fmt.Errorf("runtime blueprint: %w", err)
 	}
