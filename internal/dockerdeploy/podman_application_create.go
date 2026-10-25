@@ -211,6 +211,10 @@ func (client *podmanHealthcheckClient) createSameIDApplication(ctx context.Conte
 	if err != nil {
 		return "", err
 	}
+	return client.createApplication(ctx, spec, body, name, "", raw)
+}
+
+func (client *podmanHealthcheckClient) createApplication(ctx context.Context, spec CommandSpec, body podmanApplicationCreate, name, immutableImage string, raw commandRunner) (string, error) {
 	var token [16]byte
 	if _, err := rand.Read(token[:]); err != nil {
 		return "", err
@@ -220,6 +224,9 @@ func (client *podmanHealthcheckClient) createSameIDApplication(ctx context.Conte
 	data, err := json.Marshal(body)
 	if err != nil {
 		return "", err
+	}
+	if int64(len(data)) > imageHealthConfigLimit {
+		return "", fmt.Errorf("Podman application create request exceeds the bounded transport limit")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://docker/v1.44/containers/create?name="+url.QueryEscape(name), strings.NewReader(string(data)))
 	if err != nil {
@@ -238,7 +245,12 @@ func (client *podmanHealthcheckClient) createSameIDApplication(ctx context.Conte
 		}
 	}
 	if err == nil {
-		return result.ID, nil
+		if immutableImage != "" {
+			err = client.verifyCreatedApplication(ctx, result.ID, name, attempt, immutableImage)
+		}
+		if err == nil {
+			return result.ID, nil
+		}
 	}
 	// A timeout or malformed response may follow a successful creation. Only
 	// reconcile the exact attempted name carrying this operation's random label.
@@ -249,12 +261,27 @@ func (client *podmanHealthcheckClient) createSameIDApplication(ctx context.Conte
 		defer cancel()
 		data, inspectErr := client.request(cleanup, http.MethodGet, "/v1.44/containers/"+url.PathEscape(name)+"/json", nil)
 		var object struct {
-			ID     string
-			Config struct{ Labels map[string]string }
+			ID          string
+			Name, Image string
+			Config      struct{ Labels map[string]string }
 		}
-		if inspectErr == nil && json.Unmarshal(data, &object) == nil && validPodmanHealthcheckContainerID(object.ID) && object.Config.Labels[podmanApplicationAttemptLabel] == attempt {
+		if inspectErr == nil && json.Unmarshal(data, &object) == nil && validPodmanHealthcheckContainerID(object.ID) && object.Config.Labels[podmanApplicationAttemptLabel] == attempt &&
+			(immutableImage == "" || strings.TrimPrefix(object.Name, "/") == name && strings.TrimPrefix(object.Image, "sha256:") == strings.TrimPrefix(immutableImage, "sha256:")) {
 			err = errors.Join(err, removeCreatedPodmanContainer(cleanup, spec, object.ID, raw))
 		}
 	}
-	return "", fmt.Errorf("create same-ID Podman application %q failed; reconcile resources bearing attempt %s: %w", name, attempt, err)
+	return "", fmt.Errorf("create Podman application %q failed; reconcile resources bearing attempt %s: %w", name, attempt, err)
+}
+
+func (client *podmanHealthcheckClient) verifyCreatedApplication(ctx context.Context, id, name, attempt, image string) error {
+	data, err := client.request(ctx, http.MethodGet, "/v1.44/containers/"+id+"/json", nil)
+	var object struct {
+		ID, Name, Image string
+		Config          struct{ Labels map[string]string }
+	}
+	if err != nil || json.Unmarshal(data, &object) != nil || object.ID != id || strings.TrimPrefix(object.Name, "/") != name ||
+		object.Config.Labels[podmanApplicationAttemptLabel] != attempt || strings.TrimPrefix(object.Image, "sha256:") != strings.TrimPrefix(image, "sha256:") {
+		return fmt.Errorf("Podman created object did not prove its exact ID, name, attempt and immutable image")
+	}
+	return nil
 }
