@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,6 +25,8 @@ import (
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/identitymapping"
+	"github.com/omry/reploy/internal/providers"
+	"github.com/omry/reploy/internal/providers/registry"
 )
 
 // This effect-owner fixture records an unused private intent. It does not
@@ -50,7 +53,7 @@ func mappedCreateIntegrationSpecV1(t *testing.T, name, image, nonce, endpoint st
 	return CommandSpec{Name: "docker", Args: args, Env: []string{"DOCKER_HOST=" + endpoint, "DOCKER_CONTEXT="}, builtinSeccompIndex: slices.Index(args, "seccomp="+profile)}
 }
 
-func mappedCreateIntegrationStateV1(t *testing.T, image string) (deploy.IdentityMappingOperationsV1, deploy.StateV1) {
+func mappedCreateIntegrationStateV1(t *testing.T, image, endpoint string) (deploy.IdentityMappingOperationsV1, deploy.StateV1) {
 	t.Helper()
 	dir, _ := stageProviderBuildRunState(t, false)
 	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
@@ -63,9 +66,57 @@ func mappedCreateIntegrationStateV1(t *testing.T, image string) (deploy.Identity
 		t.Fatal("fixture state missing", err)
 	}
 	state.Staging = &deploy.StagingStateV1{Schema: deploy.StagingStateSchemaV1}
-	state.BlueprintSource = "private C1 fixture; not a qualified application generation"
-	d := canonical.Digest("sha256:" + strings.Repeat("a", 64))
-	state.Current = &deploy.EnvironmentGenerationState{Reference: "reploy/env/c1-fixture:g-one", ImageDigest: canonical.Digest(image), RootFSSubject: d, BuildLockDigest: d, RuntimePolicyDigest: d, Platform: state.Platform}
+	state.BlueprintSource = "private C image-binding fixture; not a qualified application build"
+	client, err := identifyPodmanClientWithDialV1(t.Context(), endpoint, dialMappedPodmanV1, true)
+	if err != nil || client == nil {
+		t.Fatal("fixture image endpoint", err)
+	}
+	defer client.http.CloseIdleConnections()
+	data, err := client.request(t.Context(), http.MethodGet, "/v1.44/images/"+image+"/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := parseDockerImageInspectionDetails(image, state.Platform, append(append([]byte{'['}, data...), ']'))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootFS, err := deploy.RootFSSubject(inspection.Descriptor.RootFSDiffIDs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, lock := publicationLockFixture(t, dir, "4", "5", "6")
+	lock.FinalImage = providers.RealizedImageV1{Digest: canonical.Digest(image), ConfigDigest: canonical.Digest(image), RootFSSubject: rootFS}
+	lock.RuntimeLayer.Result = lock.FinalImage
+	generation := ownedReferenceGenerationFixtureV1(t, dir, "demo", lock)
+	lock.ValidationRecord, err = deploy.PublishPrefixValidation(t.Context(), store, deploy.PrefixValidationV1{Schema: deploy.PrefixValidationSchemaV1, SubjectRootFS: rootFS, Profiles: []providers.ValidationEvidence{}, RuntimePolicy: generation.RuntimePolicyDigest, ExposedOutputs: []providers.ExecutableEvidence{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Validation evidence is part of the lock digest, so derive the generation
+	// only after the complete metadata fixture has been constructed.
+	generation = ownedReferenceGenerationFixtureV1(t, dir, "demo", lock)
+	if _, err := operation.PublishBuildLock(lock, registry.ValidateRequirementProfileV1); err != nil {
+		t.Fatal(err)
+	}
+	colon := strings.LastIndexByte(generation.Reference, ':')
+	if _, err := client.request(t.Context(), http.MethodPost, "/v1.44/images/"+image+"/tag?repo="+url.QueryEscape(generation.Reference[:colon])+"&tag="+url.QueryEscape(generation.Reference[colon+1:]), nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		path := "/v1.44/images/" + url.PathEscape(generation.Reference)
+		data, err := client.request(ctx, http.MethodGet, path+"/json", nil)
+		var object struct{ ID string }
+		if err != nil || json.Unmarshal(data, &object) != nil || object.ID != image {
+			t.Error("refuse cleanup of unproved fixture tag", err)
+			return
+		}
+		if _, err := client.request(ctx, http.MethodDelete, path+"?force=true", nil); err != nil {
+			t.Error("owned fixture tag cleanup", err)
+		}
+	})
+	state.Current = &generation
 	if err := operation.CommitStateV1(nil, state); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +153,7 @@ func TestMappedPodmanCreateLiveV1(t *testing.T) {
 	privateSeccompCache(t)
 	for _, profile := range []string{"exact", "bounded"} {
 		t.Run(profile, func(t *testing.T) {
-			ops, original := mappedCreateIntegrationStateV1(t, image)
+			ops, original := mappedCreateIntegrationStateV1(t, image, endpoint)
 			active := mappedGeometryFixtureV1(profile)
 			var random [16]byte
 			if _, err := rand.Read(random[:]); err != nil {
@@ -131,9 +182,18 @@ func TestMappedPodmanCreateLiveV1(t *testing.T) {
 			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, intent, active, operationID, firstSpec); err == nil {
 				t.Fatal("stale revision admitted")
 			}
+			foreign := firstSpec
+			foreign.Args = slices.Clone(firstSpec.Args)
+			foreign.Args[slices.Index(foreign.Args, "--entrypoint")+2] = string(rendererDigest("a"))
+			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, foreign); err == nil || !strings.Contains(err.Error(), "selected generation") {
+				t.Fatal("foreign image was not rejected by current-generation binding", err)
+			}
 			for repeat := 0; repeat < 2; repeat++ {
 				t.Run(strconv.Itoa(repeat), func(t *testing.T) {
 					spec := mappedCreateIntegrationSpecV1(t, fmt.Sprintf("reploy-c1-%s-%d", nonce, repeat), image, nonce, endpoint)
+					if repeat == 1 {
+						spec.Args[slices.Index(spec.Args, "--entrypoint")+2] = pending.Current.Reference
+					}
 					prepared, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, spec)
 					if err != nil {
 						t.Fatal("production C1 preparation", err)
@@ -226,7 +286,17 @@ func TestMappedPodmanCreateLiveV1(t *testing.T) {
 func checkMappedEngineRefusalsV1(t *testing.T, ops deploy.IdentityMappingOperationsV1, pending deploy.StateV1, active identitymapping.Geometry, operationID string, spec CommandSpec) {
 	t.Helper()
 	baseSpec := spec
-	for _, kind := range []string{"Docker", "rootful", "missing maps", "wrong parent", "malformed version", "remote", "mutable image", "host bind", "named volume", "invalid generated policy"} {
+	client, err := identifyPodmanClientWithDialV1(t.Context(), commandEnvironmentValueV1(spec, "DOCKER_HOST"), dialMappedPodmanV1, true)
+	if err != nil || client == nil {
+		t.Fatal("fixture image client", err)
+	}
+	defer client.http.CloseIdleConnections()
+	image := spec.Args[slices.Index(spec.Args, "--entrypoint")+2]
+	imageData, err := client.request(t.Context(), http.MethodGet, "/v1.44/images/"+image+"/json", nil)
+	if err != nil {
+		t.Fatal("fixture image metadata", err)
+	}
+	for _, kind := range []string{"Docker", "rootful", "missing maps", "wrong parent", "malformed version", "remote", "mutable image", "image unavailable", "host bind", "named volume", "invalid generated policy"} {
 		t.Run("reject "+kind, func(t *testing.T) {
 			spec := baseSpec
 			spec.Args = slices.Clone(spec.Args)
@@ -251,6 +321,14 @@ func checkMappedEngineRefusalsV1(t *testing.T, ops deploy.IdentityMappingOperati
 				if r.Method != http.MethodGet {
 					t.Error("refused engine reached effectful dispatch")
 					w.WriteHeader(500)
+					return
+				}
+				if strings.HasPrefix(r.URL.Path, "/v1.44/images/") {
+					if kind == "image unavailable" {
+						w.WriteHeader(404)
+					} else {
+						_, _ = w.Write(imageData)
+					}
 					return
 				}
 				if r.URL.Path == "/version" {
@@ -309,7 +387,7 @@ func checkMappedEngineRefusalsV1(t *testing.T, ops deploy.IdentityMappingOperati
 		}
 		t.Log("actual foreign Unix peer was rejected before HTTP")
 	}
-	for _, kind := range []string{"changed engine", "changed parent", "metadata unavailable", "changed host authority", "host changes during metadata", "cancelled", "changed generated policy"} {
+	for _, kind := range []string{"changed engine", "changed parent", "metadata unavailable", "image unavailable at create", "changed host authority", "host changes during metadata", "cancelled", "changed generated policy"} {
 		t.Run("dispatch rejects "+kind, func(t *testing.T) {
 			spec := baseSpec
 			if kind == "host changes during metadata" {
@@ -331,6 +409,14 @@ func checkMappedEngineRefusalsV1(t *testing.T, ops deploy.IdentityMappingOperati
 				if r.Method != http.MethodGet {
 					posts.Add(1)
 					w.WriteHeader(500)
+					return
+				}
+				if strings.HasPrefix(r.URL.Path, "/v1.44/images/") {
+					if changed.Load() && kind == "image unavailable at create" {
+						w.WriteHeader(404)
+						return
+					}
+					_, _ = w.Write(imageData)
 					return
 				}
 				if r.URL.Path == "/version" {
