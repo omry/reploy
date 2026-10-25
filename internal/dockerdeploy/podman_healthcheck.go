@@ -23,6 +23,7 @@ import (
 type podmanHealthcheckClient struct {
 	endpoint, version string
 	http              *http.Client
+	privateErrors     bool
 }
 
 var probePodmanHealthcheckClient = identifyPodmanHealthcheckClient
@@ -58,16 +59,28 @@ func (client *podmanHealthcheckClient) request(ctx context.Context, method, path
 		return nil, fmt.Errorf("read bounded Podman healthcheck response: %v", err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		if client.privateErrors {
+			return nil, fmt.Errorf("Podman request returned HTTP %d", response.StatusCode)
+		}
 		return nil, fmt.Errorf("Podman healthcheck request returned %s: %s", response.Status, trimmedCommandOutput(string(output)))
 	}
 	return output, nil
 }
 
 func identifyPodmanHealthcheckClient(ctx context.Context, endpoint string) (*podmanHealthcheckClient, error) {
+	return identifyPodmanClientWithDialV1(ctx, endpoint, dialLocalDockerEndpointV1, false)
+}
+
+func identifyPodmanClientWithDialV1(ctx context.Context, endpoint string, dial func(context.Context, string) (net.Conn, error), privateErrors bool) (*podmanHealthcheckClient, error) {
+	if privateErrors && ctx != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, effectiveDockerPreflightTimeout(0))
+		defer cancel()
+	}
 	transport := &http.Transport{DialContext: func(c context.Context, _, _ string) (net.Conn, error) {
-		return dialLocalDockerEndpointV1(c, endpoint)
+		return dial(c, endpoint)
 	}}
-	client := &podmanHealthcheckClient{endpoint: endpoint, http: &http.Client{
+	client := &podmanHealthcheckClient{endpoint: endpoint, privateErrors: privateErrors, http: &http.Client{
 		Transport:     transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}}
