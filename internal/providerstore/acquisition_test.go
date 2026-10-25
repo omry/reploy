@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/omry/reploy/internal/canonical"
@@ -394,53 +395,56 @@ func TestAcquireArtifactRecordsAttemptTimeoutAndCleansStaging(t *testing.T) {
 }
 
 func TestAcquireArtifactFallsBackAfterAttemptTimeoutDuringPublication(t *testing.T) {
-	content := []byte("publication timeout fallback")
-	descriptor := acquisitionTestDescriptor(content)
-	var paths []string
-	client := acquisitionTestClient(func(request *http.Request) (*http.Response, error) {
-		paths = append(paths, request.URL.Path)
-		if request.URL.Path == "/slow-publish" {
-			return acquisitionTestResponseWithBody(request, http.StatusOK, &acquisitionEOFBody{
-				content: content,
-				onRead:  func() { <-request.Context().Done() },
-			}, int64(len(content))), nil
+	// Keep the intended timeout independent of host scheduling and filesystem latency.
+	synctest.Test(t, func(t *testing.T) {
+		content := []byte("publication timeout fallback")
+		descriptor := acquisitionTestDescriptor(content)
+		var paths []string
+		client := acquisitionTestClient(func(request *http.Request) (*http.Response, error) {
+			paths = append(paths, request.URL.Path)
+			if request.URL.Path == "/slow-publish" {
+				return acquisitionTestResponseWithBody(request, http.StatusOK, &acquisitionEOFBody{
+					content: content,
+					onRead:  func() { <-request.Context().Done() },
+				}, int64(len(content))), nil
+			}
+			return acquisitionTestResponse(request, http.StatusOK, string(content), ""), nil
+		})
+		store, err := NewStore(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
 		}
-		return acquisitionTestResponse(request, http.StatusOK, string(content), ""), nil
-	})
-	store, err := NewStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	policy := DefaultAcquisitionPolicy()
-	policy.AttemptsPerMirror = 1
-	policy.MaxAttempts = 2
-	policy.AttemptTimeout = 20 * time.Millisecond
-	result, err := store.AcquireArtifact(context.Background(), AcquisitionRequest{
-		Artifact: descriptor,
-		Source: ArtifactSource{
-			ID: "source", SHA256: descriptor.SHA256,
-			Mirrors: []string{
-				"https://mirror.example.test/slow-publish",
-				"https://mirror.example.test/good",
+		policy := DefaultAcquisitionPolicy()
+		policy.AttemptsPerMirror = 1
+		policy.MaxAttempts = 2
+		policy.AttemptTimeout = 20 * time.Millisecond
+		result, err := store.AcquireArtifact(context.Background(), AcquisitionRequest{
+			Artifact: descriptor,
+			Source: ArtifactSource{
+				ID: "source", SHA256: descriptor.SHA256,
+				Mirrors: []string{
+					"https://mirror.example.test/slow-publish",
+					"https://mirror.example.test/good",
+				},
 			},
-		},
-		Policy:  policy,
-		client:  client,
-		network: acquisitionTestNetwork(),
+			Policy:  policy,
+			client:  client,
+			network: acquisitionTestNetwork(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Join(paths, ",") != "/slow-publish,/good" {
+			t.Fatalf("publication-timeout fallback paths = %v", paths)
+		}
+		if len(result.Provenance.Attempts) != 1 || result.Provenance.Attempts[0].Outcome != AcquisitionOutcomeTimeout {
+			t.Fatalf("publication-timeout provenance = %#v", result.Provenance.Attempts)
+		}
+		if result.Provenance.SuccessfulMirror != "https://mirror.example.test/good" {
+			t.Fatalf("successful mirror = %q", result.Provenance.SuccessfulMirror)
+		}
+		acquisitionTestAssertTemporaryEntriesEmpty(t, store)
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Join(paths, ",") != "/slow-publish,/good" {
-		t.Fatalf("publication-timeout fallback paths = %v", paths)
-	}
-	if len(result.Provenance.Attempts) != 1 || result.Provenance.Attempts[0].Outcome != AcquisitionOutcomeTimeout {
-		t.Fatalf("publication-timeout provenance = %#v", result.Provenance.Attempts)
-	}
-	if result.Provenance.SuccessfulMirror != "https://mirror.example.test/good" {
-		t.Fatalf("successful mirror = %q", result.Provenance.SuccessfulMirror)
-	}
-	acquisitionTestAssertTemporaryEntriesEmpty(t, store)
 }
 
 func TestAcquireArtifactRecordsAggregateTimeoutAndDoesNotRetry(t *testing.T) {
