@@ -1,0 +1,2 @@
+kind: Fixed
+body: Reject Podman application create requests larger than 4 MiB before sending them to the engine.
