@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -44,8 +45,78 @@ func TestRunCurrentAppCommandV1OrdersStaleCheckOutputGateAndContainer(t *testing
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("order = %v, want %v", order, want)
 	}
-	if stdout.String() != "[STAGING : demo] command output\n" {
+	if stdout.String() != "command output\n" {
 		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestRunCurrentAppCommandV1PreservesTerminalStreamsAndLabelsOtherOutput(t *testing.T) {
+	t.Setenv("REPLOY_COLOR", "never")
+	for _, tc := range []struct {
+		name  string
+		stdin bool
+		tty   bool
+	}{
+		{"interactive terminal", true, true},
+		{"piped input", true, false},
+		{"no input", false, false},
+		{"tty without input", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			current, _ := runtimeCurrentBuildFixture(t)
+			order := []string{}
+			backend := currentAppCommandRunTestBackend(t, dir, current, CurrentRuntimePlanV1{}, &order)
+			stdout, err := os.CreateTemp(t.TempDir(), "stdout")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = stdout.Close() })
+			stderr, err := os.CreateTemp(t.TempDir(), "stderr")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = stderr.Close() })
+			var stdin io.Reader
+			if tc.stdin {
+				stdin = strings.NewReader("keyboard input")
+			}
+			terminal := tc.stdin && tc.tty
+			const content = "\x1b[?1049h\x1b[2J\x1b[Hscreen\rupdated\n\x1b[?1049l\n"
+			backend.runAdmitted = func(_ context.Context, _ string, _ *deploy.OperationLock, _ string, _ TransientContainerExecutionV1, options RunOptions) error {
+				if options.Stdin != stdin {
+					t.Fatal("stdin was replaced")
+				}
+				if terminal && (options.Stdout != stdout || options.Stderr != stderr) {
+					t.Fatal("interactive output lost its original file descriptors")
+				}
+				for _, output := range []io.Writer{options.Stdout, options.Stderr} {
+					if _, err := io.WriteString(output, content); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+			if err := runCurrentAppCommandV1(t.Context(), CurrentAppCommandRunInputV1{
+				DeploymentDir: dir, Arguments: []string{"export"}, TTY: tc.tty,
+				RunOptions: RunOptions{Stdin: stdin, Stdout: stdout, Stderr: stderr},
+			}, backend); err != nil {
+				t.Fatal(err)
+			}
+			want := content
+			if !terminal {
+				want = "[STAGING : demo] " + strings.ReplaceAll(strings.TrimSuffix(content, "\n"), "\n", "\n[STAGING : demo] ") + "\n"
+			}
+			for _, output := range []*os.File{stdout, stderr} {
+				got, err := os.ReadFile(output.Name())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(got) != want {
+					t.Errorf("%s = %q, want %q", output.Name(), got, want)
+				}
+			}
+		})
 	}
 }
 
