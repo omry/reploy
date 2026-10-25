@@ -47,8 +47,8 @@ func prepareMappedPodmanCreateV1(ctx context.Context, ops deploy.IdentityMapping
 	}
 	defer client.http.CloseIdleConnections()
 	body, _, err := podmanApplicationCreateRequest(spec, namespace)
-	if err != nil || !isDockerLocalImageID(body.Image) {
-		return nil, fmt.Errorf("mapped create requires a generated request with an immutable local image: %v", err)
+	if err != nil {
+		return nil, err
 	}
 	// Storage preparation belongs to F; this internal seam cannot grant access
 	// to external host binds or implicitly create persistent named volumes.
@@ -56,6 +56,13 @@ func prepareMappedPodmanCreateV1(ctx context.Context, ops deploy.IdentityMapping
 		if mount.Type != "tmpfs" {
 			return nil, fmt.Errorf("mapped create requires separately admitted storage before host or persistent mounts")
 		}
+	}
+	image, err := p.verifyImage(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+	if body.Image != state.Current.Reference && body.Image != image {
+		return nil, fmt.Errorf("mapped create image is not the selected generation or its immutable config ID")
 	}
 	p.version, p.namespace = client.version, namespace
 	return p, nil
@@ -109,6 +116,13 @@ func (p *preparedMappedPodmanCreateV1) create(ctx context.Context, raw commandRu
 	if err != nil {
 		return "", err
 	}
+	image, err := p.verifyImage(ctx, client)
+	if err != nil {
+		return "", err
+	}
+	// The generated input may use its owned generation tag. Only the freshly
+	// verified immutable config ID crosses the effectful create boundary.
+	body.Image = image
 	// Metadata reads can take time. Refresh host and locked-state authority
 	// after them, immediately before the potentially effectful request.
 	if _, err := p.ops.ObserveEffects(ctx, p.state, p.active, p.operation); err != nil {
