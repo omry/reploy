@@ -1,6 +1,61 @@
 # A1 readiness disposition
 
-## Current standing — 2026-10-22
+## Current standing — 2026-10-25
+
+A1 and B1–B5 are landed. B supplies explicit blueprint/override mapping input,
+host preflight, geometry and durable authority/recovery. It does not enable
+mapped payload execution. Existing declaration-or-retained-state guards stay.
+
+C-design was approved on 2026-10-25 after local and remote review of draft PR
+#277. C1 adds scoped engine admission
+and a bounded compatible create seam; C2 reuses existing build/image authority.
+Both are internal foundations. The public launch, storage and service gates
+remain later work. No native backend or composition API is added.
+The C proposal distinguishes active geometry from retained dormant reservations
+and read-only preparation from dispatch under B's exact `effects-pending`
+operation. It reuses the pinned Podman info read for parent metadata. These are
+design requirements, not implemented C admission or a new lifecycle coordinator.
+
+The C draft was reconstructed after its temporary checkout disappeared. Its
+original raw feasibility receipts are unavailable. A fresh narrow projection
+proof is recorded below; the changed design requires refreshed stamps. Historical
+failed projection records remain failures; the new projection does not erase them.
+This current standing does not claim a new full mechanism or operation-audit run.
+
+### Fresh compatible projection proof — 2026-10-25
+
+A private rootless Podman 4.9.3 / crun 1.14.1 endpoint accepted the proposed
+`auto:size=1` plus explicit UID/GID entries through API 1.44. Two exact trials
+and two bounded trials, including removal/recreation, matched the complete live
+kernel maps before a trusted waiter released the capability-free fixture.
+The bounded map was container `0:4096` to host `100000:4096` for both ID kinds.
+The exact UID map was `(0,100000,1), (100,100001,1), (1001,100002,1)`;
+its GID map was `(0,100000,1), (5,100001,1), (100,100002,1),
+(2001,100003,1), (3001,100004,2)`. All four payload reports passed.
+The run took 61.380 seconds. Its private container/image/volume/network
+inventories were restored and its API service stopped.
+
+Raw receipts and frozen fixture sources are retained locally under
+`temp/reviews/c-milestone-20261025/proof-03/` in the author's worktree.
+They are untracked, gitignored and not part of this PR. The local
+`receipt-manifest.json` SHA-256 is `fc01b459c0d4e4357f8bbdbd06a05de5008d7aa114e5308508dce437a9870656`.
+The driver is also local: `temp/reviews/c-milestone-20261025/mapping_proof.py`.
+These paths and hashes record local provenance; they do not provide a published
+receipt bundle or a reproducible artifact available from a fresh clone.
+The first attempt stopped at the files-only account-source check before building.
+The second stopped at image-ID representation comparison and cleaned its objects;
+compatible inspect prefixes the same immutable digest with `sha256:`. The third
+compared canonical digest identities and passed. Failed attempts remain retained.
+
+This host uses `files systemd` principal lookup. The private fixture used observed
+inventories and bounded numeric collision checks; it did not satisfy or bypass
+B's production files-only host admission. The fixture mounted no host data.
+Wrong-host and surplus-map comparator controls are private-harness checks, not
+production rejection tests. This is not a full conformance rerun, Podman 6.1.4
+qualification or permission for public mapped execution. C1 must still prove
+its own fresh host admission and negative controls through the implemented seam.
+
+## Historical standing — 2026-10-22
 
 The source baseline for this design review is `main` at
 `4f1debfa61585ce2a1194ed8eb8047979aecc5a2`, including HF3–HF12 and intervening
@@ -258,7 +313,7 @@ an image-locked supervisor role, minimal capability set, dedicated credentials,
 non-dumpability, separate child sessions and descriptor closure. Otherwise
 K2/K3 (formerly I2/I3) remain blocked. No custom supervisor implementation is selected here.
 
-## Next work
+## Historical next-work disposition — 2026-10-22
 
 HF1 and HF2 are merged and published in 0.8.0.dev3. HF3–HF12 are included
 in the stated source baseline. Earlier four-PR publication, CI and deferred

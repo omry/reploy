@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/omry/reploy/internal/blueprint"
@@ -498,52 +499,58 @@ func TestPrivateStartInspectionCancellationUsesOneCleanupAllowance(t *testing.T)
 	})
 
 	t.Run("installed cancellation before deadline clamps cleanup to original bound", func(t *testing.T) {
-		parent, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		fixture := newWorkloadLifecycleFixtureV1(t)
-		startupCtx, timing, finish := newInstalledServiceStartupBudgetV1(parent, 0, 0, 40*time.Millisecond, nil)
-		appDeadline, ok := startupCtx.Deadline()
-		if !ok {
-			t.Fatal("startup context has no deadline")
-		}
-		canceledAt := time.Time{}
-		var inspectionDeadline time.Time
-		run := func(command CommandSpec, options RunOptions) error {
-			if len(command.Args) > 1 && command.Args[0] == "container" && command.Args[1] == "inspect" && fixture.starts > 0 {
-				inspectionDeadline, _ = options.Context.Deadline()
-				time.Sleep(10 * time.Millisecond)
-				canceledAt = time.Now()
-				cancel()
-				time.Sleep(60 * time.Millisecond)
+		// Exercise cancellation before expiry and cleanup after expiry in virtual time.
+		synctest.Test(t, func(t *testing.T) {
+			parent, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			fixture := newWorkloadLifecycleFixtureV1(t)
+			startupCtx, timing, finish := newInstalledServiceStartupBudgetV1(parent, 0, 0, 40*time.Millisecond, nil)
+			appDeadline, ok := startupCtx.Deadline()
+			if !ok {
+				t.Fatal("startup context has no deadline")
 			}
-			return fixture.run(command, options)
-		}
-		var failureCleanupContext context.Context
-		var failureCleanupCancel context.CancelFunc
-		hook := installedServiceFailureCleanupHookV1(parent, startupCtx, timing, finish, &failureCleanupContext, &failureCleanupCancel)
-		started, startErr := startAndInjectPrivateWorkloadEnvironmentWithFailureCleanupHookV1(
-			startupCtx, fixture.command, "demo", testApplicationSandboxPlanV1(1000, 1000), fixture.environment,
-			RunOptions{DockerPreflightTimeout: 45 * time.Second}, run, fixture.inject, hook,
-		)
-		if !errors.Is(startErr, context.Canceled) || !started.Owned || canceledAt.IsZero() {
-			t.Fatalf("started=%+v error=%v canceled=%v", started, startErr, canceledAt)
-		}
-		if inspectionDeadline.After(appDeadline.Add(privateWorkloadEnvironmentTimeoutV1)) {
-			t.Fatalf("inspection deadline=%v exceeds original cleanup bound=%v", inspectionDeadline, appDeadline.Add(privateWorkloadEnvironmentTimeoutV1))
-		}
-		order := []string{}
-		rollbackDeadline := time.Time{}
-		lifecycle := ownedWorkloadLifecycleForInstalledCleanupTest(t, fixture, &order, &rollbackDeadline)
-		finalErr := timing.finish(startupCtx, startErr, finish, func(cause error) error {
-			return cleanupInstalledServiceStartupFailureV1(parent, lifecycle, nil, failureCleanupContext, failureCleanupCancel, cause)
+			canceledAt := time.Time{}
+			var inspectionDeadline time.Time
+			run := func(command CommandSpec, options RunOptions) error {
+				if len(command.Args) > 1 && command.Args[0] == "container" && command.Args[1] == "inspect" && fixture.starts > 0 {
+					inspectionDeadline, _ = options.Context.Deadline()
+					time.Sleep(10 * time.Millisecond)
+					canceledAt = time.Now()
+					cancel()
+					time.Sleep(60 * time.Millisecond)
+				}
+				return fixture.run(command, options)
+			}
+			var failureCleanupContext context.Context
+			var failureCleanupCancel context.CancelFunc
+			hook := installedServiceFailureCleanupHookV1(parent, startupCtx, timing, finish, &failureCleanupContext, &failureCleanupCancel)
+			started, startErr := startAndInjectPrivateWorkloadEnvironmentWithFailureCleanupHookV1(
+				startupCtx, fixture.command, "demo", testApplicationSandboxPlanV1(1000, 1000), fixture.environment,
+				RunOptions{DockerPreflightTimeout: 45 * time.Second}, run, fixture.inject, hook,
+			)
+			if !errors.Is(startErr, context.Canceled) || !started.Owned || canceledAt.IsZero() {
+				t.Fatalf("started=%+v error=%v canceled=%v", started, startErr, canceledAt)
+			}
+			if !canceledAt.Before(appDeadline) || time.Now().Before(appDeadline) {
+				t.Fatalf("cancellation=%v deadline=%v cleanup=%v", canceledAt, appDeadline, time.Now())
+			}
+			if inspectionDeadline.After(appDeadline.Add(privateWorkloadEnvironmentTimeoutV1)) {
+				t.Fatalf("inspection deadline=%v exceeds original cleanup bound=%v", inspectionDeadline, appDeadline.Add(privateWorkloadEnvironmentTimeoutV1))
+			}
+			order := []string{}
+			rollbackDeadline := time.Time{}
+			lifecycle := ownedWorkloadLifecycleForInstalledCleanupTest(t, fixture, &order, &rollbackDeadline)
+			finalErr := timing.finish(startupCtx, startErr, finish, func(cause error) error {
+				return cleanupInstalledServiceStartupFailureV1(parent, lifecycle, nil, failureCleanupContext, failureCleanupCancel, cause)
+			})
+			if !errors.Is(finalErr, context.Canceled) || !rollbackDeadline.Equal(appDeadline.Add(privateWorkloadEnvironmentTimeoutV1)) || fixture.stops != 1 {
+				t.Fatalf("error=%v stops=%d canceled=%v rollback deadline=%v want=%v", finalErr, fixture.stops, canceledAt, rollbackDeadline, appDeadline.Add(privateWorkloadEnvironmentTimeoutV1))
+			}
+			record, found, err := fixture.operation.ReadWorkloadLifecycleV1()
+			if err != nil || !found || record.TransferClaimed || fixture.injections != 0 {
+				t.Fatalf("record=%+v found=%t err=%v injections=%d", record, found, err, fixture.injections)
+			}
 		})
-		if !errors.Is(finalErr, context.Canceled) || !rollbackDeadline.Equal(appDeadline.Add(privateWorkloadEnvironmentTimeoutV1)) || fixture.stops != 1 {
-			t.Fatalf("error=%v stops=%d canceled=%v rollback deadline=%v want=%v", finalErr, fixture.stops, canceledAt, rollbackDeadline, appDeadline.Add(privateWorkloadEnvironmentTimeoutV1))
-		}
-		record, found, err := fixture.operation.ReadWorkloadLifecycleV1()
-		if err != nil || !found || record.TransferClaimed || fixture.injections != 0 {
-			t.Fatalf("record=%+v found=%t err=%v injections=%d", record, found, err, fixture.injections)
-		}
 	})
 
 	t.Run("installed caller cancellation starts one allowance", func(t *testing.T) {
