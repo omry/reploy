@@ -1,7 +1,7 @@
 ---
-status: A1 and B1–B5 landed; C-design approved; C implementation pending; public mapped execution remains inhibited
-updated: 2026-10-25
-summary: Implementation-ordered single-installation identity slices, explicit durable mappings, separate composition scope, and conditional production/test estimates.
+status: A/B landed; C internal integration delivered; full-campaign architecture approved; remaining group delivery includes LLD preparation and review; public mapped execution remains inhibited
+updated: 2026-10-26
+summary: Full-campaign architecture and contracts for isolated single-installation identities, with implementation-ordered slices and separate proof and approval gates.
 ---
 
 # Multi-Identity Delivery Design and Implementation Plan
@@ -10,15 +10,21 @@ The [security contract](MULTI_IDENTITY_SECURITY_CONTRACT.md) is authoritative.
 On 2026-10-19, the maintainer accepted separating composition from multi-identity.
 A1 and B1–B5 are landed. They provide explicit single-installation mapping
 input, validation, durable state and conservative recovery. General composition
-remains separate. The approved C checkpoint adds internal engine/image seams;
-it does not enable public mapped execution. Local and remote C-design review
-and maintainer approval are complete. Refresh affected design stamps before
-implementation; existing B-design stamps do not attest the changed C design.
+remains separate. The delivered C checkpoint adds internal engine/image seams;
+it does not enable public mapped execution. C-design approval and C1/C2 delivery
+are recorded in the retained C campaign. Existing stamps attest their exact
+recorded bytes. The maintainer approved the reviewed campaign architecture on
+2026-10-26; that approval does not supply later LLD or runtime proof.
 
 The main delivery table is in implementation order. Each group can finish
 without a later implementation slice. Named design and evidence gates still
-apply. Earlier IDs are preserved in the crosswalk; historical evidence keeps
-its original milestone labels. C1 and C2 implementation have not started.
+apply. Each group's delivery includes LLD preparation and review before its
+implementation, as specified in the group delivery sequence below. Earlier IDs
+are preserved in the crosswalk; historical evidence keeps
+its original milestone labels. C1 and C2 are implemented; their live proof uses
+a patched engine in a disposable eligible guest. This is not stock-Podman or
+public mapped-workload qualification. Current remote approval remains a separate
+exact-head check; this document update does not establish it.
 
 The target is local rootless Linux Podman through the existing Docker-compatible
 route. A general native Podman backend, remote engines and Podman Machine are
@@ -63,7 +69,7 @@ external coordination. It does not approve a composition API.
 Letters are delivery groups, numbers are slices within the group. Read top to
 bottom. Earlier independent work may run sooner (notably K1). Group subtotals
 are arithmetic planning ranges; do not add them to their slice rows. Landed A1 and B1–B5
-are excluded from remaining totals. Targets do not require padding small
+and delivered C1/C2 are excluded from remaining totals. Targets do not require padding small
 changes to reach 500.
 
 | Group | Slice | Concrete result | Prod target | Production LOC | Test/fixture LOC | Prerequisites |
@@ -77,9 +83,9 @@ changes to reach 500.
 | B | B3 | Exact/bounded geometry, disjoint assignments and dormant-ID comparison; landed | — | 0 | 0 | Delivered |
 | B | B4 | Identity record, operation lock and destructive-state retention guards; landed | — | 0 | 0 | Delivered |
 | B | B5 | Pending intents, recovery, tombstones and conservative reservation retention; landed | — | 0 | 0 | Delivered |
-| **C** | **Subtotal** | **Existing engine and build integration** | — | **600–1,200** | **1,150–1,900** | — |
-| C | C1 | Scoped Podman admission and compatible exact/bounded create transport | 500 | 350–650 | 650–1,050 | B5; C-design; compatible-map-proof |
-| C | C2 | Reuse compatible build/image path; bind immutable service images | 400 | 250–550 | 500–850 | C1 |
+| **C** | **Subtotal** | **Internal engine and build integration; delivered** | — | **0** | **0** | — |
+| C | C1 | Scoped Podman admission and compatible exact/bounded create transport; delivered | — | 0 | 0 | Delivered; public activation remains gated |
+| C | C2 | Reuse compatible build/image path; bind immutable service images; delivered | — | 0 | 0 | Delivered; public activation remains gated |
 | **D** | **Subtotal** | **Locked identity and capability declarations** | — | **950–1,600** | **1,600–2,600** | — |
 | D | D1 | Public identity declarations and name/number validation | 300 | 250–400 | 400–650 | C2; D-design |
 | D | D2 | Role-specific capability declarations and policy lock | 300 | 200–350 | 350–550 | D1 |
@@ -88,7 +94,7 @@ changes to reach 500.
 | **E** | **Subtotal** | **Mapped execution and supervisor admission** | — | **1,400–2,550** | **2,800–4,550** | — |
 | E | E1 | Compile reserved maps; pre-start verification and host-device rejection | 500 | 350–650 | 650–1,100 | D4; C1; launch-design |
 | E | E2 | Child credentials, capability drop, descriptors, dumpability and sessions | 500 | 400–750 | 800–1,300 | E1; D2 |
-| E | E3 | Supervisor lifetime/replacement and common admission including runtime exec | 450 | 350–650 | 700–1,150 | E2 |
+| E | E3 | Supervised lifetime, host-admitted whole-container replacement and runtime exec | 450 | 350–650 | 700–1,150 | E2 |
 | E | E4 | Effective capability and privilege-regain verification on every entry | 400 | 300–500 | 650–1,000 | E3 |
 | **F** | **Subtotal** | **Exclusive preparation and network isolation** | — | **1,350–2,400** | **2,400–3,950** | — |
 | F | F1 | Descriptor-safe declared-object preparation with fresh ownership authority | 500 | 400–650 | 650–1,050 | E4; storage-design |
@@ -122,12 +128,12 @@ changes to reach 500.
 | K | K2 | Stock Postfix through the approved supervisor model | 0 | 0 | 650–1,100 | H7; I3; F4; mail-compatible; generic-launch |
 | K | K3 | Stock Dovecot including synthetic SQL and restore | 0 | 0 | 1,000–1,600 | H7; I3; F4; mail-compatible; generic-launch |
 | K | K4 | Combined interface/lifecycle campaign and all-row evidence report | 0 | 0 | 650–1,100 | K1; K2; K3; J5 |
-| **Total** | — | **Conditional remaining implementation** | — | **9,950–17,300** | **21,250–34,650** | Named gates apply |
+| **Total** | — | **Conditional remaining implementation** | — | **9,350–16,100** | **20,100–32,750** | Named gates apply |
 
 There are **43 delivery candidates**. A1 and six B slices are landed;
-**36 remain**. B2 is split into B2.1 and B2.2 for the revised input design.
+**34 remain after delivered C1/C2**. B2 is split into B2.1 and B2.2 for the revised input design.
 The conditional code total is
-**31,200–51,950 LOC**, split into the production and test ranges above.
+**29,450–48,850 LOC**, split into the production and test ranges above.
 This is a sizing scenario, not a complete supported-feature commitment: compatible
 exact mapping, production supervisor and mail compatibility remain substantive
 design/evidence dependencies. A failing gate can change the count and total.
@@ -165,6 +171,455 @@ technical dependencies, not artificial dependencies merely to serialize unrelate
 work. For example secret references do not require restore, and an independent
 Postfix qualification does not require the shared-interface campaign.
 
+
+## Full-campaign architecture and contracts — approved 2026-10-26
+
+The maintainer approved this architecture for the complete campaign, including
+delivered A–C and remaining D–K, after design review on 2026-10-26. The approval
+is recorded in the completed architecture run
+`run_23t2akmygv0s75eg00cqk8z5wh` against document SHA-256
+`2f03ffd8b182c7ca6fb59923bf4e53f16d1d53b4eddbd13ca9c9a97d407fa0d1`.
+This update incorporates the subsequent request to make group LLD part of
+delivery. It does not authorize implementation or weaken the
+[security contract](MULTI_IDENTITY_SECURITY_CONTRACT.md). Later sections retain
+their dated B/C specification and evidence; this section supplies the approved
+common contract for the remaining groups, not a second runtime authority.
+
+Architecture approval settles the intended behavior, authority, defaults and
+failure rules below. Later LLD selects algorithms, exact internal types and
+bounded implementation slices. It must demonstrate conformance rather than
+reopen settled choices. A change to public input, authority, defaults or scope
+returns for maintainer approval. A failed mechanism proof returns to design;
+it cannot be closed by weakening the claim or substituting another profile.
+
+### Scope and trust boundary
+
+The initial cohort is one non-root operator's staged workload or user-scope
+installation on an eligible local rootless Linux Podman engine. Profiles are
+explicit `exact` or `bounded`; neither is the default or a fallback. Docker,
+remote engines, Podman Machine, rootful mapped workloads and system-scope mapped
+installation reject before workload effects. Ordinary single-identity behavior
+retains its existing backend-independent policy. Native Podman backend work,
+host-aligned identities, general composition, host enrollment, automatic
+allocation and a system-wide installation registry remain separate features.
+
+The administrator coordinates host-ID reservations across installations,
+retained data and unmanaged services. Reploy serializes and checks one
+installation's own authority. Host snapshots and installation locks are not a
+global allocator or an atomic lock over administrator changes. Operators must
+stop and fence affected workloads before changing delegation or reservations.
+Every new controlled execution admission still refreshes the required host
+inventory and delegation checks; earlier success is never a cached permission.
+
+The host operator, Reploy implementation and accepted blueprint are trusted.
+Application code, application-controlled data and ordinary image hooks are
+untrusted. Names in the image prove consistency, not permission. The engine
+socket and supervisor control channel are never application resources.
+
+### Components and authority ownership
+
+| Component | Owns | Must not do |
+| --- | --- | --- |
+| Existing blueprint/build pipeline | Portable declarations, immutable build/image evidence and accepted command definitions | Embed host mappings or resolved secret values in portable image authority |
+| Existing deployment transaction | Installation ID, accepted and dormant assignments, generation/revision, pending operation and exact resource handles | Adopt a copied installation or release ambiguous retained ownership |
+| Existing host/geometry validator | Fresh delegation/principal checks, stable interval assignments and final active-map coverage | Allocate free ranges, repair host accounts or infer global exclusivity from a local lock |
+| Existing pinned runtime adapter | Positive engine/peer identity, bounded compatible requests and owned-object observation | Fall through to same-ID/raw exec or silently switch engines/profiles |
+| Existing host operation/service runner | Fresh admission for explicit starts/entries, foreground monitoring, exact resource ownership and restart fencing | Add a persistent staged broker or grant general host service authority |
+| Reploy-owned in-container identity supervisor | Release approved commands under their accepted identities; retain only explicitly approved control-plane capabilities | Execute application code in its own authority or accept arbitrary identity/capability requests |
+| Trusted inert-object preparer | Create/check declared managed objects while unattached under the exact operation authority | Run image hooks, follow untrusted links or recursively repair application data |
+
+Host admission belongs to the current CLI operation or existing foreground
+run/session/user-service process. It is not a new daemon, enrollment service,
+allocation registry or persistent staged broker. Detached staging may outlive
+its initiating CLI after a successful start, but the container cannot then
+autonomously select or relaunch privileged roles. Existing host controlled-session
+supervision is useful lifecycle context; it is not already the in-container
+identity supervisor. The private probe is evidence, not production code to copy.
+
+The proposed initial supervisor is Reploy-owned and bound to the immutable
+runtime image. An image-provided master does not silently become trusted.
+Supporting one requires a separately reviewed, image-locked implementation of
+the same supervisor contract and explicit maintainer approval. Stock mail
+compatibility therefore remains a real gate rather than an assumption.
+
+### Shared records and handoffs
+
+These are logical contracts; reuse and extend existing records rather than
+create a parallel state store or admission cache.
+
+| Record | Required binding | Producer and consumer |
+| --- | --- | --- |
+| Locked identity policy | Original blueprint/build identity, immutable image, application names/numbers/groups, command-role assignments, supervisor identity and capability policy | D produces; E–K consume |
+| Retained mapping authority | Existing installation owner, operator account, profile, revision, stable accepted/dormant assignments and retained ownership | B owns; C–K preserve |
+| Invocation execution plan | Exact installation, selected generation, mapping revision, operation ID, current host evidence, pinned endpoint, immutable image, active maps and sandbox/role policy | C/D/E assemble; F/G validate before effects |
+| Operation resource evidence | Attempt identity plus exact container/network/storage/service/interface handles and completed effect phases | Each effect owner records through the existing pending operation; G/H reconcile |
+| Runtime admission result | Positive owned-object identity, complete effective maps/namespaces, verified supervisor boundary and a bounded authorization for the selected entry | E/F/G produce; supervisor may consume only for that entry |
+
+An execution plan is immutable input for one invocation, not durable permission.
+Any identity, generation, revision, endpoint, host-evidence or operation mismatch
+rejects dispatch. Record intended effects before issuing them. Record returned
+handles before clearing inhibition. Lost responses retain an ambiguous operation
+and its reservations. Recovery observes exact handles and phase; it does not
+replay a payload, reinstall secrets or infer absence from an arbitrary error.
+
+Only complete final acceptance records an admitted generation. Partial create,
+successful image verification or a ready container alone cannot promote it.
+No consumer may use B's reservation union as the exact active map: dormant
+assignments remain reserved but inactive until their same numeric bindings are
+explicitly reactivated.
+
+### D contract: identities, roles and generation evidence
+
+There is one portable identity policy for a mapped generation, beside the
+existing deployment-only `identity_mapping` input. It declares application
+users by both image-local name and numeric UID, groups by name and numeric GID,
+each user's primary and supplementary groups, exactly one dedicated supervisor
+UID/GID, and named execution roles. Every application entry resolves to one
+role through its accepted executable/command definition. No entry inherits the
+supervisor role or chooses a UID through an unvalidated argument/environment
+value. Selecting the public field spelling and strict wire representation is
+D's LLD; its semantics are fixed here and are subject to the same public-input
+approval guardrail before shipping.
+
+Each role references one accepted application identity and exact supplementary
+group vector. Supervisor UID/GID are disjoint from application authority.
+Role labels are selectors, not separate security principals. Roles sharing an
+application UID share that identity's process and ownership authority. Secret
+and interface grants must be consistent across those roles; a request for
+asymmetric access rejects before effects. Different labels or group vectors
+alone cannot establish confidentiality between processes sharing the same UID.
+Stronger per-role isolation needs a separately proved and approved mechanism.
+Runtime-required IDs are separately enumerated and justified; they grant no
+application role. Container ID 0 required by the current compatible projection
+is not implicitly an application or supervisor identity. Inactive image accounts
+need no mapping merely because they exist in account files.
+
+Application capability sets remain empty. Supervisor capabilities also default
+to empty; selecting multiple identities does not add them implicitly. Explicit
+supervisor opt-in is limited initially to the proved identity-transition needs
+`CAP_SETUID`, `CAP_SETGID` and, only when required by the implementation,
+`CAP_SETPCAP`. No implicit package-specific capability bundle is added. A request
+that cannot perform its declared transitions with its accepted policy rejects
+before launch; it does not inherit engine defaults. Broader application or
+supervisor capabilities require a separate explicit security decision.
+
+Image evidence is collected without executing image NSS, hooks or application
+code. The initial supported image account source is bounded, regular immutable
+account/group content. Ambiguous aliases, duplicate/conflicting name-number
+relationships, unresolved required groups or an account source whose required
+relationship cannot be proved offline reject. File extraction must be confined
+and bounded; successful archive parsing is not permission to trust traversal.
+Evidence binds the selected immutable generation, not a mutable tag or a host's
+account lookup. Host mapping overrides do not rewrite image authority.
+
+D4 checks all declared application identities against reserved assignments.
+E1 separately checks the complete execution set, including supervisor and
+runtime-required IDs, and rejects surplus new exact assignments. Updates may
+change declarations, but do not remap retained numeric assignments, migrate
+ownership or authorize a previously omitted role.
+
+### E contract: execution and supervisor separation
+
+All Reploy-controlled application paths use one admission boundary: initial
+start, application command, test, shell, controlled session, lifecycle hook,
+runtime exec and restart. An unsupported path
+rejects before payload execution. An already unprivileged application may fork
+or exec under its same confined authority; it cannot select a different role
+or regain supervisor privileges through that operation.
+Mapped application code executes only inside the admitted container. Existing
+host-native command branches retain pre-effect rejection for mapped owners;
+resolving an accepted role cannot authorize a host-native shortcut.
+
+Before payload release, the host operation runner validates the selected operation,
+host authority and immutable generation; the adapter creates an exact owned
+container running only a trusted admission waiter. E verifies the complete
+effective kernel maps, owner/peer and every required namespace. F supplies
+storage/network admission. Only then may the trusted supervisor release an
+accepted application entry. The waiter and supervisor never execute arbitrary
+image entrypoints with setup authority.
+
+The supervisor uses exactly its dedicated real, effective, saved and filesystem
+UID/GID in every thread. Its supplementary groups are empty or only its
+dedicated GID, it is non-dumpable while capability-bearing, and it occupies a
+POSIX session distinct from every application child. Its control channel and
+descriptors are private. The child receives only constructed standard streams
+and explicitly declared application descriptors. Immediately before untrusted
+exec, normalize all four child UID/GID fields and exact supplementary groups,
+remove all child capability sets, close all other descriptors, apply the approved
+seccomp/no-new-privileges policy and verify the final boundary. Credential
+changes in a multithreaded implementation require a demonstrated safe launch
+primitive; the private Go probe is not that demonstration.
+
+The host operation authorizes each requested role entry against fresh host and
+installation authority. Reuse the existing command/session transport to invoke
+the immutable trusted launch boundary, binding the installation, generation,
+mapping revision, exact owned container, role and attempt. This is operation
+evidence, not a new bearer token, admission cache or always-connected replacement
+protocol. Stale, disconnected or incomplete requests launch no application code;
+ambiguous replies retain their operation and never authorize a blind replay.
+
+Initial automatic replacement uses the whole-container lifecycle, not privileged
+autonomous child restart. If a required long-lived workload child exits, the
+supervisor stops its remaining workload children and exits. Completion of a
+transient hook or explicit app command does not itself end the workload.
+An installed user-service may apply its existing restart policy only by
+re-entering host admission for a new instance. Detached staging requires an
+explicit new host operation. No engine restart policy bypasses these checks.
+Foreground/session ownership loss follows existing bounded stop/cleanup and
+retains uncertainty when stopping cannot be proved. An already admitted detached
+instance needs no continuously running host broker, but cannot launch a new
+role without a new admitted host operation. A future privileged child-replacement
+protocol needs separate architecture review, authority and liveness proof.
+
+Application children cannot signal or inspect any supervisor thread, including
+through the same-session `SIGCONT` exception, pidfds or process-memory APIs.
+All-thread observations and positive syscall controls are required; exited or
+missing targets are not denial evidence. E4 tests every supported entry, not
+only the first container process.
+
+### F contract: managed objects and network isolation
+
+Initial workloads use immutable image content and declared Reploy-managed
+storage only. A managed host-backed mount is admitted by its resource record
+and preparation contract, not because its runtime type happens to be `bind`.
+External user-selected binds, host devices, runtime sockets, privileged mode,
+host namespaces and private-path exposure reject before workload mutation.
+
+Storage declarations identify a managed root, relative object, kind, intended
+application owner, mode and lifecycle class. Prepare new declared inert objects
+or verify already recorded objects under the expected ownership. Resolve and
+operate through held directory/object descriptors with no untrusted symlink,
+mount crossing, hard-link alias or type substitution. Never traverse and
+recursively chown application-controlled trees. An existing foreign or
+inconsistent tree requires a separately checked offline migration; `force`
+does not adopt it. Any ownership-setting helper has only its reviewed setup
+authority inside the selected subordinate mapping and runs no application code.
+It exits before payload admission.
+Managed mounts and per-command mount overrides must preserve existing protected
+image/provider paths and the immutable supervisor, helper and control paths.
+An application-writable overlay cannot replace the trusted launch boundary.
+
+Preparation, restore and attachment are mutually exclusive for the relevant
+managed resources. Hold the existing installation operation lock and persist
+restart inhibition before effects. Engine restart policy cannot independently
+bypass this fence. A crash leaves the resource inhibited until recovery proves
+the exact preparation/attachment state. A successful create or stopped PID
+alone does not prove the storage is unattached.
+
+Network policy retains existing public/local egress semantics, but does not
+equate external egress permission with inter-installation peer access. Each
+installation has distinct network/PID/IPC/mount namespaces and private mount
+propagation. No peer-reachable attachment or shared network namespace is admitted.
+F3/F4 must prove existing egress policy, declared endpoint publication and exact
+cleanup on the selected engine, including pre-start effective observation.
+Missing compatible metadata is an unresolved transport proof, not permission
+to start and inspect later. J may add only its explicit narrow interface rights.
+
+### G contract: activation, restart and revocation
+
+The existing host operation or foreground user-service runner owns application
+admission and the permitted whole-container restart chain. User-service startup re-enters the normal host authority and
+generation checks under the selected OS user. Reuse the existing user-service
+lifecycle; do not delegate autonomous workload restart to an engine policy
+that can bypass Reploy. Non-root foreground staging/run/test follows the same
+admission. System units and root-run mapped operations remain ineligible.
+
+Installing from staging creates a separate destination mapping owner with an
+explicit independently validated mapping decision. It copies portable build
+evidence as permitted, never source reservations, pending operations, admission
+results, managed ownership or secret values. Validate destination/source retained
+overlap before effects. Moving mapped test data uses H's explicit offline
+translation boundary, not the ordinary install path. Test environments remain
+valid independent owners.
+
+Public mapped execution stays inhibited until G3 closes `generic-launch` for
+both profiles through supported interfaces. Until then E/F may use private
+integration seams with disposable trusted fixtures; no intermediate public
+command may fall back to the ordinary path.
+
+Retain the existing external `down`, `starting`, `up`, `stopping` lifecycle.
+`up` requires completed startup, including its required hooks/readiness, rather
+than only a running container. Repeated `up` on the same accepted live instance
+does not repeat initialization or secret delivery. Failed new startup enters
+`stopping`; report `down` only after stopping is proved. If stop cannot be
+proved, retain the uncertain operation and inhibition rather than report success.
+Shutdown hooks run only through their accepted application roles; security
+revocation may suppress hooks to prevent further untrusted execution.
+
+Revocation first inhibits new admission and all restart owners, then stops and
+removes exact owned runtime resources and verifies absence. Report success only
+after the restart fence and resource absence are proved. Retain mappings and
+storage. Lost ownership evidence blocks cleanup; it never permits deleting a
+foreign object or releasing IDs. External administrator changes are not an
+automatic successful Reploy revocation transaction.
+
+### H contract: ownership lifetime, export and restore
+
+Ordinary stop/start, recreation, generation update and rollback preserve the
+installation's established numeric associations. Identity removal makes an
+exact assignment dormant; reusing that numeric ID or rolling back restores its
+original binding and Unix ownership access. Account names do not revoke old
+numeric ownership. Profile, supervisor identity or bounded geometry changes
+reject as ordinary updates and require explicit migration or replacement.
+
+Removal distinguishes runtime teardown from managed-data deletion. Retained
+data keeps assignments reserved. Checked reservation release requires exact
+absence of owned runtime, restart owners, attachments and retained managed
+storage; ambiguous cleanup retains inhibition and reservations. Manually
+deleting a deployment directory does not prove safe release. A future central
+installation log may help discovery/recovery; it is not a dependency here.
+
+Export/restore is offline and exclusive. The archive includes application data,
+portable generation evidence, declared object metadata and original logical
+container ownership, plus an integrity manifest. It excludes live sockets,
+runtime/control handles, admission results, source-owner authority and
+Reploy-managed ephemeral secret delivery. Reploy does not serialize resolved
+secret values into the archive metadata. The archive itself is data, not a destination mapping reservation or
+permission to start a workload.
+Application-controlled data may contain values copied from a delivered secret.
+Reploy cannot prove their absence and does not silently redact application
+backups. Treat exports as sensitive and protect their operator-owned files.
+
+Before writing archived ownership, validate the destination owner, selected
+profile, complete UID/GID translation and fresh exclusive host delegation.
+An offline restore into the same existing bound owner retains that owner's
+unchanged accepted associations; it cannot adopt an owner from archive metadata
+or change its profile/supervisor/geometry. Import into an independent destination
+requires an explicit new destination mapping, non-overlapping with every other
+live or retained owner, including the retained source. Both paths retain their
+own existing authoritative state and the same atomic data-publication contract.
+Either prove the same numeric mapping safe for the selected owner or require
+explicit checked translation into the independently accepted destination; never silently
+preserve unsafe source host IDs. Reject unmapped/foreign owners, traversal,
+unexpected object types and unsafe links. Materialize in collision-safe private
+staging with descriptor-safe inert operations; no archive code or hooks run
+with preparation authority. Publish only a verified complete restore under
+the existing transaction. Failure leaves accepted destination data/state
+unchanged and retains any uncertain candidate ownership for recovery. Restore
+does not start the workload until normal G admission succeeds.
+
+### I contract: recipient secret files
+
+Portable policy carries named references and explicit recipient roles, not
+secret values. Resolve only explicitly selected operator-owned sources under
+the current installation authority. Initial sources are local private files;
+no implicit environment search, network vault, global configuration or credential
+discovery is added. Source selection is deployment input and does not become
+portable build content.
+Resolve recipient roles to their accepted application identities before access
+validation. Distinct role names using the same UID cannot be promised different
+secret access; inconsistent declarations reject rather than silently broadening
+the recipient set. Use distinct admitted identities when different access is needed.
+
+Deliver values as recipient-confined regular files in ephemeral managed storage,
+with declared ownership/modes and no parent traversal or peer access. Reploy must
+not put resolved values in its command arguments, image layers, state, engine
+labels, logs, diagnostic dumps or export metadata. Omit its ephemeral delivery
+storage from exports. This does not promise to redact values that an authorized
+application copies into its own data or output. Unrelated roles and the application environment
+receive no implicit copy. Supervisor/preparer access is limited to their trusted
+delivery duty; application children cannot access its control descriptors.
+
+Bind delivery to a new accepted runtime instance. A repeated `up` or ambiguous
+startup retry never resends initialization secrets to the same instance.
+Replacement after confirmed teardown obtains new instance authority. Rotation
+is explicit and initially uses stop/recreate/admit with an atomic new secret
+set; no implicit live reload or partial file replacement. Failure retains the
+previous accepted reference set, reports the failed instance state accurately,
+and requires an explicit operation to retry or roll back. Old ephemeral values
+are removed only through exact owned cleanup. Export never acts as secret backup.
+
+### J contract: explicit shared interfaces
+
+The initial interface is a named filesystem Unix-stream socket with one producer
+and explicit consumer installation/role identities. General shared directories,
+abstract sockets, shared network namespaces and peer TCP/UDP attachment are
+outside this contract. Membership in a future composition grants no interface
+right. The owner and each participant must explicitly accept the same interface
+revision; a matching human-readable name alone cannot identify a resource.
+All initial participants use the same eligible operating account, host and
+positively identified pinned local engine, with independent disjoint private
+mappings. Cross-user, cross-engine and cross-host grants reject before any
+publication; later support needs a separate architecture and authority design.
+
+Each interface has a dedicated Reploy-managed runtime path, producer identity,
+consumer allowlist, generation/mapping bindings, exact object identity and
+pending/active/revoked lifecycle. Grant only the declared connection right and
+path. Preserve disjoint private mappings; the implementation may not expose
+an entire participant map or silently add overlapping shared host assignments.
+Required access must be independently enforceable for each accepted role,
+including denial to unauthorized identities inside a participating workload.
+Roles resolve to the same accepted-identity boundary as D/I. All roles sharing
+an application UID must have consistent interface grants; a role label cannot
+deny a socket to another process with the same UID. Negative conformance cases
+use genuinely unauthorized identities, not renamed copies of an authorized UID.
+
+J1 must select and prove a narrow mechanism satisfying that access contract in
+a disposable fixture before attachment work. The architecture does not claim
+that ordinary mode bits or a shared group already solve it. A failed proof
+keeps sharing disabled and returns the mechanism to design; no proxy, ACL,
+extra identity mapping or privileged host broker is silently substituted.
+
+Reuse each installation's own operation state and deterministically ordered
+participant locks for an explicit grant operation. Partial publication leaves
+all affected attachments inhibited; no global service registry or multi-service
+transaction manager is introduced. Reconcile a dedicated socket path without
+walking application data. Never delete a live or foreign socket by pathname
+alone. Producer restart requires a new proved object and matching participant
+admission. Revocation must invalidate existing access, not merely unlink a name:
+if open connections cannot be revoked safely, stop/recreate affected owned
+participants before reporting success. Retain reservations and participant
+authority until exact teardown is proved.
+
+### K contract: qualification and release claims
+
+Use supported Reploy operations on disposable installations to close every
+security-contract acceptance row. Record exact Reploy/image/engine/runtime/host
+identities, both mapping profiles, fresh role admission, positive controls,
+negative isolation tests, lifecycle ownership and exact cleanup. Private probe
+success and ordinary same-ID Podman hotfixes remain separate evidence.
+
+K1 may qualify capability-free Redis/Rspamd independently. K2/K3 require a
+proved stock-mail supervisor/child split and image-locked role/capability
+policy; naming a stock master as trusted does not supply that proof. Any
+additional trusted supervisor implementation or broader capability request
+returns for explicit design approval before implementation. K4 closes the
+combined lifecycle/shared-interface evidence. A report of blockers is useful
+but is not completion. Resource-limit design remains outside this identity
+campaign and inherits ordinary runtime policy without weakening it.
+
+### Cross-group failure rules and acceptance ownership
+
+| Boundary | Required failure result |
+| --- | --- |
+| D to E | Missing/changed image identity or incomplete role/map coverage rejects before create or payload release; no inferred identities |
+| E to F | An unproved waiter/supervisor boundary cannot receive application code or storage-preparation authority |
+| F to G | Unproved ownership, attachment exclusion or effective network policy leaves activation inhibited |
+| G to H | Stop/removal uncertainty retains reservations and prevents destructive ownership operations |
+| H to G | Restored bytes are not runnable until destination authority and ordinary startup admission both pass |
+| I to G | Missing private source or incomplete recipient installation fails startup without publishing values or resending to an ambiguous instance |
+| J to G/H | Incomplete grant/revocation blocks attachment/restart/release for the affected resource rather than granting partial shared access |
+| Every group to K | Passing a slice's tests does not close a contract row without the required supported-interface evidence |
+
+The acceptance-ownership table below remains the complete 19-row responsibility
+map. ID/CAP rows are owned by D/E plus generic launch; FS/SB/network rows by F;
+allocation/revocation and initial supported activation by B/G/H; lifecycle and
+restore by H; interface rows by J/K. I preserves all relevant confinement and
+lifecycle rows even though the original ledger has no separate secret row.
+
+Design reviews must check both profiles, ordinary absent-policy compatibility,
+every process-entry path, state/effect crash boundaries, dormant ownership,
+separate staging/destination owners, and every cross-group handoff above.
+Evidence gates remain independent from design approval. Completing this section
+does not claim the supervisor, storage, network, restore or interface mechanisms
+have passed. Their owning LLD must provide the exact proof plan before code.
+
+The existing 34 remaining slice estimates are conditional. The explicit
+host-operation/supervisor launch boundary, exclusive storage and interface obligations
+may require decimal splits, especially E2/E3, F2 and J1/J3. Re-estimate against
+the selected LLD before implementation; do not force a new control plane into
+an old estimate or exceed the 750-production-line bound. This design pass
+does not manufacture an actual LOC forecast from unimplemented mechanisms.
 
 ## B-design specification (delivered)
 
@@ -741,7 +1196,12 @@ sets. No
 ordinary update scans or recursively chowns application data. Existing ordinary
 same-ID/keep-id handling is not the subordinate multi-identity mapping policy.
 
-### Runtime scope and unresolved decisions
+### Historical B runtime scope and unresolved decisions
+
+This subsection records the B checkpoint before C implementation. C1/C2 now
+provide the internal integration described above; its failed sparse candidate
+is historical evidence, not the delivered compatible request. The proposed
+full-campaign architecture supplies the current cross-group design for review.
 
 C1 must first prove a compatible creation request for both explicit profiles.
 The recorded sparse candidate failed; native private-probe success is not proof
@@ -968,7 +1428,7 @@ failures to this milestone. This authorizes the stated C1/C2 design and bounded
 CI repairs. It does not approve the PR, enable public mapped execution, or waive
 any exact-head CI job. Refresh affected design stamps before implementation.
 
-### Recovery and evidence status — 2026-10-25
+### Historical C-design recovery and evidence status — 2026-10-25
 
 This draft is reconstructed from the retained session state after its uncommitted
 `/tmp` checkout disappeared. It is not the original byte-identical reviewed draft.
@@ -987,7 +1447,10 @@ A fresh four-trial API 1.44 proof has locally retained, untracked receipts, summ
 The raw receipts are not shipped in this PR. The proof establishes the private
 projection only. This host does not satisfy production B
 principal-source admission. No C1/C2 implementation or production-path negative
-test has run; compatible-map-proof remains open until C1 completion.
+test had run at that recovery checkpoint; compatible-map-proof was still open.
+Subsequent C1/C2 implementation and the retained C campaign close their internal
+integration requirements. They do not close generic-launch, stock-engine
+qualification or the later supervisor/storage/network evidence gates.
 
 ## Baseline and current standing (historical IDs)
 
@@ -1211,12 +1674,67 @@ No obsolete enrollment/global-allocator implementation remains in B.
 
 Gates are work inside delivery, not extra code PRs. Review establishes design
 quality; only the maintainer can approve a new intended behavior or authority.
-Unresolved later decisions do not block independent foundations.
+The approved full-campaign architecture supplies the common intended-behavior
+authority for later LLD. It cannot supply
+runtime proof, approve a new public wire syntax that it leaves unspecified, or
+approve a later change to the reviewed contract. Routine implementation choices
+within the approved contract do not require another maintainer gate.
+
+### Group delivery sequence
+
+LLD preparation is required work inside each remaining group's delivery. The
+operator selects the implementation slices; the delivery run includes their
+design prerequisites without a separate manual request. This is a requirement
+on the agent executing this plan, not a claim that a SWE helper automatically
+generates LLD. A bare slice-delivery call must not bypass these prerequisites.
+
+Before implementing the first selected unfinished slice in a group:
+
+1. Reuse current reviewed LLD where it covers the selected slices and still
+   conforms to this architecture. Otherwise prepare or update the group's LLD.
+   Define the concrete interfaces, data/state transitions, failure handling,
+   implementation boundaries and validation plan. For qualification-only work,
+   define the fixture and evidence plan instead of inventing production code.
+2. Resolve the mechanism proofs needed to choose a sound implementation. Keep
+   disposable probes separate from production implementation. Record later
+   integration proofs with their owning slices and keep their gates closed
+   until they pass. A failed proof returns to design; it does not weaken the
+   requirement or silently substitute a different mechanism.
+3. Deep-design-review the LLD locally and remotely against this architecture
+   and the security contract. Resolve findings. If remote review needs a PR,
+   publish a review-only draft; do not represent pending review as clean.
+4. Present any unresolved public syntax or material change to behavior,
+   authority, defaults or scope concisely at a `??>` gate. Record maintainer
+   approval before depending on that decision. Reuse existing approvals;
+   routine internal choices do not require repeated approval.
+5. Update production/test estimates and split implementation slices before
+   they exceed the 750-production-LOC hard limit; target 500. Preserve parent
+   slice IDs with decimal children. Refresh affected stamps through SWE helpers
+   after review and any approved design changes. Checkpoint and complete the
+   design PR-cycle before dependent implementation.
+6. Deliver the selected slices from that LLD through implementation review,
+   checkpoint, publication and PR-cycle. Require every exact-head `ci.yml` job
+   before approval. Report actual production/test LOC, timing, observed tokens
+   and unresolved issues at the requested stopping point.
+
+Prepare one coherent LLD per group or closely coupled group set, not a new
+design exercise for every slice. D/E may share a design pass. F must cover both
+storage and network gates; H includes ownership lifecycle before its later
+restore gate; K needs qualification plans and the applicable evidence gates.
+The table below identifies named gates, not an exemption for slices without a
+named design gate. Independent earlier work such as K1 may prepare its own
+bounded plan without waiting for unrelated groups.
+
+If a later finding changes the LLD, review and re-stamp the affected design
+before dependent implementation. Reopen maintainer approval only for a decision
+outside recorded authority. Do not rewrite approved ancestors or rebase an
+unrelated stack merely to repeat this preparation.
 
 | Gate | Required before | Required decision or evidence |
 | --- | --- | --- |
 | B-design | B1–B5 | Approved and delivered. Preserve the single-installation schema/override contract, initial files-backed host checks, durable state and conservative recovery. No composition, global enrollment or payload admission is implied. B2 was delivered as B2.1 and B2.2. |
-| compatible-map-proof | C1 implementation completion | Fresh exact and bounded compatible creation, planned/effective host maps and pre-payload negative tests; preserve private-harness receipts as separate evidence. |
+| campaign-architecture | Remaining D–K implementation | Approved on 2026-10-26 after design review. Preserve the approved intended behavior and authority; group LLD, unresolved public syntax and mechanism proofs remain separate delivery work. |
+| compatible-map-proof | C1 implementation completion | Delivered for the internal C seam with retained patched-engine guest receipts. Public supervisor/storage/network admission remains separate; preserve private-harness receipts as separate evidence. |
 | C-design | C1–C2 | Approved on 2026-10-25: operation dispositions and bounded adapter/build approach; no general native backend. Refresh affected stamps before implementation. |
 | D-design | D1–D4 | Public identity/capability syntax, locked image evidence, role allowlists and default-empty behavior. |
 | launch-design | E1–E4 | Production supervisor ownership and launch/replacement boundary; helper/supervisor authority, child descriptor/credential/capability plan and every supported entry. |
@@ -1231,9 +1749,10 @@ Unresolved later decisions do not block independent foundations.
 | completion | After K4 | All 19 mandatory contract rows pass through supported interfaces. A report listing blockers is not completion. |
 
 B delivered inactive mapping state and recovery under its approved design.
-C-design is approved. Later gates remain independent and
-are resolved immediately before the group that needs them. C cannot infer
-public execution permission from delivered B code or a clean design review.
+C-design is approved and C1/C2 are delivered internally. The campaign architecture
+is approved. Group LLD and later evidence gates remain independent and are
+proved before the group or feature that needs them. C cannot infer public
+execution permission from delivered B code or a clean design review.
 
 ## Previous-to-current slice crosswalk
 
@@ -1396,22 +1915,34 @@ Do not create a duplicate PR or rewrite an approved ancestor.
 
 ## Next delivery request
 
-Continue in `/home/omry/dev/reploy` under the approved C-design. Refresh affected
-stamps through SWE helpers and repair the observed CI failures in this milestone.
-Checkpoint and complete the design
-PR-cycle, then deliver C1 and C2. Stop after C2 and propose the next sprint.
-Preserve landed B work. No merge, release, live-service changes or changes to
-the Arbiter/Podman checkouts are part of this campaign.
+The architecture design-only run is complete. The next proposed sprint delivers
+D and E, including their LLD as part of that delivery. Continue in
+`/home/omry/dev/reploy`; preserve delivered A–C and all existing local work.
+Publish the reviewed architecture first, then append the D/E design and
+implementation without an unnecessary rebase. No merge, release, live-service
+changes, global-helper edits or changes to the Arbiter/Podman checkouts are
+authorized.
 
 ```text
+checkpoint and publish the reviewed architecture ->
+global:swe:pr-cycle-stack("current") ->
+prepare D/E LLD and prerequisite mechanism proofs under the group delivery sequence ->
+deep-design-review D/E LLD locally and remotely; resolve findings ->
+(present unresolved public syntax or material design decisions concisely ??> record maintainer approval) ->
+refresh affected design stamps through SWE helpers ->
+global:swe:checkpoint-commit() ->
+global:swe:submit-native-stack("main", "draft") ->
+global:swe:pr-cycle-stack("current") ->
 global:swe:deliver-design-stack(
   "docs/MULTI_IDENTITY_IMPLEMENTATION_PLAN.md",
-  tasks="C1,C2"
-) -> report approved PRs, actual production and test LOC,
-run stats, timing, observed tokens and issues/opportunities -> stop after C2
+  tasks="D1,D2,D3,D4,E1,E2,E3,E4"
+) -> report approved PRs actual production/test LOC timing observed tokens and issues ->
+stop after E4 and propose the next sprint
 ```
 
-This invocation documents the implementation phase after the C-design gate.
-The maintainer decision above supplies design approval; this example alone does
-not start C1/C2. Every commit title includes its
-slice ID. Do not rebase landed history or restack unrelated PRs.
+This example does not start itself or authorize D–K implementation. If LLD
+requires decimal splits, substitute those reviewed child IDs in the task list.
+The design-decision gate uses existing approvals when they already cover all
+decisions; it does not require another approval for routine internal choices.
+Use slice-prefixed commit titles and the production size bound. Public mapped
+execution remains inhibited until generic-launch passes after G3.
