@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-10-19
+updated: 2026-10-27
 summary: Podman-gated security contract and acceptance ledger for future isolated multi-identity Linux workloads.
 ---
 
@@ -17,10 +17,20 @@ assessment at Flux commit `47470aad477e44ee0c222d917fd8ce05384aa1a1`.
 The initial product boundary requires Podman for both planned mapping
 profiles. Docker Engine is not an eligible backend for this capability, even
 where daemon-level remapping can approximate part of the bounded-range profile.
-No public blueprint or composition schema is defined, and no production runtime
-behavior is implemented or authorized. One-off probes have established a
-credible mechanism; repeated disposable conformance evidence remains required
-before product implementation begins.
+The maintainer subsequently approved the blueprint identity structure and the
+native-process amendment recorded in
+[the mail reconciliation](MULTI_IDENTITY_MAIL_RECONCILIATION.md). Trusted one-shot
+startup releases the selected untrusted application under explicit workload
+authority; no privileged resident Reploy identity supervisor remains beside it.
+The blueprint declares identities and capability requests. D records intent and
+image evidence; E must qualify actual execution. Portable declarations do not
+grant a capability merely because its name is recognized.
+
+Existing A–C code and private supervisor observations retain their historical
+meanings. They are not proof of the new native-process boundary. Public mapped
+execution remains inhibited until E/F/G and generic-launch succeed. The approved
+D input may be implemented behind those guards after its own design/PR gates;
+runtime qualification does not become a fictitious prerequisite for parsing data.
 
 This contract covers the isolated subordinate-identity profile. A future
 mixed host/container profile may need explicit bindings to selected host IDs.
@@ -53,43 +63,38 @@ slice; milestone 1B does not test limits that have not been defined.
 
 **Declared identity**
 : A container-local UID, GID, or supplementary group that the workload author
-  says a trusted workload supervisor must assign to an application process. A
-  later public declaration must include both the image-local name and numeric
+  selects for an admitted application entry. The declaration includes the
+  image-local account name and numeric
   value. The declaration is configuration and locked-image evidence. Its role
   in the kernel boundary depends on the selected mapping profile.
 
 **Runtime-required identity**
 : A container-local UID or GID that Podman or the OCI runtime must map for
-  container operation but that is not an application identity. Reploy must
-  enumerate and justify these identities as part of the resolved execution
-  plan. They are part of the kernel mapping and cannot be treated as absent;
+  container operation. Reploy must enumerate, justify and explicitly accept
+  these accounts as workload authority, verify their image evidence and require
+  mapping coverage before release. They cannot be treated as protected from
+  identity-changing application code merely because the runtime needs them;
   for example, the current rootless Podman probe required container GID 5 for
   the `devpts` mount.
 
-**Supervisor identity**
-: The explicitly enumerated container-local UID and GID used only by the
-  trusted workload supervisor. It is an accepted mapped control-plane identity
-  in the resolved execution plan, not a declared application identity or
-  application authority. Its mapping is private to the workload installation
-  and follows the same delegation, collision, and lifecycle rules as every
-  other mapped identity.
+**Trusted startup boundary**
+: Reploy-owned one-shot code that runs before any application image code. After
+  current host admission, mapping/storage/network checks, it establishes final
+  entry credentials, capability ceiling, descriptor closure and kernel policy,
+  then directly executes the selected application. No stronger resident Reploy
+  identity process or private control descriptor remains with the workload.
 
-**Trusted workload supervisor**
-: The narrowly scoped workload process explicitly authorized to retain
-  `CAP_SETUID` and `CAP_SETGID` and select only accepted declared application
-  identities. A mapped runtime-required or otherwise undeclared identity is not
-  application authority. The supervisor may retain its reviewed capability set
-  for the workload lifetime so that it can replace failed or exited children.
-  It is trusted only for its declared control-plane duties inside its own
-  workload. It receives no host identity or authority over another workload,
-  and application children do not inherit its capabilities. Its real,
-  effective, saved-set, and filesystem UIDs and GIDs all use the dedicated
-  supervisor UID and GID that no application child uses. Its final
-  supplementary-group vector is empty or contains only that dedicated
-  supervisor GID. It remains non-dumpable while it retains capabilities and
-  occupies a POSIX session distinct from every application child so that the
-  same-session `SIGCONT` exception cannot bypass its identity boundary. It
-  cannot be signaled, inspected, or controlled by application children.
+**Native application master**
+: An image-provided foreground process, such as Postfix or Dovecot, that remains
+  untrusted. It may manage workers and use explicitly admitted capabilities
+  inside its selected mapping. With identity-changing rights it can assume other
+  mapped identities; its own account policy is not Reploy's enforcement boundary.
+
+**Legacy supervisor binding**
+: Historical B/C state may retain a binding from the old resident-supervisor
+  model. Preserve its recorded meaning. A non-null incompatible binding rejects
+  before effects until an approved migration or a new installation establishes
+  the new process model; never silently reinterpret or clear it.
 
 **Private mapping**
 : The association between one workload installation's approved container IDs
@@ -106,16 +111,17 @@ slice; milestone 1B does not test limits that have not been defined.
   association.
 
 **Exact mapping profile**
-: A sparse mapping containing only accepted declared identities, the explicitly
-  enumerated supervisor identity, and explicitly enumerated runtime-required
-  identities. An unmapped container ID has no host mapping and the kernel
+: A sparse mapping containing only accepted declared identities, including
+  explicitly accepted runtime-required accounts. An unmapped container ID has
+  no host mapping and the kernel
   rejects transitions to it.
 
 **Bounded-range mapping profile**
 : A contiguous, explicitly sized container-ID range mapped to a private
-  subordinate host-ID range. Every ID in the range is kernel-usable by the
-  trusted supervisor, so its locked policy—not the mapping alone—limits which
-  application identities it assigns.
+  subordinate host-ID range. The operator accepts the entire private range as
+  workload authority. An application with the relevant capability may select
+  otherwise undeclared in-range IDs. Declaring account names does not narrow
+  that kernel boundary; out-of-range transitions still reject.
 
 **Shared interface identity**
 : A deliberately coordinated identity, or an independently enforceable
@@ -153,15 +159,14 @@ slice; milestone 1B does not test limits that have not been defined.
 
 ## Threat Model
 
-Application children, image-provided hooks other than an explicitly accepted
-identity supervisor, and application-controlled files are untrusted. They may
+All image-provided code, including native masters, helpers, hooks and workers,
+and application-controlled files are untrusted. They may
 attempt to:
 
 - use identity-changing system calls, supplementary groups, set-ID files, or
-  file capabilities to regain identity-changing authority after the supervisor
-  drops it;
-- inspect or take control of the capability-bearing supervisor from an
-  application child;
+  file capabilities to exceed their admitted authority;
+- exploit a leaked trusted setup descriptor or a stronger temporary launch
+  process injected into an already occupied namespace;
 - escape the exact mapped set or bounded range selected for the workload;
 - turn a container identity into host root, a local or NSS-provided host
   principal, or subordinate authority delegated to another host principal;
@@ -184,7 +189,7 @@ trust decision; validating it against the image proves consistency, not
 authorization. Image contents and application code cannot enlarge the accepted
 mapping or change the selected profile. Merely placing an identity in an image
 does not authorize it. Under the bounded-range profile, however, every mapped
-in-range ID is kernel-usable by the trusted supervisor; that weaker boundary is
+in-range ID is kernel-usable with the relevant capability; that boundary is
 an explicit profile property, not exact identity allowlisting.
 
 The protected assets are host authority, other workloads and their data,
@@ -202,33 +207,23 @@ while an installation is inactive but its owned data remains.
 
 ## Required Security Properties
 
-1. **Profile-specific identity boundary.** Under the exact profile, the kernel
-   permits only the accepted declared identities, supervisor identity, and
-   runtime-required identities, and rejects every unmapped identity.
-   Under the bounded-range profile, the kernel permits any identity inside the
-   explicit range and rejects every identity outside it; the trusted supervisor
-   policy controls which in-range application identities are assigned. In both
-   profiles, application children enter with real, effective, saved-set, and
-   filesystem UIDs and GIDs all normalized to their declared application
-   identities and a supplementary-group vector containing exactly their
-   declared groups, lose identity-changing capabilities before executing
-   untrusted work, and cannot regain authority through set-ID executable files
-   or file capabilities. Privileged, runtime-required, and otherwise
-   undeclared supplementary groups are not inherited. Before untrusted exec,
-   a `close_range`-based or equivalently complete boundary closes every file
-   descriptor except explicitly constructed child standard streams and
-   declared application descriptors whose authority is valid for the child's
-   final identity;
-   supervisor control, socket, pidfd, and private-data descriptors are never
-   inherited. No application child shares any real, effective, saved-set, or
-   filesystem UID with any supervisor thread. Every supervisor thread uses
-   the dedicated supervisor identity and no capability outside the reviewed
-   allowlist. Inspection of only the thread-group leader is insufficient;
-   the supervisor remains
-   non-dumpable while it retains capabilities, occupies a POSIX session
-   distinct from every application child, and denies child signaling and access
-   through `ptrace`, `/proc/<pid>/mem`, and equivalent process-memory
-   interfaces.
+1. **Profile-specific identity boundary.** Exact maps permit only accepted
+   enumerated IDs and reject unmapped transitions. Bounded maps grant their
+   whole accepted private range, including otherwise undeclared in-range IDs,
+   and reject out-of-range transitions. Neither profile silently substitutes
+   for the other; capability requests do not impose a new exact-only rule.
+   Every Reploy-controlled entry starts with the declared real, effective,
+   saved-set and filesystem UID/GID and exact supplementary groups. Native
+   descendants may change credentials within admitted mapping/capability
+   authority. Empty-capability entries cannot regain dropped authority. Before
+   release, close every descriptor except constructed standard streams and
+   explicitly declared application descriptors valid for final authority.
+   Private setup files, sockets, pidfds and control descriptors never reach the
+   application. No stronger resident Reploy identity supervisor remains after
+   direct exec. Live exec must not inject stronger temporary setup authority
+   or private control descriptors into the occupied namespace; an unproved path
+   rejects before effects. No mapped account is claimed protected from an
+   identity-changing native master solely by a different UID or role name.
 2. **No host identity or authority alias.** Container root and every mapped
    identity resolve only to exclusively delegated subordinate host authority.
    They never become host root, a local or NSS-provided host principal, or an
@@ -241,14 +236,14 @@ while an installation is inactive but its owned data remains.
    propagation; neither can access the other's processes, IPC objects, mounts,
    private state, or network-namespace-scoped interfaces.
 4. **Stable lifecycle.** A workload installation retains its mapping profile,
-   supervisor identity, bounded-range geometry when selected, and established
+   bounded-range geometry when selected, and established
    container-ID-to-host-ID associations across restart, recreation, update,
    and rollback unless an explicit ownership migration is performed. Its
    application identity declarations may evolve by generation. Under the exact
    profile, identities absent from the current generation are omitted from the
    active mapping but their assignments remain dormant and reserved. Under the
-   bounded profile, the supervisor admits only the current generation's
-   declared identities even though the fixed range remains mapped.
+   bounded profile, the accepted fixed range remains the kernel authority.
+   Incompatible historical supervisor bindings are rejected, not rewritten.
 5. **Retention blocks reuse.** A mapping is not reusable while a live resource
    or retained Reploy-managed storage still carries its ownership. The initial
    profiles reject every external `bind` mount. A read-only external directory
@@ -262,16 +257,17 @@ while an installation is inactive but its owned data remains.
    supported revocation operation also removes active workload resources and
    prevents autonomous restart before it reports success, while retained
    ownership continues to reserve the mapping.
-7. **Default-zero capability control.** Reploy removes every Linux capability
-   unless the workload explicitly opts into a reviewed capability. The trusted
-   workload supervisor receives only the minimal allowlist required for its
-   declared control-plane duties, and may retain that set to replace children.
-   The bounding set contains no capability outside the allowlist; effective,
-   permitted, inheritable, and ambient sets contain only the subset required at
-   each execution phase. Application children have empty capability sets unless
-   a separate, explicit declaration is later approved. Identity confinement
-   does not imply capability approval, and retained capabilities cannot escape
-   the selected mapping boundary.
+7. **Default-zero capability control.** Empty remains the default. A blueprint
+   explicitly requests each capability; naming a user or application grants
+   none. D validates recognized Linux names as portable requests, not execution
+   authorization. E qualifies an exact supported set for the selected entry,
+   image, runtime and effective kernel policy before release. Bounding,
+   permitted and effective sets contain only accepted rights; inheritable and
+   ambient sets stay empty in the selected initial transition. Native children
+   may retain subsets rather than being universally capability-free. Preserve
+   ordinary drop-all/NOROOT/no-new-privileges behavior for empty-capability
+   entries. An unsupported capability/credential transition rejects before
+   effects. No engine defaults or implicit package-specific bundle is allowed.
 8. **No elevated application phase.** Reploy does not solve preparation by
    running application-provided code with broader authority than the final
    workload. Trusted preparation remains descriptor-safe and confined to
@@ -283,36 +279,49 @@ while an installation is inactive but its owned data remains.
    no shared network namespace or peer-reachable network attachment and cannot
    connect to each other's TCP, UDP, or Linux abstract Unix-socket services.
 
-Every supported application process-entry path must enforce the same identity
-boundary. This includes service starts, restarts, supervisor-created children,
-and Reploy-issued runtime execs. Each path must use only the current
-generation's accepted application identities and declared groups. It must
-normalize child credentials, drop capabilities, close undeclared descriptors,
-and apply the required sandbox before application execution. A path that cannot
-prove these properties must reject the operation before executing application
-code. It must not fall back to the supervisor identity or raw runtime exec.
+Every Reploy-controlled entry uses fresh host admission and the accepted
+generation/role policy: initial start, external command/hook/session, runtime
+exec and whole-container replacement. Normalize initial credentials, apply only
+accepted capabilities, close private descriptors and verify the final sandbox.
+Native forks, execs and worker replacement use already admitted workload
+authority; they do not authorize new mappings, mounts, secrets or capabilities.
+The required foreground master's exit ends the instance. The host owns fresh
+replacement and revocation, fences every restart owner and stops the entire
+container. No engine restart policy or raw exec bypass is permitted.
+
+Container-provided executable code and dependencies are read-only by default;
+reject writable mounts that shadow protected code paths. Mutation requires
+explicit opt-in and gives up replacement protection for the affected code.
+Trusted Reploy startup/control code remains protected. Binary-exclusive privilege
+inheritance is not promised by immutability: already privileged image code remains
+able to use its admitted authority. No host AppArmor/SELinux/IPE dependency is
+selected for this stage. Effective syscall policy must independently deny
+namespace/handle/mount escapes under the final capability set, with positive
+ordinary fork/thread and required identity/chroot controls. A pinned JSON name
+alone is not proof of its capability-conditioned effective filter.
 
 ## Decisions Frozen by This Contract
 
 ### Identity declarations
 
 The workload author, not Reploy, identifies the application accounts required
-by the image. A later public declaration will carry both image-local names and
-numeric UID/GID values. Names and numeric values are mandatory locked-image
-evidence, supervisor configuration, and diagnostics. Under the exact profile,
+by the image. The approved `identity_policy` carries image-local names and
+numeric UID/GID values, scalar groups and scalar/object users. Same-name primary
+groups and empty supplementary groups are explicit after normalization; optional
+full names are descriptive metadata. Names and numbers bind image evidence,
+entry policy and diagnostics. Under the exact profile,
 they contribute to the accepted sparse mapping set. Under the bounded-range
 profile, they do not narrow the kernel mapping to an exact allowlist. Reploy
 must reject a generation when the declared name-to-number relationship does
 not match the locked image or the selected mapping profile.
 
-Reploy separately derives and validates runtime-required identities. They must
-be explicit in resolved state and diagnostics, remain minimal, and receive the
-same subordinate-host and lifecycle isolation as declared identities.
-
-Reploy also resolves exactly one supervisor identity for the workload. It is
-explicit in resolved state, diagnostics, and the kernel mapping, is disjoint
-from every declared application identity, and is usable only by the trusted
-workload supervisor.
+Reploy resolves runtime-required accounts and requires explicit declaration,
+locked name/number evidence and accepted coverage before release. They remain
+minimal and receive the same subordinate-host and lifecycle isolation. No new
+supervisor identity is declared. A mapped runtime-required account is reachable
+workload authority when the application has the relevant identity-changing
+capability. An accepted bounded range intentionally includes unused numeric IDs;
+they do not need fabricated account names simply because they are mapped.
 
 This creates no corresponding named host accounts. The host observes only the
 selected mechanism's private numeric identities.
@@ -320,9 +329,8 @@ selected mechanism's private numeric identities.
 Application declarations may add or remove identities between generations. A
 name that moves to a different numeric UID or GID is the removal of the old
 identity and addition of a new one. Reploy validates each generation against
-its locked image and configures the supervisor from that generation's accepted
-set; it does not require every generation to declare the same application
-identities.
+its locked image and selected mapping. It does not require every generation to
+declare the same application identities.
 
 Reploy does not scan, rewrite, `chown`, or otherwise migrate persistent files
 when declarations change. Files owned by a removed identity keep their old
@@ -381,12 +389,12 @@ of the installation's reserved allocation while the installation or its
 retained storage exists. A newly declared numeric identity requires an explicit,
 validated non-overlapping assignment; a missing assignment fails before start.
 Removing an identity makes its assignment dormant rather than reusable.
-The bounded profile keeps its fixed private range while the
-generation-specific supervisor policy changes. Reploy conservatively reserves
+The bounded profile keeps its fixed private range while the generation's entry
+policy changes. Reploy conservatively reserves
 the installation's allocation based on retained managed storage; it does not
 need to discover or repair every stale owner in that storage.
 
-Changing the mapping profile, supervisor identity, or bounded-range geometry
+Changing the mapping profile, process-model binding, or bounded-range geometry
 is not an ordinary generation update. It requires a future explicit migration
 or installation replacement operation and otherwise fails before mutation.
 
@@ -407,8 +415,8 @@ profile and require a separate security design.
 
 Reploy will support two explicit mapping profiles:
 
-- the exact profile maps only accepted declared IDs, the accepted supervisor
-  identity, and runtime-required IDs; and
+- the exact profile maps only accepted declared IDs, including explicitly
+  accepted runtime-required accounts; and
 - the bounded-range profile maps one explicitly sized private container range.
 
 Neither profile is silently substituted for the other, and this contract does
@@ -418,18 +426,47 @@ mutating workload resources, even if a particular Docker configuration can
 provide daemon-wide or contiguous user-namespace remapping.
 
 For both profiles, the mapping is private to one workload installation,
-non-overlapping, and paired with normalized child credentials, verified
-capability drop, and blocked privilege regain before untrusted application
+non-overlapping, and paired with normalized entry credentials, verified
+accepted capability sets, and blocked expansion of authority before application
 execution. Podman-specific transport through a Docker-compatible API does not
 make the feature a Docker Engine capability.
 
 Capability declarations are opt-in. With no declaration, Reploy requests an
 empty capability bounding set and supplies no effective, permitted,
 inheritable, or ambient capabilities. A later public contract may expose a
-conservative allowlist, but it must not inherit Podman defaults or define an
-implicit Postfix-specific bundle.
+supported runtime policy, but it must not inherit Podman defaults or define an
+implicit Postfix-specific bundle. Recognizing and locking a capability request
+in D is not proof that E can safely grant it. Unsupported requests reject at
+execution admission; runtime grants remain behind launch-design/generic-launch.
 
-### Evidence before product changes
+Initial image account evidence uses ordinary regular files at standard paths,
+with the files-only lookup configuration described in the D design. Unsupported
+links, account-path whiteouts and alternate lookup sources produce a clear
+unsupported-source error rather than image execution or a guessed projection.
+This is an explicitly selected initial compatibility limit, not a statement that
+other valid Linux images are inherently unsafe.
+
+### Native-process evidence before activation
+
+E/F/G must qualify the one-shot final exec and live-exec boundary through the
+supported rootless Podman path. Require repeated fresh evidence for both
+profiles: exact final credentials/groups/capabilities/descriptors; positive
+accepted transitions and profile-specific negative transitions; effective
+capability-conditioned syscall policy; no stronger resident or temporary Reploy
+process with payload access; host/peer isolation and collision admission;
+whole-instance replacement/revocation; ownership retention; once-per-instance
+secret delivery and narrow interfaces. Native stock mail, runtime exec, storage,
+network and lifecycle each retain their independent production proof gates.
+The raw kernel fixture and historical private probes do not close these gates.
+
+### Historical private supervisor evidence
+
+The following checklist records the earlier supervisor mechanism's prerequisite
+and private conformance criteria. Its three-exact/three-bounded observations
+remain historical evidence for their original sources and process model. They
+do not reinstate a resident supervisor, block guarded D declarations on native
+runtime tests, or qualify the new native-process launch boundary. Current
+activation requires the native-process evidence above and the current ledger.
 
 Podman viability for each mapping profile must be proved before Reploy adds a
 public schema or changes production runtime behavior. The conformance work may
@@ -531,46 +568,55 @@ the ledger below through Reploy's supported interfaces.
 Later slices may refine how evidence is collected, but may not weaken a row
 without an explicit security decision.
 
-Product evidence for ID-02, ID-03, CAP-01, and SB-02 must test every supported
-application process-entry path, including Reploy-issued runtime execs. Test
-accepted identities, rejection of undeclared identities, normalized credentials
-and groups, capability drop, descriptor closure, and sandbox admission for
-each path. Private supervisor probes do not complete this product evidence.
+Product evidence for ID-02, ID-03, CAP-01, and SB-02 tests every supported
+Reploy-controlled entry, including runtime exec. Test accepted identities,
+profile-specific map boundaries, normalized initial credentials/groups, accepted
+capability ceilings, descriptor closure and effective sandbox admission. Native
+worker transitions are confined by accepted workload authority, not a false
+per-fork host admission or capability-free-descendant claim. Old supervisor
+results remain historical and do not complete this product evidence.
+
+For a capability-bearing container, secret and interface grants must be
+consistent across the whole workload authority. Capability-free roles sharing a
+UID also share authority. A negative participant test must use genuinely
+unauthorized authority; changing a role name or initial group vector is not
+isolation from code that can assume the recipient's mapped identity.
 
 | ID | Required result | Owning milestone | Minimum evidence | Current state |
 | --- | --- | --- | --- | --- |
-| ID-01 | Every mapped identity, including the dedicated supervisor identity, has exclusively delegated subordinate host authority only; it does not alias host root, a local or NSS-provided host principal, or a subordinate range delegated to another host principal. | 1 | Resolved-state and host-side mapping inspection for exactly one dedicated supervisor UID/GID plus complete authoritative bounded bulk UID/GID principal inventory and interval collision checks refreshed before every execution admission, fail-closed subordinate-backend enumeration, active-libsubid agreement, checks against every other subordinate UID/GID delegation, injected UID and GID collision cases that must fail for both NSS principals and another delegation, and an in-container identity probe for each profile. | Historical private 1B trials passed the earlier per-ID checks; product bulk collision/admission evidence pending |
-| ID-02 | The trusted supervisor can perform every required declared transition and rejects mapped-but-undeclared UIDs, GIDs, and supplementary groups; every application child's real, effective, saved-set, and filesystem UIDs and GIDs match its declared application identities, and its final supplementary-group vector contains exactly its declared groups; a separate raw bounded-range mechanism probe permits representative other in-range transitions. | 1 | Positive declared-identity and negative mapped-but-undeclared tests through the production supervisor policy, all four `/proc/<pid>/status` `Uid:` and `Gid:` fields matching the declared application IDs, final `Groups:` inspection that excludes inherited privileged, runtime-required, and otherwise undeclared groups, plus an independently identified raw range-mechanism probe. | Private 1B conformance passed 3 exact and 3 bounded trials; product integration pending |
-| ID-03 | Exact mappings reject every unmapped transition; bounded ranges reject every out-of-range transition; capability-dropped children cannot change identity, inherit supervisor or undeclared descriptors, regain authority through set-ID or file-capability execution, or signal, inspect, or control the capability-bearing supervisor. | 1 | Profile-specific boundary and post-drop tests for `setuid`, `setreuid`, `setresuid`, `setfsuid`, `setgid`, `setregid`, `setresgid`, `setfsgid`, `setgroups`, execution of a mapped supervisor-owned set-user/group-ID fixture, and file-capability execution; pre-exec trusted-launcher enumeration against an exact descriptor allowlist plus adversarial non-`CLOEXEC` supervisor control-file, socket, pidfd, and private-data canaries, followed by application confirmation; complete stable supervisor thread inventory and all four `Uid:` and `Gid:` fields from each `/proc/<pid>/task/<tid>/status` using the dedicated child-disjoint supervisor UID and GID; each thread's final `Groups:` vector containing no GID other than that supervisor GID; capability sets for every thread bounded by the reviewed allowlist, with the privileged launch thread's exact required sets; a supervisor `PR_GET_DUMPABLE` result of zero; supervisor/child POSIX session-ID inspection proving separation; and negative same-workload child-to-supervisor `kill`, `pidfd_send_signal`, and per-thread `tgkill` probes that explicitly include `SIGCONT`, successful same-identity syscall controls, and rejection of missing or exited threads as denial evidence, plus negative `ptrace`, `/proc/<pid>/mem`, `process_vm_readv`, and `process_vm_writev` probes. | Private 1B conformance passed 3 exact and 3 bounded trials; product integration pending |
+| ID-01 | Every mapped identity, including container root and explicitly accepted runtime accounts, has exclusively delegated subordinate host authority; no host-root, local/NSS-principal or other-delegation alias. | 1 | Complete current delegation/principal inventory, interval collision checks, active-libsubid agreement and UID/GID collision negatives before each admission; exact host/container map inspection for both profiles. | Historical private per-ID observations retained; current product bulk admission and native execution evidence pending |
+| ID-02 | Every controlled entry begins with its declared four UID/GID fields and exact groups; native changes stay within the selected map. Exact rejects unmapped IDs; bounded permits its entire accepted range, including undeclared in-range IDs. | 1 | Initial and descendant process/thread credential inventories; declared-transition positives; unmapped/out-of-range negatives; bounded in-range positive controls; both profiles and every controlled entry. | Earlier supervisor-policy passes are historical; native product qualification pending |
+| ID-03 | Accepted mapping/capability ceilings cannot expand. No private setup descriptors or stronger resident Reploy identity process remain after release; live exec injects no stronger temporary setup authority. Empty-capability entries cannot regain dropped privilege. | 1 | One-shot exec and live-exec proof/rejection; complete credential/capability/descriptor observations, non-CLOEXEC canaries, namespace/handle/mount negatives, set-ID/file-capability regain controls and positive syscall controls; verify whole-container teardown and process absence. | Earlier dedicated-supervisor isolation passes are historical; one-shot/native and occupied-namespace exec proofs pending |
 | ID-04 | Two installations using the same container IDs have distinct host mappings, PID, IPC, network, and mount namespaces, private mount propagation, and private `/dev/shm` and `/dev/mqueue` mounts; they cannot observe, signal, or ptrace each other's processes, see each other's mounts, use each other's System V or named POSIX shared-memory, semaphore, or message-queue objects, connect to each other's Linux abstract Unix sockets, or read each other's private state. | 1 | Concurrent two-workload probe, including a staged test deployment and its separate installed destination, with host mapping, PID-namespace, IPC-namespace, network-namespace, mount-namespace, mount-propagation, `/dev/shm`, and `/dev/mqueue` inspection plus negative cross-workload mount visibility, process visibility, signaling, ptrace, System V IPC, POSIX `shm_open`/`sem_open`, POSIX `mq_open`/send/receive, abstract Unix-socket connection, and private-state access tests. | Private 1B conformance passed 3 exact and 3 bounded trials; product integration pending |
 | BE-01 | Both mapping profiles run only on a positively identified Podman backend; Docker Engine rejects them before workload mutation. | 1 | Backend detection plus positive Podman and negative Docker Engine integration tests. | Private Podman-positive and Docker-negative gate passed; product integration pending |
-| CAP-01 | Capability sets are empty by default; an opted-in workload control plane receives only its exact reviewed allowlist, and ordinary children receive none. | 1 and 2 | Inspect bounding, effective, permitted, inheritable, and ambient sets for the default and child processes and every supervisor thread; verify omitted capabilities fail. | Private default, supervisor, and child conformance passed; public capability contract pending |
+| CAP-01 | Capabilities are empty by default. Only explicit qualified role requests may be granted; D recognition/locking is not runtime authorization. Native descendants retain at most admitted authority. | 1 and 2 | P/E/B/I/A observations at final exec and across native transitions; empty/default and omitted-right negatives; per-entry E qualification, securebits/no-new-privileges and generation-bound effective syscall-policy evidence. | Historical default/supervisor/child passes retained; native capability grants and product qualification pending |
 | LC-01 | Files created by declared identities have expected subordinate ownership; ordinary restart and recreation preserve both the stored allocation and host ownership. | 2 | Stored-allocation and host-ownership inspection before and after ordinary stop/start and recreation through Reploy. | Unproven; deferred to lifecycle work |
-| LC-02 | Generation updates may add, remove, or renumber application identities without rewriting persistent ownership. Exact mappings contain only the current accepted set while removed assignments remain reserved and reactivate on rollback; bounded mappings retain their fixed geometry while the supervisor admits only the current set. Mapping-profile, supervisor-identity, and bounded-geometry changes fail before mutation. | 2 | Lifecycle tests across identity addition, removal, renumbering, and rollback for both profiles; host ownership inspection proving no automatic rewrite; exact-map and supervisor-policy inspection for each generation; dormant-assignment reservation and reactivation checks; and pre-mutation rejection tests for mechanism changes. | Unproven; deferred to lifecycle work |
+| LC-02 | Updates preserve accepted numeric ownership and mapping geometry. Exact removed IDs stay reserved but inactive; bounded retains its whole accepted range. Incompatible old supervisor bindings or mechanism changes reject without silent migration. | 2 | Identity addition/removal/renumbering and rollback for both profiles; unchanged host ownership and retained reservations; dormant exact reactivation; pre-effect rejection of incompatible history/profile/geometry changes. | Unproven; lifecycle and explicit incompatible-binding checks pending |
 | LC-03 | Backup and restore preserve ownership or use an explicit checked translation. Before writing archived ownership, restore validates the destination allocation and exclusive delegation. Restore uses collision-safe staging or checked translation. Unsafe or unproved destination mappings fail before ownership is written. | 2 | Checksummed offline export/import with no workload attached. Test cross-host UID/GID collisions with local/NSS accounts and another principal's delegation. Prove checks occur before archived ownership is written. Prove failed restore leaves destination state unchanged. | Unproven; deferred to storage work |
 | AL-01 | Accepted mappings must not overlap other live or retained installation mappings. Reploy serializes and validates assignment changes within one installation; the administrator coordinates reservations outside it. Live or retained storage keeps its mapping reserved, and external `bind` mounts reject before mutation. | 1 | Duplicate/overlapping input rejection, staged mapping configuration and update preservation, explicit separately mapped installation from that source, source/destination overlap and copied-record rejection, concurrent installation-state operations, crash recovery, retention, removal, safe-reuse and pre-mutation mount-rejection tests; explicit operator responsibility for cross-installation reservations and documented manual-coordination limits. | Unproven; single-installation/manual-coordination direction approved, product mapping state pending |
 | RV-01 | Revocation stops and removes live workload resources, prevents service-manager or other autonomous restart, and makes further operations fail closed without mutating retained storage or releasing its mapping. | 1 | Active-workload revocation with runtime-resource absence and restart-prevention inspection, followed by recovery tests with retained owned data and its mapping still reserved. | Unproven; revocation not designed |
 | HB-01 | The administrator supplies existing host delegation and coordinated assignments. Reploy checks these before user-level operation without modifying host accounts, delegation or system-wide Reploy configuration. | 1 | Repeated read-only preflight with unchanged host state, successful user operation, and failures for absent or inconsistent preparation, collisions with local or NSS-provided host principals, overlap with another principal's subordinate delegation, and an identity inventory whose completeness cannot be established. | Unproven; existing-delegation direction approved, product preflight pending |
 | SB-01 | No workload uses privileged mode or gains host-root authority. | 1 | Runtime inspection plus negative host-authority tests. | Private 1B conformance passed 3 exact and 3 bounded trials; product integration pending |
-| SB-02 | The approved seccomp profile is explicitly selected and identifiable in the resolved and effective runtime policy; application processes have `NoNewPrivs: 1` and seccomp filter mode (`Seccomp: 2`); syscalls the approved profile must block fail while the same valid operation succeeds in an unfiltered control; the container root filesystem is read-only except for declared writable storage; namespaces, mounts, and network attachment match declared policy, with distinct network namespaces and no host control socket, undeclared path, or peer-reachable network; and host-device grants are rejected before workload mutation. | 1 and 2 | Resolved-policy and host/runtime inspection through the supported Podman path; host-device grant rejection tests with unchanged workload state; and paired filtered-denial and unfiltered-success syscall evidence, negative path checks, and cross-workload TCP, UDP, and Linux abstract Unix-socket tests through supported Reploy interfaces. | Private 1B sandbox conformance passed; supported Reploy integration pending |
+| SB-02 | Effective generation-bound kernel policy enforces namespaces, devices, network and final capability ceilings. Code is read-only by default; explicit mutation opt-in relinquishes affected replacement protection but cannot expose trusted Reploy code or expand authority. | 1 and 2 | Supported Podman inspection and paired positive/negative syscall, namespace, handle, mount and peer-network controls; NoNewPrivs/Seccomp evidence; code-write/mount-shadow rejection by default and explicit mutation-mode qualification; host-device rejection without mutation. | Historical drop-all sandbox observations retained; native capability-conditioned filter, code policy and supported product integration pending |
 | FS-01 | Trusted filesystem preparation cannot follow symlinks, accept unexpected object types, escape the declared root, recursively rewrite application data, or execute application-provided code. | 2 | Adversarial descriptor-safe preparation tests plus executable and hook canaries proving that trusted preparation never invokes application-provided code; process tracing verifies that any later application-provided execution begins only after entering its final child credentials and capability set. | Unproven; deferred to filesystem design |
 | CF-01 | Disagreement among declarations, locked image, delegation, allocation, and persistent ownership fails before start without state mutation. | 1 and 2 | Deliberate mismatch matrix with before/after state evidence. | Unproven; initial cases required in milestone 1 |
-| SI-01 | Only declared producers and consumers can use a shared Unix socket across otherwise private mappings. | 3 | Positive tests for each declared interface identity; negative connection tests from identities not authorized for the interface within every participating workload and from undeclared workloads. | Unproven; shared interface not designed |
+| SI-01 | Only explicitly admitted producer/consumer workload authority can use a shared Unix socket. Capability-bearing roles share workload authority; same-UID capability-free roles also require consistent grants. | 3 | Positive connection tests for each admitted authority and negatives from genuinely unauthorized authorities/workloads; reject inconsistent per-role grants before effects. | Unproven; shared-interface mechanism remains a substantive gate |
 | SI-02 | Participants see only the declared interface path, and private mappings and data remain isolated. | 3 | Mount, traversal, connection, and private-data visibility tests. | Unproven; shared interface not designed |
 | SI-03 | Stale sockets and producer restart are reconciled safely without traversing persistent application data. | 3 | Adversarial stale-object and restart tests. | Unproven; shared interface not designed |
 
 ## Required Sequence
 
-1. Freeze this Podman-only, dual-profile contract.
-2. Run repeated disposable conformance probes for both mapping profiles without
-   changing public schema or production runtime behavior.
-3. Stop with exact evidence for an implementation-authorization decision.
-4. Only after explicit approval, design backend detection, host delegation,
-   durable allocation,
-   runtime integration, and later public declarations in separate review
-   units.
+1. Preserve the approved Podman-only, dual-profile, manually coordinated host
+   boundary and delivered A–C evidence without reinterpreting their history.
+2. Align and review the approved native-process amendment and D blueprint input;
+   refresh affected stamps and complete the design PR cycle.
+3. Implement D's declarations/evidence behind unchanged public execution guards
+   only through its authorized delivery run and slice/PR gates.
+4. Resolve E/F/G production LLD and native mechanism proofs before activation.
+   Later lifecycle, restore, secrets, interfaces and stock-mail qualification
+   remain independent gates; no private probe is substituted for product proof.
 
-If Podman cannot prove either profile and the shared capability-drop boundary
+If Podman cannot prove a selected profile and its accepted authority boundary
 at acceptable cost, that profile is blocked. Reploy must not substitute Docker
 Engine, a privileged container, overlapping or host-aligned mappings, or an
 unconfined application process and describe it as equivalent isolation.
