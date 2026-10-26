@@ -1,6 +1,6 @@
 ---
 status: A/B landed; C internal integration delivered; full-campaign architecture approved; remaining group delivery includes LLD preparation and review; public mapped execution remains inhibited
-updated: 2026-10-26
+updated: 2026-10-27
 summary: Full-campaign architecture and contracts for isolated single-installation identities, with implementation-ordered slices and separate proof and approval gates.
 ---
 
@@ -86,15 +86,18 @@ changes to reach 500.
 | **C** | **Subtotal** | **Internal engine and build integration; delivered** | — | **0** | **0** | — |
 | C | C1 | Scoped Podman admission and compatible exact/bounded create transport; delivered | — | 0 | 0 | Delivered; public activation remains gated |
 | C | C2 | Reuse compatible build/image path; bind immutable service images; delivered | — | 0 | 0 | Delivered; public activation remains gated |
-| **D** | **Subtotal** | **Locked identity and capability declarations** | — | **950–1,600** | **1,600–2,600** | — |
-| D | D1 | Public identity declarations and name/number validation | 300 | 250–400 | 400–650 | C2; D-design |
-| D | D2 | Role-specific capability declarations and policy lock | 300 | 200–350 | 350–550 | D1 |
-| D | D3 | Offline locked-image name/number evidence | 400 | 300–500 | 500–800 | D2 |
-| D | D4 | Locked-identity coverage, generation admission and identity-change diagnostics | 300 | 200–350 | 350–600 | D3; B3 |
-| **E** | **Subtotal** | **Mapped execution and supervisor admission** | — | **1,400–2,550** | **2,800–4,550** | — |
+| **D** | **Subtotal** | **Locked identity and capability declarations** | — | **2,050–3,350** | **3,350–5,400** | — |
+| D | D1.1 | Scalar/object users, scalar groups, normalized defaults and immediate policy-only execution inhibition | 500 | 400–650 | 650–1,000 | C2; D-design |
+| D | D1.2 | Complete executable-to-role validation and preserved resolved command inventory | 400 | 250–400 | 400–650 | D1.1 |
+| D | D2 | Explicit default-empty role capability requests and canonical policy lock | 350 | 200–350 | 350–550 | D1.2 |
+| D | D3.1 | Bounded files-backed relationship validation and redacted image-bound evidence from supplied file bytes | 450 | 300–450 | 500–800 | D2 |
+| D | D3.2 | Verified image-save layers to D3.1 evidence without extraction or image execution | 500 | 400–650 | 650–1,050 | D3.1 |
+| D | D4.1 | Final-image evidence collection, build-lock publication and current-build reuse invalidation | 500 | 300–500 | 450–800 | D3.2 |
+| D | D4.2 | Locked-identity reservation coverage, diagnostics and all-path execution inhibition | 350 | 200–350 | 350–550 | D4.1; B3 |
+| **E** | **Subtotal** | **Mapped execution and one-shot admission** | — | **1,400–2,550** | **2,800–4,550** | — |
 | E | E1 | Compile reserved maps; pre-start verification and host-device rejection | 500 | 350–650 | 650–1,100 | D4; C1; launch-design |
-| E | E2 | Child credentials, capability drop, descriptors, dumpability and sessions | 500 | 400–750 | 800–1,300 | E1; D2 |
-| E | E3 | Supervised lifetime, host-admitted whole-container replacement and runtime exec | 450 | 350–650 | 700–1,150 | E2 |
+| E | E2 | Final entry credentials, accepted capability sets, descriptor closure and effective kernel policy | 500 | 400–750 | 800–1,300 | E1; D2 |
+| E | E3 | Native-master lifetime, host-admitted whole-container replacement and safe runtime exec | 450 | 350–650 | 700–1,150 | E2 |
 | E | E4 | Effective capability and privilege-regain verification on every entry | 400 | 300–500 | 650–1,000 | E3 |
 | **F** | **Subtotal** | **Exclusive preparation and network isolation** | — | **1,350–2,400** | **2,400–3,950** | — |
 | F | F1 | Descriptor-safe declared-object preparation with fresh ownership authority | 500 | 400–650 | 650–1,050 | E4; storage-design |
@@ -125,21 +128,25 @@ changes to reach 500.
 | J | J5 | Participant replacement, revocation and removal | 500 | 400–650 | 750–1,200 | J4; H4 |
 | **K** | **Subtotal** | **Component qualification and final evidence** | — | **0** | **2,750–4,550** | — |
 | K | K1 | Rspamd/Redis on supported capability-free path | 0 | 0 | 450–750 | A1 (may run independently) |
-| K | K2 | Stock Postfix through the approved supervisor model | 0 | 0 | 650–1,100 | H7; I3; F4; mail-compatible; generic-launch |
+| K | K2 | Stock Postfix under explicit native workload authority | 0 | 0 | 650–1,100 | H7; I3; F4; mail-compatible; generic-launch |
 | K | K3 | Stock Dovecot including synthetic SQL and restore | 0 | 0 | 1,000–1,600 | H7; I3; F4; mail-compatible; generic-launch |
 | K | K4 | Combined interface/lifecycle campaign and all-row evidence report | 0 | 0 | 650–1,100 | K1; K2; K3; J5 |
-| **Total** | — | **Conditional remaining implementation** | — | **9,350–16,100** | **20,100–32,750** | Named gates apply |
+| **Total** | — | **Conditional remaining implementation scenario** | — | **10,450–17,850** | **21,850–35,550** | Named gates apply; later-group estimates need LLD refresh |
 
-There are **43 delivery candidates**. A1 and six B slices are landed;
-**34 remain after delivered C1/C2**. B2 is split into B2.1 and B2.2 for the revised input design.
+There are **46 delivery candidates**. A1 and six B slices are landed;
+**37 remain after delivered C1/C2**. D's four logical parents are split into
+seven decimal implementation slices; B2 is split into B2.1 and B2.2.
 The conditional code total is
-**29,450–48,850 LOC**, split into the production and test ranges above.
+**32,300–53,400 LOC**, split into the production and test ranges above.
 This is a sizing scenario, not a complete supported-feature commitment: compatible
-exact mapping, production supervisor and mail compatibility remain substantive
+exact mapping, native launch and mail compatibility remain substantive
 design/evidence dependencies. A failing gate can change the count and total.
 The superseded composition-specific B6/B7 are deferred and excluded. Other
 foundation estimates remain conservative; this is not a measured code saving. Tests include
-adversarial state, crash, restart and supported-interface qualification.
+adversarial state, crash, restart and supported-interface qualification. Only D
+has been re-estimated against this amendment. E–K retain provisional earlier
+ranges, not new forecasts for the changed process model; refresh each affected
+group's ranges and split oversized slices during its required LLD preparation.
 
 ### Group B acceptance by slice
 
@@ -158,8 +165,8 @@ metadata admission path is assembled. It cannot launch a multi-identity payload.
 
 Identity completeness is a later admission check. D4 uses D1/D3's declared,
 image-locked identity evidence and rejects missing assignments for those IDs.
-E1 verifies coverage for the final execution set, including the resolved
-supervisor and justified runtime-required identities, and rejects surplus new
+E1 verifies coverage for the final execution set, including explicitly accepted
+runtime-required accounts, and rejects surplus new
 exact assignments before payload release. Only previously execution-admitted
 assignments can have retained dormant authority.
 Both reject insufficiency without inventing assignments or remapping retained
@@ -172,7 +179,7 @@ work. For example secret references do not require restore, and an independent
 Postfix qualification does not require the shared-interface campaign.
 
 
-## Full-campaign architecture and contracts — approved 2026-10-26
+## Full-campaign architecture and contracts — approved architecture and native-process amendment
 
 The maintainer approved this architecture for the complete campaign, including
 delivered A–C and remaining D–K, after design review on 2026-10-26. The approval
@@ -184,6 +191,18 @@ delivery. It does not authorize implementation or weaken the
 [security contract](MULTI_IDENTITY_SECURITY_CONTRACT.md). Later sections retain
 their dated B/C specification and evidence; this section supplies the approved
 common contract for the remaining groups, not a second runtime authority.
+
+The subsequent maintainer-approved
+[native-process reconciliation](MULTI_IDENTITY_MAIL_RECONCILIATION.md) changes
+the launch authority model: trusted one-shot startup directly executes the
+untrusted native master; no privileged resident Reploy identity supervisor
+remains. Blueprint identities and explicit role capability requests, immutable
+code by default with explicit mutation opt-in, both existing mapping profiles,
+and D's scalar/object/default input structure are accepted. The narrow initial
+files-backed image reader is selected. Actual runtime capability support,
+occupied-namespace exec and stock mail remain production proof gates. Historical
+B/C specifications, nullable supervisor bindings and private supervisor results
+below retain their original meaning and do not qualify the new mechanism.
 
 Architecture approval settles the intended behavior, authority, defaults and
 failure rules below. Later LLD selects algorithms, exact internal types and
@@ -214,7 +233,7 @@ inventory and delegation checks; earlier success is never a cached permission.
 The host operator, Reploy implementation and accepted blueprint are trusted.
 Application code, application-controlled data and ordinary image hooks are
 untrusted. Names in the image prove consistency, not permission. The engine
-socket and supervisor control channel are never application resources.
+socket and private trusted setup descriptors are never application resources.
 
 ### Components and authority ownership
 
@@ -225,22 +244,19 @@ socket and supervisor control channel are never application resources.
 | Existing host/geometry validator | Fresh delegation/principal checks, stable interval assignments and final active-map coverage | Allocate free ranges, repair host accounts or infer global exclusivity from a local lock |
 | Existing pinned runtime adapter | Positive engine/peer identity, bounded compatible requests and owned-object observation | Fall through to same-ID/raw exec or silently switch engines/profiles |
 | Existing host operation/service runner | Fresh admission for explicit starts/entries, foreground monitoring, exact resource ownership and restart fencing | Add a persistent staged broker or grant general host service authority |
-| Reploy-owned in-container identity supervisor | Release approved commands under their accepted identities; retain only explicitly approved control-plane capabilities | Execute application code in its own authority or accept arbitrary identity/capability requests |
+| Reploy-owned one-shot startup boundary | Verify current admission, establish final entry credentials/capability ceiling/descriptors/kernel policy, then directly exec the selected application | Remain as a stronger privileged identity process beside the application or leak private setup authority |
+| Untrusted native application master | Manage its internal workers within explicitly accepted mapping and capability authority | Enlarge host authority, mappings, mounts, secrets or the admitted capability ceiling |
 | Trusted inert-object preparer | Create/check declared managed objects while unattached under the exact operation authority | Run image hooks, follow untrusted links or recursively repair application data |
 
 Host admission belongs to the current CLI operation or existing foreground
 run/session/user-service process. It is not a new daemon, enrollment service,
 allocation registry or persistent staged broker. Detached staging may outlive
-its initiating CLI after a successful start, but the container cannot then
-autonomously select or relaunch privileged roles. Existing host controlled-session
-supervision is useful lifecycle context; it is not already the in-container
-identity supervisor. The private probe is evidence, not production code to copy.
-
-The proposed initial supervisor is Reploy-owned and bound to the immutable
-runtime image. An image-provided master does not silently become trusted.
-Supporting one requires a separately reviewed, image-locked implementation of
-the same supervisor contract and explicit maintainer approval. Stock mail
-compatibility therefore remains a real gate rather than an assumption.
+its initiating CLI after a successful start. A native master may restart workers
+under already admitted authority. External Reploy entries and whole-container
+replacement require fresh host admission. Existing host session/service ownership
+is reused; no new broker or image-provided trusted supervisor is introduced.
+The private probe is evidence, not production code to copy. Stock masters stay
+untrusted; image locking identifies bytes rather than establishing trust.
 
 ### Shared records and handoffs
 
@@ -249,11 +265,11 @@ create a parallel state store or admission cache.
 
 | Record | Required binding | Producer and consumer |
 | --- | --- | --- |
-| Locked identity policy | Original blueprint/build identity, immutable image, application names/numbers/groups, command-role assignments, supervisor identity and capability policy | D produces; E–K consume |
+| Locked identity policy | Original blueprint/build identity, immutable image, normalized application names/numbers/groups, descriptive metadata, command-role inventory and explicit capability requests | D produces; E–K consume |
 | Retained mapping authority | Existing installation owner, operator account, profile, revision, stable accepted/dormant assignments and retained ownership | B owns; C–K preserve |
 | Invocation execution plan | Exact installation, selected generation, mapping revision, operation ID, current host evidence, pinned endpoint, immutable image, active maps and sandbox/role policy | C/D/E assemble; F/G validate before effects |
 | Operation resource evidence | Attempt identity plus exact container/network/storage/service/interface handles and completed effect phases | Each effect owner records through the existing pending operation; G/H reconcile |
-| Runtime admission result | Positive owned-object identity, complete effective maps/namespaces, verified supervisor boundary and a bounded authorization for the selected entry | E/F/G produce; supervisor may consume only for that entry |
+| Runtime admission result | Positive owned-object identity, complete effective maps/namespaces, verified one-shot final transition and operation-specific authority for the selected entry | E/F/G produce; startup consumes only for that entry |
 
 An execution plan is immutable input for one invocation, not durable permission.
 Any identity, generation, revision, endpoint, host-evidence or operation mismatch
@@ -272,40 +288,48 @@ explicitly reactivated.
 
 There is one portable identity policy for a mapped generation, beside the
 existing deployment-only `identity_mapping` input. It declares application
-users by both image-local name and numeric UID, groups by name and numeric GID,
-each user's primary and supplementary groups, exactly one dedicated supervisor
-UID/GID, and named execution roles. Every application entry resolves to one
-role through its accepted executable/command definition. No entry inherits the
-supervisor role or chooses a UID through an unvalidated argument/environment
-value. Selecting the public field spelling and strict wire representation is
-D's LLD; its semantics are fixed here and are subject to the same public-input
-approval guardrail before shipping.
+users by image-local name and numeric UID, groups by name and numeric GID,
+each user's primary and supplementary groups, and named execution roles. The
+approved field is `environment.runtime.identity_policy`; groups use `name: gid`,
+users accept `name: uid` or an object with required `uid` and optional `full_name`,
+`primary_group`, `supplementary_groups`. Primary group defaults to the declared
+same-name group; supplementary groups default to empty. Resolve defaults and
+both user spellings to one explicit canonical object. Full names are descriptive,
+not account aliases. UID/GID 0 may be explicitly declared subject to existing
+root identity invariants. No supervisor declaration remains. Executables select
+a named `role`; commands inherit it. Arguments/environment cannot choose an
+unvalidated identity or privilege set.
 
 Each role references one accepted application identity and exact supplementary
-group vector. Supervisor UID/GID are disjoint from application authority.
-Role labels are selectors, not separate security principals. Roles sharing an
+group vector. Role labels are selectors, not separate security principals. Roles sharing an
 application UID share that identity's process and ownership authority. Secret
 and interface grants must be consistent across those roles; a request for
 asymmetric access rejects before effects. Different labels or group vectors
 alone cannot establish confidentiality between processes sharing the same UID.
 Stronger per-role isolation needs a separately proved and approved mechanism.
-Runtime-required IDs are separately enumerated and justified; they grant no
-application role. Container ID 0 required by the current compatible projection
-is not implicitly an application or supervisor identity. Inactive image accounts
-need no mapping merely because they exist in account files.
+Any capability-bearing container is conservatively one authority for secret and
+interface consistency. Image group files and role labels cannot isolate a
+recipient from a master that can assume its identity or bypass permissions.
+Runtime-required accounts are explicitly declared, image-verified and covered;
+they are not protected from identity-changing application code. Exact maps expose
+the accepted enumerated IDs; bounded maps intentionally expose their whole
+accepted private range. Both profiles remain supported subject to qualification.
 
-Application capability sets remain empty. Supervisor capabilities also default
-to empty; selecting multiple identities does not add them implicitly. Explicit
-supervisor opt-in is limited initially to the proved identity-transition needs
-`CAP_SETUID`, `CAP_SETGID` and, only when required by the implementation,
-`CAP_SETPCAP`. No implicit package-specific capability bundle is added. A request
-that cannot perform its declared transitions with its accepted policy rejects
-before launch; it does not inherit engine defaults. Broader application or
-supervisor capabilities require a separate explicit security decision.
+Role capabilities default to empty. D validates and locks recognized target-Linux
+`CAP_*` names as explicit portable requests. This does not authorize E to grant
+every recognized capability. E must prove the selected credential/capability
+transition and effective kernel policy, then reject unsupported requests before
+effects. No package-specific bundle, implicit transition capabilities or root-only
+portable parser rule is introduced. The UID0 prerequisite fixture is only proof
+coverage; no native production path is qualified by it.
 
 Image evidence is collected without executing image NSS, hooks or application
 code. The initial supported image account source is bounded, regular immutable
-account/group content. Ambiguous aliases, duplicate/conflicting name-number
+account/group content at standard paths, with sole-files account lookup and
+clear rejection of unsupported linked/deleted account paths. It creates no
+general filesystem unpacker and executes no image lookup code. These initial
+compatibility limits are documented rather than described as invalid Linux.
+Ambiguous aliases, duplicate/conflicting name-number
 relationships, unresolved required groups or an account source whose required
 relationship cannot be proved offline reject. File extraction must be confined
 and bounded; successful archive parsing is not permission to trust traversal.
@@ -313,19 +337,19 @@ Evidence binds the selected immutable generation, not a mutable tag or a host's
 account lookup. Host mapping overrides do not rewrite image authority.
 
 D4 checks all declared application identities against reserved assignments.
-E1 separately checks the complete execution set, including supervisor and
-runtime-required IDs, and rejects surplus new exact assignments. Updates may
+E1 separately checks the complete execution set, including explicitly accepted
+runtime-required accounts, and rejects surplus new exact assignments. Updates may
 change declarations, but do not remap retained numeric assignments, migrate
 ownership or authorize a previously omitted role.
 
-### E contract: execution and supervisor separation
+### E contract: one-shot launch and native workload authority
 
 All Reploy-controlled application paths use one admission boundary: initial
 start, application command, test, shell, controlled session, lifecycle hook,
 runtime exec and restart. An unsupported path
-rejects before payload execution. An already unprivileged application may fork
-or exec under its same confined authority; it cannot select a different role
-or regain supervisor privileges through that operation.
+rejects before payload execution. Native processes may fork, exec, select mapped
+identities with admitted capabilities and restart workers inside already accepted
+workload authority; they cannot use those actions to enlarge that authority.
 Mapped application code executes only inside the admitted container. Existing
 host-native command branches retain pre-effect rejection for mapped owners;
 resolving an accepted role cannot authorize a host-native shortcut.
@@ -334,48 +358,53 @@ Before payload release, the host operation runner validates the selected operati
 host authority and immutable generation; the adapter creates an exact owned
 container running only a trusted admission waiter. E verifies the complete
 effective kernel maps, owner/peer and every required namespace. F supplies
-storage/network admission. Only then may the trusted supervisor release an
-accepted application entry. The waiter and supervisor never execute arbitrary
-image entrypoints with setup authority.
+storage/network admission. Only then may trusted one-shot code establish final
+entry authority and directly exec the selected application. No image entrypoint
+runs with trusted setup authority. No privileged resident Reploy identity process
+or private control channel remains after release.
 
-The supervisor uses exactly its dedicated real, effective, saved and filesystem
-UID/GID in every thread. Its supplementary groups are empty or only its
-dedicated GID, it is non-dumpable while capability-bearing, and it occupies a
-POSIX session distinct from every application child. Its control channel and
-descriptors are private. The child receives only constructed standard streams
-and explicitly declared application descriptors. Immediately before untrusted
-exec, normalize all four child UID/GID fields and exact supplementary groups,
-remove all child capability sets, close all other descriptors, apply the approved
-seccomp/no-new-privileges policy and verify the final boundary. Credential
-changes in a multithreaded implementation require a demonstrated safe launch
-primitive; the private Go probe is not that demonstration.
+Before untrusted exec, normalize all four entry UID/GID fields and exact groups,
+close all descriptors except constructed streams and declared application handles,
+apply the accepted capability ceiling and effective kernel policy, and inspect
+the final boundary. Keep inheritable/ambient capabilities empty in the initial
+transition. Preserve ordinary locked NOROOT/drop-all/no-new-privileges behavior
+for empty-capability entries. A nonempty set requires a separately proved final
+exec transition, including securebits, groups, negative controls and process/thread
+observations. Existing Go probe success is not a production launch primitive.
+
+Bind the actual syscall policy to the final capability set and immutable
+generation. Deny namespace creation/join, namespace clone flags, handle-based
+access and mount escapes; retain ordinary fork/thread and required identity/chroot
+positives. Verify ABI-specific clone filtering and clone3 ENOSYS fallback. A
+pinned seed profile may have capability-conditioned allows and is not sufficient
+evidence by filename alone. An unverifiable effective filter blocks release.
 
 The host operation authorizes each requested role entry against fresh host and
 installation authority. Reuse the existing command/session transport to invoke
-the immutable trusted launch boundary, binding the installation, generation,
+the trusted launch boundary, binding the installation, generation,
 mapping revision, exact owned container, role and attempt. This is operation
 evidence, not a new bearer token, admission cache or always-connected replacement
 protocol. Stale, disconnected or incomplete requests launch no application code;
 ambiguous replies retain their operation and never authorize a blind replay.
 
-Initial automatic replacement uses the whole-container lifecycle, not privileged
-autonomous child restart. If a required long-lived workload child exits, the
-supervisor stops its remaining workload children and exits. Completion of a
-transient hook or explicit app command does not itself end the workload.
+The required foreground master's exit ends its container instance. Native worker
+replacement may use existing admitted authority; it is not a new host admission.
+Whole-container recreation and external entries still require fresh admission.
+Completion of a transient hook or explicit app command does not itself end the workload.
 An installed user-service may apply its existing restart policy only by
 re-entering host admission for a new instance. Detached staging requires an
 explicit new host operation. No engine restart policy bypasses these checks.
 Foreground/session ownership loss follows existing bounded stop/cleanup and
 retains uncertainty when stopping cannot be proved. An already admitted detached
-instance needs no continuously running host broker, but cannot launch a new
-role without a new admitted host operation. A future privileged child-replacement
-protocol needs separate architecture review, authority and liveness proof.
+instance needs no continuously running host broker. Native worker changes cannot
+obtain a new mapping, mount, secret source or capability ceiling.
 
-Application children cannot signal or inspect any supervisor thread, including
-through the same-session `SIGCONT` exception, pidfds or process-memory APIs.
-All-thread observations and positive syscall controls are required; exited or
-missing targets are not denial evidence. E4 tests every supported entry, not
-only the first container process.
+Live exec into an occupied capability-bearing namespace must establish final
+requested authority without a temporary stronger setup process or private
+control descriptors reachable by the workload. A verifier has at most the entry's
+already accepted authority. If the compatible runtime cannot prove this, reject
+before effects; no privileged/raw-exec fallback. E4 tests every supported entry,
+including descendants and live exec, not just the first process.
 
 ### F contract: managed objects and network isolation
 
@@ -396,7 +425,14 @@ does not adopt it. Any ownership-setting helper has only its reviewed setup
 authority inside the selected subordinate mapping and runs no application code.
 It exits before payload admission.
 Managed mounts and per-command mount overrides must preserve existing protected
-image/provider paths and the immutable supervisor, helper and control paths.
+image/provider code and trusted startup, helper and control paths. Container code
+is immutable by default, including loaders/libraries and mount-shadow checks.
+Mutation requires explicit opt-in and relinquishes replacement protection for
+the affected code; trusted Reploy code stays protected. This is not a promise
+that a privileged process cannot pass authority to other code. No host LSM
+dependency is selected. The explicit mutation switch's final runtime spelling
+belongs to the affected execution/storage LLD; D does not invent a parallel
+write policy or open execution through a declaration.
 An application-writable overlay cannot replace the trusted launch boundary.
 
 Preparation, restore and attachment are mutually exclusive for the relevant
@@ -459,7 +495,7 @@ Ordinary stop/start, recreation, generation update and rollback preserve the
 installation's established numeric associations. Identity removal makes an
 exact assignment dormant; reusing that numeric ID or rolling back restores its
 original binding and Unix ownership access. Account names do not revoke old
-numeric ownership. Profile, supervisor identity or bounded geometry changes
+numeric ownership. Profile, process-model binding or bounded geometry changes
 reject as ordinary updates and require explicit migration or replacement.
 
 Removal distinguishes runtime teardown from managed-data deletion. Retained
@@ -484,7 +520,7 @@ Before writing archived ownership, validate the destination owner, selected
 profile, complete UID/GID translation and fresh exclusive host delegation.
 An offline restore into the same existing bound owner retains that owner's
 unchanged accepted associations; it cannot adopt an owner from archive metadata
-or change its profile/supervisor/geometry. Import into an independent destination
+or change its profile/process model/geometry. Import into an independent destination
 requires an explicit new destination mapping, non-overlapping with every other
 live or retained owner, including the retained source. Both paths retain their
 own existing authoritative state and the same atomic data-publication contract.
@@ -509,7 +545,10 @@ portable build content.
 Resolve recipient roles to their accepted application identities before access
 validation. Distinct role names using the same UID cannot be promised different
 secret access; inconsistent declarations reject rather than silently broadening
-the recipient set. Use distinct admitted identities when different access is needed.
+the recipient set. Capability-bearing containers are one workload authority for
+this consistency check. Distinct UID names inside such a container do not promise
+secrecy from its privileged master. Use independently enforceable authority when
+different access is needed.
 
 Deliver values as recipient-confined regular files in ephemeral managed storage,
 with declared ownership/modes and no parent traversal or peer access. Reploy must
@@ -517,8 +556,8 @@ not put resolved values in its command arguments, image layers, state, engine
 labels, logs, diagnostic dumps or export metadata. Omit its ephemeral delivery
 storage from exports. This does not promise to redact values that an authorized
 application copies into its own data or output. Unrelated roles and the application environment
-receive no implicit copy. Supervisor/preparer access is limited to their trusted
-delivery duty; application children cannot access its control descriptors.
+receive no implicit copy. Trusted startup/preparer access is limited to delivery;
+no private setup/control descriptors reach application code.
 
 Bind delivery to a new accepted runtime instance. A repeated `up` or ambiguous
 startup retry never resends initialization secrets to the same instance.
@@ -547,12 +586,12 @@ consumer allowlist, generation/mapping bindings, exact object identity and
 pending/active/revoked lifecycle. Grant only the declared connection right and
 path. Preserve disjoint private mappings; the implementation may not expose
 an entire participant map or silently add overlapping shared host assignments.
-Required access must be independently enforceable for each accepted role,
-including denial to unauthorized identities inside a participating workload.
-Roles resolve to the same accepted-identity boundary as D/I. All roles sharing
-an application UID must have consistent interface grants; a role label cannot
-deny a socket to another process with the same UID. Negative conformance cases
-use genuinely unauthorized identities, not renamed copies of an authorized UID.
+Required access must be independently enforceable for each accepted authority.
+Roles resolve to the same authority boundary as D/I. All roles sharing an
+application UID, and all roles in a capability-bearing container, must have
+consistent grants. A role label cannot deny a socket to code with the same
+authority. Negative conformance cases use genuinely unauthorized authority,
+not a renamed role or a UID reachable by an admitted identity-changing master.
 
 J1 must select and prove a narrow mechanism satisfying that access contract in
 a disposable fixture before attachment work. The architecture does not claim
@@ -580,10 +619,11 @@ negative isolation tests, lifecycle ownership and exact cleanup. Private probe
 success and ordinary same-ID Podman hotfixes remain separate evidence.
 
 K1 may qualify capability-free Redis/Rspamd independently. K2/K3 require a
-proved stock-mail supervisor/child split and image-locked role/capability
-policy; naming a stock master as trusted does not supply that proof. Any
-additional trusted supervisor implementation or broader capability request
-returns for explicit design approval before implementation. K4 closes the
+proved native stock-mail process behavior, complete process/credential/capability
+inventories and image-locked role/capability policy under the rootless product
+path. Naming a stock master as trusted does not supply proof; it remains
+untrusted application code. Additional runtime capability authority or a different
+launch trust boundary requires its own design/proof before activation. K4 closes the
 combined lifecycle/shared-interface evidence. A report of blockers is useful
 but is not completion. Resource-limit design remains outside this identity
 campaign and inherits ordinary runtime policy without weakening it.
@@ -593,7 +633,7 @@ campaign and inherits ordinary runtime policy without weakening it.
 | Boundary | Required failure result |
 | --- | --- |
 | D to E | Missing/changed image identity or incomplete role/map coverage rejects before create or payload release; no inferred identities |
-| E to F | An unproved waiter/supervisor boundary cannot receive application code or storage-preparation authority |
+| E to F | An unproved one-shot final transition or live-exec boundary cannot receive application code or trusted preparation authority |
 | F to G | Unproved ownership, attachment exclusion or effective network policy leaves activation inhibited |
 | G to H | Stop/removal uncertainty retains reservations and prevents destructive ownership operations |
 | H to G | Restored bytes are not runnable until destination authority and ordinary startup admission both pass |
@@ -611,11 +651,11 @@ Design reviews must check both profiles, ordinary absent-policy compatibility,
 every process-entry path, state/effect crash boundaries, dormant ownership,
 separate staging/destination owners, and every cross-group handoff above.
 Evidence gates remain independent from design approval. Completing this section
-does not claim the supervisor, storage, network, restore or interface mechanisms
+does not claim the one-shot launch, storage, network, restore or interface mechanisms
 have passed. Their owning LLD must provide the exact proof plan before code.
 
-The existing 34 remaining slice estimates are conditional. The explicit
-host-operation/supervisor launch boundary, exclusive storage and interface obligations
+The current 37 remaining slice estimates are conditional. The explicit
+host-operation/one-shot launch boundary, exclusive storage and interface obligations
 may require decimal splits, especially E2/E3, F2 and J1/J3. Re-estimate against
 the selected LLD before implementation; do not force a new control plane into
 an old estimate or exceed the 750-production-line bound. This design pass
@@ -1640,9 +1680,10 @@ and identity state/recovery for staged and installed
   role-specific capabilities and generation evidence. Keep public activation
   disabled; default capabilities remain empty.
 - **E — Mapped execution.** Compile reserved maps and verify them before payload
-  release. Enforce final child credentials/groups, capability sets, descriptor
-  closure, supervisor non-dumpability and separate sessions on every supported
-  entry. An unproved exec/restart path rejects instead of running raw exec.
+  release. Enforce final entry credentials/groups, accepted capability ceilings,
+  descriptor closure and effective kernel policy with no stronger resident
+  Reploy identity process. Qualify native lifetime and occupied-namespace exec;
+  an unproved path rejects instead of running raw exec.
 - **F — Preparation and isolation.** Prepare only declared inert managed objects
   with no elevated application code. Exclude attached workloads, inhibit restart
   through recovery, and prove existing egress/endpoint policy on Podman. Keep
@@ -1662,8 +1703,8 @@ and identity state/recovery for staged and installed
   paths, stale-socket recovery, participant authority and private-map isolation.
   Declared participants do not gain access as every identity in their workload.
 - **K — Qualification.** Adapt disposable component fixtures to supported Reploy
-  operations. Stock Postfix/Dovecot remain conditional on approved supervisor
-  compatibility. SQL fixtures are tests, not a generic database backup product.
+  operations. Stock Postfix/Dovecot remain conditional on qualified native
+  process/capability behavior. SQL fixtures are tests, not a generic database backup product.
 
 This order deliberately moves revocation behind runtime ownership, declaration
 policy before child launch, and preparation/network checks before service
@@ -1734,14 +1775,14 @@ unrelated stack merely to repeat this preparation.
 | --- | --- | --- |
 | B-design | B1–B5 | Approved and delivered. Preserve the single-installation schema/override contract, initial files-backed host checks, durable state and conservative recovery. No composition, global enrollment or payload admission is implied. B2 was delivered as B2.1 and B2.2. |
 | campaign-architecture | Remaining D–K implementation | Approved on 2026-10-26 after design review. Preserve the approved intended behavior and authority; group LLD, unresolved public syntax and mechanism proofs remain separate delivery work. |
-| compatible-map-proof | C1 implementation completion | Delivered for the internal C seam with retained patched-engine guest receipts. Public supervisor/storage/network admission remains separate; preserve private-harness receipts as separate evidence. |
+| compatible-map-proof | C1 implementation completion | Delivered for the internal C seam with retained patched-engine guest receipts. Public one-shot launch/storage/network admission remains separate; preserve private-harness receipts as separate evidence. |
 | C-design | C1–C2 | Approved on 2026-10-25: operation dispositions and bounded adapter/build approach; no general native backend. Refresh affected stamps before implementation. |
 | D-design | D1–D4 | Public identity/capability syntax, locked image evidence, role allowlists and default-empty behavior. |
-| launch-design | E1–E4 | Production supervisor ownership and launch/replacement boundary; helper/supervisor authority, child descriptor/credential/capability plan and every supported entry. |
+| launch-design | E1–E4 | Production one-shot release and native-master lifetime; final credential/capability/descriptor/kernel policy; occupied-namespace exec without stronger transient setup authority; each supported entry. |
 | storage-design | F1–F2 | Declared objects, fresh delegation/principal checks before ownership mutations, confined preparation, exclusion, restart inhibition and explicit crash recovery. |
 | network-design | F3–F4 | Existing egress/endpoint semantics, pre-start effective observation and cleanup on selected Podman engine; HF11's deferred endpoint session gap is not declared fixed. |
 | service-design | G1–G3 | Concrete staged run/test and installed user-service/restart ownership; explicit destination install input, independent reservations, source-revision checks and mapped-data transfer rejection; no hidden general scheduler. |
-| generic-launch | Public execution after G3 | Both profiles; fresh complete principal/delegation checks before every execution admission; real mapped stage/run/test and separately mapped installation; staged-to-start and restart collision/unavailable-inventory negatives; surplus new exact-assignment rejection and retained-dormant controls; all accepted/undeclared identity transitions; final credentials/groups/capabilities/descriptors; supervisor separation; every application entry including exec; namespaces, devices, network denial, ordinary owned storage, mismatch/no-mutation, restart exclusion, active revocation and exact cleanup. |
+| generic-launch | Public execution after G3 | Both profiles with their stated boundaries; fresh complete principal/delegation checks per controlled admission; real mapped stage/run/test and separate installation; collision/unavailable-inventory negatives; surplus exact-assignment rejection and dormant controls; native mapped transitions; final initial credentials/groups and capability ceilings/descriptors; no stronger resident Reploy identity process; safe exec; effective namespace/device/network/syscall policy, code immutability/default and explicit-mutation limits, owned storage, mismatch/no-mutation, restart fencing, active revocation and exact cleanup. |
 | restore-design | H5–H7 | Offline export, integrity, destination allocation/delegation before ownership writes, collision-safe staging or approved checked translation and rollback. |
 | secret-design | I1–I3 | Sources, recipients, confined paths, redaction and lifecycle authority. |
 | interface-design | J1–J5 | Explicit producer/consumer identities, dedicated path/registry ownership, narrow discovery/attachment and safe replacement/revocation. Disposable proof passes before attachment activation. |
@@ -1772,10 +1813,10 @@ slice ID. Further splits use decimal children, never a new singleton group.
 | B5 | B5 | Pending intents, recovery, tombstones and conservative reservation retention |
 | C1 | C1 | Scoped Podman admission and compatible exact/bounded create transport |
 | C2 | C2 | Reuse compatible build/image path; bind immutable service images |
-| D1 | D1 | Public identity declarations and name/number validation |
+| D1 | D1.1, D1.2 | Public identity/default normalization, then complete executable-role validation |
 | D4 | D2 | Role-specific capability declarations and policy lock |
-| D2 | D3 | Offline locked-image name/number evidence |
-| D3 | D4 | Locked-identity coverage, generation admission and identity-change diagnostics |
+| D2 | D3.1, D3.2 | Files-backed identity evidence, then bounded immutable-image layer source |
+| D3 | D4.1, D4.2 | Final image lock/reuse binding, then reservation coverage and diagnostics |
 | C3 | E1 | Compile reserved maps; pre-start verification and host-device rejection |
 | C4 | E2 | Child credentials, capability drop, descriptors, dumpability and sessions |
 | C5 | E3 | Supervisor lifetime/replacement and common admission including runtime exec |
@@ -1803,7 +1844,7 @@ slice ID. Further splits use decimal children, never a new singleton group.
 | H4 | J4 | Narrow participant attachment preserving private mappings |
 | H5 | J5 | Participant replacement, revocation and removal |
 | I1 | K1 | Rspamd/Redis on supported capability-free path |
-| I2 | K2 | Stock Postfix through the approved supervisor model |
+| I2 | K2 | Stock Postfix under the approved native-process authority model |
 | I3 | K3 | Stock Dovecot including synthetic SQL and restore |
 | I4 | K4 | Combined interface/lifecycle campaign and all-row evidence report |
 
@@ -1815,7 +1856,7 @@ J3 remains separately gated explicit sharing between independently configured
 installations, with no aggregate service-list or composition dependency.
 
 Previous gate names follow their responsibilities: old C-design is now C-design
-for transport and launch-design for supervisor execution; old D-design remains
+for transport and launch-design for one-shot/native execution; old D-design remains
 D-design; old E-design becomes storage-design/restore-design; old F/G/H-design
 become secret-design/network-design/interface-design. Old generic-launch and
 completion retain their meaning with the current prerequisites above.
@@ -1913,36 +1954,40 @@ Preserve that mapping and every slice-prefixed commit title.
 Do not create a duplicate PR or rewrite an approved ancestor.
 
 
-## Next delivery request
+## Current design request and D continuation
 
-The architecture design-only run is complete. The next proposed sprint delivers
-D and E, including their LLD as part of that delivery. Continue in
-`/home/omry/dev/reploy`; preserve delivered A–C and all existing local work.
-Publish the reviewed architecture first, then append the D/E design and
-implementation without an unnecessary rebase. No merge, release, live-service
-changes, global-helper edits or changes to the Arbiter/Podman checkouts are
-authorized.
+The architecture PR #282 is published and approved, unmerged. Draft PR #284
+owns the consolidated D design and native-process reconciliation. Current run
+`run_5yye79jpd9dbcb98rg135yrv00` finishes the approved amendment, document review,
+stamps, publication and exact-head PR cycle, records the continuation point and
+**stops before D implementation**. Do not merge, release, change live services,
+edit global helpers or modify Arbiter/Podman checkouts. Preserve one checkout,
+delivered A–C and all exact review/approval history; avoid unnecessary rebases.
+
+Blueprint structure, scalar users/groups, optional primary/supplementary/full-name
+fields, explicit capability roles, both mapping profiles, the native process
+model and simple initial files-backed account reader are settled. Reuse those
+decisions. D records recognized capability requests; actual supported grants,
+code-mutation runtime spelling and native launch qualification belong to the
+owning E/F LLD and proof gates. No D declaration opens public mapped execution.
+
+The original D delivery queue is
+`run_68f2fnm4p924n48te4kjxhdmnc`. Its former syntax gate must be reconciled with
+these recorded approvals when implementation continuation is authorized. D's
+four logical parents now have seven decimal implementation slices. The exact
+implementation selection is:
 
 ```text
-checkpoint and publish the reviewed architecture ->
-global:swe:pr-cycle-stack("current") ->
-prepare D/E LLD and prerequisite mechanism proofs under the group delivery sequence ->
-deep-design-review D/E LLD locally and remotely; resolve findings ->
-(present unresolved public syntax or material design decisions concisely ??> record maintainer approval) ->
-refresh affected design stamps through SWE helpers ->
-global:swe:checkpoint-commit() ->
-global:swe:submit-native-stack("main", "draft") ->
-global:swe:pr-cycle-stack("current") ->
 global:swe:deliver-design-stack(
   "docs/MULTI_IDENTITY_IMPLEMENTATION_PLAN.md",
-  tasks="D1,D2,D3,D4,E1,E2,E3,E4"
+  tasks="D1.1,D1.2,D2,D3.1,D3.2,D4.1,D4.2"
 ) -> report approved PRs actual production/test LOC timing observed tokens and issues ->
-stop after E4 and propose the next sprint
+stop after D4.2
 ```
 
-This example does not start itself or authorize D–K implementation. If LLD
-requires decimal splits, substitute those reviewed child IDs in the task list.
-The design-decision gate uses existing approvals when they already cover all
-decisions; it does not require another approval for routine internal choices.
-Use slice-prefixed commit titles and the production size bound. Public mapped
-execution remains inhibited until generic-launch passes after G3.
+This is continuation context, not an instruction to execute it during the
+current design-only run. D4.2 completes the original D4 stopping point; E is
+outside that implementation sprint. Use existing approvals for routine internal
+choices and decimal splits. Require every current exact-head `ci.yml` job before
+PR approval. Public mapped execution stays inhibited until generic-launch after
+G3; design review, D completion and raw/private probes cannot substitute for it.
