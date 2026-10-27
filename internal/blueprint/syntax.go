@@ -120,6 +120,7 @@ type MountSyntax struct {
 type ExecutableSyntax struct {
 	Source     string   `yaml:"source"`
 	Binary     string   `yaml:"binary"`
+	Role       string   `yaml:"role"`
 	Order      []string `yaml:"order"`
 	ArgvPrefix []string `yaml:"argv_prefix"`
 	ArgvSuffix []string `yaml:"argv_suffix"`
