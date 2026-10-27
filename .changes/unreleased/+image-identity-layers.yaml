@@ -1,0 +1,2 @@
+kind: Added
+body: Verify image account evidence from bounded immutable image-save layers without extraction or image execution; policy-bearing execution remains inhibited.
