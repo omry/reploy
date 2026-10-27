@@ -19,7 +19,7 @@ environment:
       schema: 1
       users: {worker: 200}
       groups: {worker: 200}
-      roles: {app: {user: worker}, background: {user: worker}}
+      roles: {app: {user: worker, capabilities: [CAP_SETUID, CAP_CHOWN]}, background: {user: worker, capabilities: [CAP_BPF]}}
   applications:
     application:
       packages: {python: {requirements: [demo-server]}}
@@ -78,5 +78,39 @@ environment:
 	after, err := blueprint.EncodeResolvedDocumentV1(document)
 	if err != nil || after != before {
 		t.Fatalf("provider view mutated original authority: %v", err)
+	}
+}
+
+func TestIdentityCapabilitiesV1RequestsRemainInhibited(t *testing.T) {
+	dir := t.TempDir()
+	current, _ := runtimeCurrentBuildFixture(t)
+	current.State = policyGuardStateV1(t, current.State)
+	document, err := blueprint.DecodeResolvedDocumentV1(current.State.Blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	role := document.Environment.Runtime.IdentityPolicy.Roles["app"]
+	role.Capabilities = []string{"CAP_SETGID", "CAP_SETUID", "CAP_SYS_CHROOT"}
+	document.Environment.Runtime.IdentityPolicy.Roles["app"] = role
+	current.State.Blueprint, err = blueprint.EncodeResolvedDocumentV1(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := []string{}
+	err = runCurrentShellV1(t.Context(), CurrentShellRunInputV1{DeploymentDir: dir}, currentShellRunTestBackend(t, dir, current, CurrentRuntimePlanV1{}, &order))
+	requirePolicyGuardErrorV1(t, err)
+	if !reflect.DeepEqual(order, []string{"acquire", "store", "state"}) {
+		t.Fatal("capability request reached runtime effects", order)
+	}
+	input, operation, store := providerBuildCompletionFixture(t)
+	defer operation.Unlock()
+	input.Document = policyGuardDocumentV1(t, input.Document)
+	input.Document.Environment.Runtime.IdentityPolicy.Roles["app"] = role
+	before := identityGuardTreeV1(t, input.DeploymentDir)
+	// A missing callback panics if admission ever reaches a build effect.
+	_, err = completeProviderBuild(t.Context(), operation, store, input, providerBuildCompletionBackend{})
+	requirePolicyGuardErrorV1(t, err)
+	if !reflect.DeepEqual(before, identityGuardTreeV1(t, input.DeploymentDir)) {
+		t.Fatal("capability request changed deployment files")
 	}
 }
