@@ -99,6 +99,16 @@ func verifyCurrentBuildV1(
 	if state.Deployment != nil {
 		return VerifyCurrentBuildResultV1{}, fmt.Errorf("current build verification requires a staged deployment")
 	}
+	if document.Environment.Runtime.IdentityPolicy != nil &&
+		(document.Environment.Runtime.IdentityMapping != nil || state.IdentityMapping != nil) {
+		status, err := (deploy.IdentityMappingOperationsV1{Operation: operation}).Status()
+		if err != nil {
+			return VerifyCurrentBuildResultV1{}, err
+		}
+		if err := validateLockedIdentityCoverageV1(ctx, operation, store, document.Environment.ID, dir, status.Reservations); err != nil {
+			return VerifyCurrentBuildResultV1{}, err
+		}
+	}
 	current, found, err := backend.loadCurrent(
 		ctx,
 		operation,

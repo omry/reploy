@@ -8,6 +8,24 @@ import (
 	"github.com/omry/reploy/internal/identitymapping"
 )
 
+// RetainIdentityMappingGeometryV1 preserves established assignments while
+// checking a proposed geometry. Pending intents remain separate, as in Configure.
+func RetainIdentityMappingGeometryV1(state StateV1, candidate identitymapping.Geometry) (identitymapping.Geometry, error) {
+	if err := validateIdentityMappingStateV1(state); err != nil {
+		return identitymapping.Geometry{}, err
+	}
+	var protected *identitymapping.Geometry
+	if m := state.IdentityMapping; m != nil {
+		if m.Revoked || m.Profile != candidate.Profile {
+			return identitymapping.Geometry{}, fmt.Errorf("mapping is revoked or its retained profile differs")
+		}
+		if len(m.UIDAssignments) != 0 {
+			protected = geometryPointerV1(m.geometry().numeric())
+		}
+	}
+	return identitymapping.RetainGeometry(candidate, protected)
+}
+
 // ResolveIdentityMappingGeometryV1 checks one operation's effective input. The
 // numeric result grants neither protected reservations nor execution admission.
 func ResolveIdentityMappingGeometryV1(document blueprint.Document, override *blueprint.IdentityMappingOverrideV1) (*identitymapping.Geometry, error) {
