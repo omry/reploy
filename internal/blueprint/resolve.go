@@ -26,6 +26,15 @@ func Resolve(source Syntax) (Document, error) {
 	if source.Environment.Runtime.IdentityPolicy != nil && (source.Environment.Runtime.UserFieldPresent || source.Environment.Runtime.User != "") {
 		return Document{}, fmt.Errorf("%s conflicts with an explicit environment.runtime.user", identityPolicyPathV1)
 	}
+	// Role selectors are literal authority, checked before generic expansion.
+	for _, application := range sortedKeys(source.Environment.Applications) {
+		for _, name := range sortedKeys(source.Environment.Applications[application].Executables) {
+			field := "environment.applications." + application + ".executables." + name + ".role"
+			if err := validateIdentityRoleReference(source.Environment.Runtime.IdentityPolicy, source.Environment.Applications[application].Executables[name].Role, field); err != nil {
+				return Document{}, err
+			}
+		}
+	}
 	compatibility, err := ParseCompatibility(source.Blueprint.Compatibility.Platforms)
 	if err != nil {
 		return Document{}, err
@@ -100,6 +109,9 @@ func Resolve(source Syntax) (Document, error) {
 		return Document{}, err
 	}
 	if err := resolveWorkloads(source, extended, &document); err != nil {
+		return Document{}, err
+	}
+	if err := document.Environment.validateIdentityRoleInventory(); err != nil {
 		return Document{}, err
 	}
 	return document, nil
@@ -564,7 +576,7 @@ func resolveExecutableProfiles(field string, source map[string]ExecutableSyntax)
 			return nil, err
 		}
 		profiles[name] = Executable{
-			Source: contributionSource, Binary: binary, Order: order,
+			Source: contributionSource, Binary: binary, Role: item.Role, Order: order,
 			ArgvPrefix: append([]string(nil), item.ArgvPrefix...), ArgvSuffix: append([]string(nil), item.ArgvSuffix...),
 		}
 	}

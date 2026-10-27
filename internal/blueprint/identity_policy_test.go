@@ -11,7 +11,8 @@ import (
 const testIdentityPolicyV1 = `{schema: 1, users: {worker: 200}, groups: {worker: 200}, roles: {app: {user: worker}}}`
 
 func policyBlueprintV1(policy string) string {
-	return strings.Replace(minimalBlueprint, "  id: demo\n", "  id: demo\n  runtime:\n    identity_policy: "+policy+"\n", 1)
+	raw := strings.Replace(minimalBlueprint, "  id: demo\n", "  id: demo\n  runtime:\n    identity_policy: "+policy+"\n", 1)
+	return strings.Replace(raw, "          binary: demo-server\n", "          binary: demo-server\n          role: app\n", 1)
 }
 
 func resolvePolicyV1(t *testing.T, policy string) Document {
@@ -84,7 +85,7 @@ func TestIdentityPolicyV1PrimaryOverrideMetadataAndSorting(t *testing.T) {
 		}
 	}
 	// UID and GID namespaces are separate; root is an explicit application identity.
-	resolvePolicyV1(t, `{schema: 1, users: {root: 0, worker: 200}, groups: {root: 0, worker: 200}, roles: {master: {user: root}, child: {user: worker}}}`)
+	resolvePolicyV1(t, `{schema: 1, users: {root: 0, worker: 200}, groups: {root: 0, worker: 200}, roles: {app: {user: root}, child: {user: worker}}}`)
 	resolvePolicyV1(t, strings.ReplaceAll(testIdentityPolicyV1, "200", "4294967294"))
 }
 
