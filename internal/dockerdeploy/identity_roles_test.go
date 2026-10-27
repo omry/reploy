@@ -109,7 +109,7 @@ func TestIdentityCapabilitiesV1RequestsRemainInhibited(t *testing.T) {
 	before := identityGuardTreeV1(t, input.DeploymentDir)
 	// A missing callback panics if admission ever reaches a build effect.
 	_, err = completeProviderBuild(t.Context(), operation, store, input, providerBuildCompletionBackend{})
-	requirePolicyGuardErrorV1(t, err)
+	requireIdentityEvidenceErrorV1(t, err)
 	if !reflect.DeepEqual(before, identityGuardTreeV1(t, input.DeploymentDir)) {
 		t.Fatal("capability request changed deployment files")
 	}

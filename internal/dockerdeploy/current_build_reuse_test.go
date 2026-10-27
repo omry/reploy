@@ -103,7 +103,7 @@ func TestRebindCurrentBuildLockV1UpdatesOnlyDesiredBlueprintIdentity(t *testing.
 	if err != nil || !matched {
 		t.Fatalf("matched=%v error=%v", matched, err)
 	}
-	rebound, err := rebindCurrentBuildLockV1(current.Lock, input.Document)
+	rebound, err := rebindCurrentBuildLockV1(current, input.Document)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestRebindCurrentBuildLockV1PreservesPortableToolProvenance(t *testing.T) {
 	desired.Acquisitions[0].Outcome.Kind = providerstore.AcquisitionOutcomeNetwork
 	desired.Acquisitions[0].Outcome.SuccessfulDeclaredLocator = "https://mirror.example/demo.tar"
 	document, _ := testSelectedPlatformDocumentV1(t)
-	rebound, err := rebindCurrentBuildLockV1(current, document)
+	rebound, err := rebindCurrentBuildLockV1(CurrentBuild{Lock: current}, document)
 	if err != nil {
 		t.Fatal(err)
 	}

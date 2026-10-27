@@ -42,12 +42,3 @@ func requireUnmappedControlDeploymentV1(operation *deploy.OperationLock, kind de
 	}
 	return requireUnmappedDeploymentV1(operation)
 }
-
-// D4 replaces this temporary rejection with verified final-image evidence in
-// the same build path. A portable declaration alone cannot produce a lock.
-func requireIdentityPolicyBuildEvidenceV1(document blueprint.Document) error {
-	if document.Environment.Runtime.IdentityPolicy != nil {
-		return fmt.Errorf("environment.runtime.identity_policy build completion and reuse require immutable-image identity evidence, which is not yet available")
-	}
-	return nil
-}

@@ -64,6 +64,7 @@ type providerBuildCompletionBackend struct {
 	publish          func(context.Context, *deploy.OperationLock, providerstore.Store, BuildPublicationInput) (deploy.StateV1, error)
 	publishValidated func(context.Context, *deploy.OperationLock, providerstore.Store, string, string, deploy.BuildLockV1, ValidatedBuildInputsV1) (deploy.ValidatedBuildV1, error)
 	removeFinalized  func(context.Context, BuiltImageCandidate) error
+	identityEvidence func(context.Context, *blueprint.IdentityPolicyV1, providers.RealizedImageV1, blueprint.Platform) (deploy.ImageIdentityEvidenceV1, error)
 }
 
 // CompleteProviderBuild is the canonical completion path from a materialized
@@ -82,6 +83,7 @@ func CompleteProviderBuild(
 		publish:             PublishBuild,
 		publishValidated:    PublishValidatedBuild,
 		removeFinalized:     RemoveBuiltImageCandidate,
+		identityEvidence:    exportDockerImageIdentityV1,
 	})
 }
 
@@ -98,9 +100,10 @@ func completeProviderBuild(
 	if err := ctx.Err(); err != nil {
 		return ProviderBuildCompletionResult{}, err
 	}
-	if err := requireIdentityPolicyBuildEvidenceV1(input.Document); err != nil {
-		return ProviderBuildCompletionResult{}, err
+	if input.Document.Environment.Runtime.IdentityPolicy != nil && backend.identityEvidence == nil {
+		return ProviderBuildCompletionResult{}, fmt.Errorf("identity policy requires immutable-image identity evidence collector")
 	}
+	ctx = withGeneratedBuilderSession(ctx)
 	if operation == nil {
 		return ProviderBuildCompletionResult{}, fmt.Errorf("complete provider build requires an operation lock")
 	}
@@ -169,6 +172,20 @@ func completeProviderBuild(
 			)
 		}
 	}()
+	var identityPolicy *deploy.IdentityPolicyLockV1
+	if portable := input.Document.Environment.Runtime.IdentityPolicy; portable != nil {
+		evidence, err := backend.identityEvidence(ctx, portable, finalized.Image.Image, input.ResolvedRequest.Platform)
+		if err != nil {
+			return ProviderBuildCompletionResult{}, fmt.Errorf("collect final-image identity evidence: %w", err)
+		}
+		identityPolicy = &deploy.IdentityPolicyLockV1{Schema: deploy.IdentityPolicyLockSchemaV1, Policy: *portable, Evidence: evidence}
+		if err := deploy.ValidateIdentityPolicyLockV1(identityPolicy, finalized.Image.Image, input.ResolvedRequest.Platform); err != nil {
+			return ProviderBuildCompletionResult{}, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return ProviderBuildCompletionResult{}, err
+	}
 	assembleCtx, endAssemble := buildprofile.Start(ctx, "Assemble build lock")
 	lock, err := backend.assemble(assembleCtx, store, BuildLockAssemblyInput{
 		BlueprintDigest: blueprintDigest, ResolvedRequest: input.ResolvedRequest,
@@ -178,6 +195,7 @@ func completeProviderBuild(
 		RuntimePolicy:        policy,
 		RuntimeLayer:         finalized.RuntimeLayer,
 		ValidationRecord:     finalized.Validation.Final.Reference, FinalImage: finalized.Image.Image,
+		IdentityPolicy: identityPolicy,
 	})
 	endAssemble(err)
 	if err != nil {

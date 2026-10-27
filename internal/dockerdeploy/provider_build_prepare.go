@@ -282,7 +282,13 @@ func prepareLockedProviderBuildV1(
 			currentCtx, input.Operation, input.Store, input.Environment, input.DeploymentDir,
 		)
 		endCurrent(err)
-		if err != nil {
+		if errors.Is(err, errIdentityPolicyBlueprintMismatchV1) {
+			// Restaging preserves Current but replaces the desired blueprint.
+			// Keep its owner in deployment state for publication/cleanup, without
+			// using unbound selected bytes as old policy or cache authority.
+			writeProviderBuildProgress(input.Progress, "cannot reuse current build: desired blueprint changed; fresh identity evidence required")
+			currentFound = false
+		} else if err != nil {
 			return LockedProviderBuildPreparationV1{}, fmt.Errorf("prepare locked provider build current generation: %w", err)
 		}
 		if currentFound {
@@ -354,7 +360,7 @@ func prepareLockedProviderBuildV1(
 		if err != nil || !matches {
 			return false, err
 		}
-		publicationLock, err := rebindCurrentBuildLockV1(candidate.current.Lock, loaded.Document)
+		publicationLock, err := rebindCurrentBuildLockV1(candidate.current, loaded.Document)
 		if err != nil {
 			return false, err
 		}

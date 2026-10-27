@@ -188,6 +188,9 @@ func LoadValidatedBuildCandidate(
 	if err := validateBuildLockMatchesValidatedInputs(lock, inputs); err != nil {
 		return ValidatedBuildCandidateV1{}, false, err
 	}
+	if err := validateSelectedIdentityPolicyV1(state.Blueprint, lock); err != nil {
+		return ValidatedBuildCandidateV1{}, false, err
+	}
 	if !reflect.DeepEqual(lock.FinalImage, record.Image) {
 		return ValidatedBuildCandidateV1{}, false, fmt.Errorf("validated build image does not match its build lock")
 	}
@@ -581,12 +584,11 @@ func publishValidatedBuild(
 	if err != nil {
 		return deploy.ValidatedBuildV1{}, err
 	}
+	if !found && lock.IdentityPolicy != nil {
+		return deploy.ValidatedBuildV1{}, fmt.Errorf("identity policy publication requires selected blueprint")
+	}
 	if found {
-		document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
-		if err != nil {
-			return deploy.ValidatedBuildV1{}, err
-		}
-		if err := requireIdentityPolicyBuildEvidenceV1(document); err != nil {
+		if err := validateSelectedIdentityPolicyV1(state.Blueprint, lock); err != nil {
 			return deploy.ValidatedBuildV1{}, err
 		}
 	}

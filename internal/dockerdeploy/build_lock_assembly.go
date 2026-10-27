@@ -26,6 +26,7 @@ type BuildLockAssemblyInput struct {
 	RuntimeLayer         deploy.ApplicationRuntimeLayerV1
 	ValidationRecord     providerstore.StoreObjectRef
 	FinalImage           providers.RealizedImageV1
+	IdentityPolicy       *deploy.IdentityPolicyLockV1
 }
 
 // AssembleBuildLock publishes the graph's canonical bundle manifests and
@@ -40,6 +41,9 @@ func AssembleBuildLock(
 		return deploy.BuildLockV1{}, fmt.Errorf("assemble build lock requires a context")
 	}
 	if err := ctx.Err(); err != nil {
+		return deploy.BuildLockV1{}, err
+	}
+	if err := deploy.ValidateIdentityPolicyLockV1(input.IdentityPolicy, input.FinalImage, input.ResolvedRequest.Platform); err != nil {
 		return deploy.BuildLockV1{}, err
 	}
 	if err := input.BlueprintDigest.Validate(); err != nil {
@@ -166,6 +170,7 @@ func AssembleBuildLock(
 		PortableRuntimeLayer: input.PortableRuntimeLayer,
 		RuntimePolicy:        input.RuntimePolicy, RuntimeLayer: input.RuntimeLayer,
 		ValidationRecord: input.ValidationRecord, FinalImage: input.FinalImage,
+		IdentityPolicy: input.IdentityPolicy,
 	}
 	if input.PortableRuntimeLayer != nil {
 		if portableTools == nil {
