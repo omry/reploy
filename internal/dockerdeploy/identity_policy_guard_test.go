@@ -237,52 +237,67 @@ func TestIdentityPolicyGuardV1StagingCleanupRemainsAvailable(t *testing.T) {
 }
 
 func TestIdentityPolicyGuardV1BothSessionRolesStopBeforePreparation(t *testing.T) {
-	for _, role := range []string{"controller", "workload"} {
-		t.Run(role, func(t *testing.T) {
-			mapped := policyGuardFixtureV1(t, false)
-			ordinary, _ := stageProviderBuildRunState(t, false)
-			controller, workload := mapped, ordinary
-			if role == "workload" {
-				controller, workload = ordinary, mapped
-			}
-			before := identityGuardTreeV1(t, mapped)
-			fixture, _ := controlledSessionPlanFixtureV1(t)
-			_, err := runCurrentControlledSessionV1(t.Context(), CurrentControlledSessionRunInputV1{
-				ControllerDeploymentDir: controller, WorkloadDeploymentDir: workload,
-				OutputDir: filepath.Join(t.TempDir(), "not-created"),
-			}, currentControlledSessionRunBackendV1{
-				acquire: deploy.AcquireOperationLock,
-				loadRuntime: func(ctx context.Context, operation *deploy.OperationLock, dir string, runtime StagedProviderBuildRuntimeV1) (currentControlledSessionRuntimeV1, error) {
-					if dir == mapped {
-						return loadCurrentControlledSessionRuntimeV1(ctx, operation, dir, runtime)
+	for _, locked := range []bool{false, true} {
+		for _, role := range []string{"controller", "workload"} {
+			t.Run(role+map[bool]string{true: "/locked-covered", false: "/policy-only"}[locked], func(t *testing.T) {
+				var mapped string
+				if locked {
+					dir, operation, _, current := lockedCoverageFixtureV1(t, true, true)
+					setCoverageFixtureReservationsV1(t, dir, &current)
+					if err := validateStagedIdentityPolicyCoverageV1(t.Context(), operation, dir, current.State, coverageCandidateV1(16)); err != nil {
+						t.Fatal(err)
 					}
-					return currentControlledSessionRuntimeV1{current: fixture.ControllerCurrent, plan: fixture.ControllerRuntime}, nil
-				},
-				privateEnv: func(string) (privateWorkloadEnvironmentV1, error) {
-					t.Fatal("session reached private environment preparation")
-					return privateWorkloadEnvironmentV1{}, nil
-				},
-				prepareController: prepareControlledSessionControllerPackageV1,
-				cleanupController: cleanupControlledSessionControllerPackageV1,
-				prepareOutput:     prepareOneShotOutput,
-				abortOutput:       func(output *oneShotOutputSession) error { return output.abort() },
-				publishOutput:     func(output *oneShotOutputSession) error { return output.publish() },
-				concurrency:       PlanLiveRunConcurrencyV1,
-				newRunID:          deploy.NewLiveRunIDV1, newHandle: controlledsession.NewHandleV1,
-				acquireLease: func(operation *deploy.OperationLock, id string) (*deploy.QueueEntryLeaseV1, error) {
-					return operation.AcquireLiveRunLeaseV1(id)
-				},
-				await: AwaitLiveRunAdmissionWithNoticeV1, plan: PlanControlledSessionV1,
-				run: runControlledSessionWithControllerReservationV1,
+					if err := operation.Unlock(); err != nil {
+						t.Fatal(err)
+					}
+					mapped = dir
+				} else {
+					mapped = policyGuardFixtureV1(t, false)
+				}
+				ordinary, _ := stageProviderBuildRunState(t, false)
+				controller, workload := mapped, ordinary
+				if role == "workload" {
+					controller, workload = ordinary, mapped
+				}
+				before := identityGuardTreeV1(t, mapped)
+				fixture, _ := controlledSessionPlanFixtureV1(t)
+				_, err := runCurrentControlledSessionV1(t.Context(), CurrentControlledSessionRunInputV1{
+					ControllerDeploymentDir: controller, WorkloadDeploymentDir: workload,
+					OutputDir: filepath.Join(t.TempDir(), "not-created"),
+				}, currentControlledSessionRunBackendV1{
+					acquire: deploy.AcquireOperationLock,
+					loadRuntime: func(ctx context.Context, operation *deploy.OperationLock, dir string, runtime StagedProviderBuildRuntimeV1) (currentControlledSessionRuntimeV1, error) {
+						if dir == mapped {
+							return loadCurrentControlledSessionRuntimeV1(ctx, operation, dir, runtime)
+						}
+						return currentControlledSessionRuntimeV1{current: fixture.ControllerCurrent, plan: fixture.ControllerRuntime}, nil
+					},
+					privateEnv: func(string) (privateWorkloadEnvironmentV1, error) {
+						t.Fatal("session reached private environment preparation")
+						return privateWorkloadEnvironmentV1{}, nil
+					},
+					prepareController: prepareControlledSessionControllerPackageV1,
+					cleanupController: cleanupControlledSessionControllerPackageV1,
+					prepareOutput:     prepareOneShotOutput,
+					abortOutput:       func(output *oneShotOutputSession) error { return output.abort() },
+					publishOutput:     func(output *oneShotOutputSession) error { return output.publish() },
+					concurrency:       PlanLiveRunConcurrencyV1,
+					newRunID:          deploy.NewLiveRunIDV1, newHandle: controlledsession.NewHandleV1,
+					acquireLease: func(operation *deploy.OperationLock, id string) (*deploy.QueueEntryLeaseV1, error) {
+						return operation.AcquireLiveRunLeaseV1(id)
+					},
+					await: AwaitLiveRunAdmissionWithNoticeV1, plan: PlanControlledSessionV1,
+					run: runControlledSessionWithControllerReservationV1,
+				})
+				requirePolicyGuardErrorV1(t, err)
+				if !strings.Contains(err.Error(), role+" runtime") {
+					t.Fatalf("wrong session role rejected: %v", err)
+				}
+				if !reflect.DeepEqual(before, identityGuardTreeV1(t, mapped)) {
+					t.Fatal("session changed mapped deployment")
+				}
 			})
-			requirePolicyGuardErrorV1(t, err)
-			if !strings.Contains(err.Error(), role+" runtime") {
-				t.Fatalf("wrong session role rejected: %v", err)
-			}
-			if !reflect.DeepEqual(before, identityGuardTreeV1(t, mapped)) {
-				t.Fatal("session changed mapped deployment")
-			}
-		})
+		}
 	}
 }
 

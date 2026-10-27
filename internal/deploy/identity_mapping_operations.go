@@ -111,16 +111,7 @@ func (ops IdentityMappingOperationsV1) check(ctx context.Context, state StateV1,
 	if state.Deployment != nil && state.IdentityMapping == nil {
 		return identitymapping.Geometry{}, identitymapping.HostIdentity{}, fmt.Errorf("first installed mapping opt-in requires its reviewed destination adapter")
 	}
-	var protected *identitymapping.Geometry
-	if m := state.IdentityMapping; m != nil {
-		if m.Revoked || m.Profile != candidate.Profile {
-			return identitymapping.Geometry{}, identitymapping.HostIdentity{}, fmt.Errorf("mapping is revoked or its retained profile differs")
-		}
-		if len(m.UIDAssignments) != 0 {
-			protected = geometryPointerV1(m.geometry().numeric())
-		}
-	}
-	reserved, err := identitymapping.RetainGeometry(candidate, protected)
+	reserved, err := RetainIdentityMappingGeometryV1(state, candidate)
 	if err != nil {
 		return reserved, identitymapping.HostIdentity{}, err
 	}
@@ -136,7 +127,7 @@ func (ops IdentityMappingOperationsV1) check(ctx context.Context, state StateV1,
 	// history. A never-used candidate may be corrected to a different binding;
 	// it remains reserved until the separate Unused proof permits replacement.
 	if m := state.IdentityMapping; m != nil && m.PendingOperation != nil {
-		old, err := identitymapping.RetainGeometry(m.PendingOperation.Candidate.numeric(), protected)
+		old, err := RetainIdentityMappingGeometryV1(state, m.PendingOperation.Candidate.numeric())
 		if err != nil {
 			return reserved, identity, err
 		}

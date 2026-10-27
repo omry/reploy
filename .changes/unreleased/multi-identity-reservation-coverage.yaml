@@ -1,0 +1,2 @@
+kind: Added
+body: Validate every locked application user and group against retained ID reservations, with generation-bound diagnostics and continued execution inhibition.

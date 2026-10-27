@@ -62,5 +62,8 @@ func configureStagedIdentityMappingV1(ctx context.Context, operation *deploy.Ope
 	if err != nil || candidate == nil {
 		return state, fmt.Errorf("mapping configuration requires a complete declared mapping: %v", err)
 	}
+	if err := validateStagedIdentityPolicyCoverageV1(ctx, operation, dir, state, *candidate); err != nil {
+		return state, err
+	}
 	return (deploy.IdentityMappingOperationsV1{Operation: operation, Evidence: evidence}).Configure(ctx, state, *candidate, operationID)
 }
