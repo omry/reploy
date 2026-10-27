@@ -3,6 +3,7 @@ package blueprint
 import (
 	"fmt"
 
+	"github.com/omry/reploy/internal/runtimeidentity"
 	"gopkg.in/yaml.v3"
 )
 
@@ -109,9 +110,21 @@ func (export *ExecutableExportSyntax) UnmarshalYAML(node *yaml.Node) error {
 
 func (executable *ExecutableSyntax) UnmarshalYAML(node *yaml.Node) error {
 	if _, err := validateSyntaxMapping(node, "executable profile", map[string]bool{
-		"source": true, "binary": true, "order": true, "argv_prefix": true, "argv_suffix": true,
+		"source": true, "binary": true, "role": true, "order": true, "argv_prefix": true, "argv_suffix": true,
 	}); err != nil {
 		return err
+	}
+	for i := 0; i < len(node.Content); i += 2 {
+		if node.Content[i].Value != "role" {
+			continue
+		}
+		role, err := policyYAMLText(node.Content[i+1], "executable profile.role")
+		if err != nil {
+			return err
+		}
+		if err := runtimeidentity.ValidateUserName(role); err != nil {
+			return fmt.Errorf("executable profile.role: %w", err)
+		}
 	}
 	type plain ExecutableSyntax
 	return node.Decode((*plain)(executable))

@@ -26,6 +26,9 @@ func EncodeResolvedDocumentV1(document Document) (ResolvedDocumentV1, error) {
 	if err := document.Environment.Runtime.IdentityPolicy.validate(); err != nil {
 		return "", err
 	}
+	if err := document.Environment.validateIdentityRoleInventory(); err != nil {
+		return "", err
+	}
 	if document.Environment.Runtime.IdentityPolicy != nil && document.Environment.Runtime.User != DefaultRuntimeUser {
 		return "", fmt.Errorf("%s requires the unchanged internal build-account default", identityPolicyPathV1)
 	}

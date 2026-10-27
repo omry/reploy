@@ -170,6 +170,7 @@ const (
 type Executable struct {
 	Source     string
 	Binary     string
+	Role       string `json:",omitempty"`
 	Order      []ArgumentSegment
 	ArgvPrefix []string
 	ArgvSuffix []string

@@ -26,6 +26,25 @@ func policyGuardDocumentV1(t *testing.T, document blueprint.Document) blueprint.
 	document.Environment.Runtime.User = blueprint.DefaultRuntimeUser
 	document.Environment.Runtime.IdentityMapping = nil
 	document.Environment.Runtime.IdentityPolicy = source.Environment.Runtime.IdentityPolicy
+	// The guard fixture's synthetic command must now have a complete profile.
+	if document.Environment.Applications == nil {
+		document.Environment.Applications = map[string]blueprint.Application{}
+	}
+	application := document.Environment.Applications["application"]
+	if application.Packages.Python == nil {
+		application.Packages.Python = &blueprint.PythonComponent{Interpreter: blueprint.CommandRequirement{Command: "python"}}
+	}
+	if application.Executables == nil {
+		application.Executables = map[string]blueprint.Executable{}
+	}
+	application.Executables["main"] = blueprint.Executable{Source: "python", Binary: "main", Role: "app"}
+	document.Environment.Applications["application"] = application
+	for _, application := range document.Environment.Applications {
+		for name, profile := range application.Executables {
+			profile.Role = "app"
+			application.Executables[name] = profile
+		}
+	}
 	return document
 }
 

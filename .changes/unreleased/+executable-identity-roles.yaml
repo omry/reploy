@@ -1,0 +1,2 @@
+kind: Added
+body: Require explicit executable roles in identity policies and preserve role assignments through resolved blueprints.
