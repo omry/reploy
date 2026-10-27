@@ -7,18 +7,23 @@ import (
 )
 
 func (runtime *EnvironmentRuntimeSyntax) UnmarshalYAML(node *yaml.Node) error {
-	if _, err := validateSyntaxMapping(node, "environment runtime", map[string]bool{
-		"user": true, "network": true, "identity_mapping": true,
-	}); err != nil {
+	present, err := validateSyntaxMapping(node, "environment runtime", map[string]bool{
+		"user": true, "network": true, "identity_mapping": true, "identity_policy": true,
+	})
+	if err != nil {
 		return err
 	}
 	for i := 0; i < len(node.Content); i += 2 {
-		if node.Content[i].Value == "identity_mapping" && node.Content[i+1].Kind != yaml.MappingNode {
-			return fmt.Errorf("%s must be a mapping", identityMappingPathV1)
+		if (node.Content[i].Value == "identity_mapping" || node.Content[i].Value == "identity_policy") && node.Content[i+1].Kind != yaml.MappingNode {
+			return fmt.Errorf("environment.runtime.%s must be a mapping", node.Content[i].Value)
 		}
 	}
 	type plain EnvironmentRuntimeSyntax
-	return node.Decode((*plain)(runtime))
+	if err := node.Decode((*plain)(runtime)); err != nil {
+		return err
+	}
+	runtime.UserFieldPresent = present["user"]
+	return nil
 }
 
 func (network *RuntimeNetworkSyntax) UnmarshalYAML(node *yaml.Node) error {

@@ -20,6 +20,12 @@ var builtInControlOperations = map[string]bool{
 const DefaultRuntimeUser = "reploy"
 
 func Resolve(source Syntax) (Document, error) {
+	if err := source.Environment.Runtime.IdentityPolicy.validate(); err != nil {
+		return Document{}, err
+	}
+	if source.Environment.Runtime.IdentityPolicy != nil && (source.Environment.Runtime.UserFieldPresent || source.Environment.Runtime.User != "") {
+		return Document{}, fmt.Errorf("%s conflicts with an explicit environment.runtime.user", identityPolicyPathV1)
+	}
 	compatibility, err := ParseCompatibility(source.Blueprint.Compatibility.Platforms)
 	if err != nil {
 		return Document{}, err
@@ -71,7 +77,7 @@ func Resolve(source Syntax) (Document, error) {
 			Applications:    map[string]Application{},
 			Components:      map[string]Component{},
 			AllowConcurrent: allowConcurrent,
-			Runtime:         EnvironmentRuntime{User: runtimeUser, Network: runtimeNetwork, IdentityMapping: mapping},
+			Runtime:         EnvironmentRuntime{User: runtimeUser, Network: runtimeNetwork, IdentityMapping: mapping, IdentityPolicy: source.Environment.Runtime.IdentityPolicy},
 			Terminal:        Terminal{ColorEnv: strings.TrimSpace(source.Environment.Terminal.ColorEnv)},
 			Install:         resolveInstallSyntax(source.Environment.Install, variables),
 			Mounts:          map[string]EnvironmentMount{},

@@ -29,6 +29,9 @@ type CurrentBuildReuseInput struct {
 // reads no external state; malformed current state or candidate inputs remain
 // errors. Progress, when supplied, explains the rejected reuse boundary.
 func CurrentBuildMatches(current CurrentBuild, input CurrentBuildReuseInput) (bool, error) {
+	if err := requireIdentityPolicyBuildEvidenceV1(input.Document); err != nil {
+		return false, err
+	}
 	mismatch := func(reason string) (bool, error) {
 		writeProviderBuildProgress(input.Progress, "cannot reuse current build: %s", reason)
 		return false, nil
@@ -202,6 +205,9 @@ func rebindCurrentBuildLockV1(
 	lock deploy.BuildLockV1,
 	document blueprint.Document,
 ) (deploy.BuildLockV1, error) {
+	if err := requireIdentityPolicyBuildEvidenceV1(document); err != nil {
+		return deploy.BuildLockV1{}, err
+	}
 	blueprintPayload, err := blueprint.EncodeResolvedDocumentV1(document)
 	if err != nil {
 		return deploy.BuildLockV1{}, err

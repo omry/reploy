@@ -1,0 +1,2 @@
+kind: Added
+body: Accept portable users, groups and roles in identity_policy declarations, including shorthand users and same-name primary-group defaults. Staging preserves this intent. Execution and policy-bearing build completion or reuse remain unavailable pending runtime admission and immutable-image evidence.

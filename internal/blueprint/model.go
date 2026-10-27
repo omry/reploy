@@ -46,6 +46,7 @@ type EnvironmentRuntime struct {
 	User            string
 	Network         RuntimeNetwork
 	IdentityMapping *IdentityMappingV1 `json:"IdentityMapping,omitempty"`
+	IdentityPolicy  *IdentityPolicyV1  `json:"IdentityPolicy,omitempty"`
 }
 
 type NetworkAccess string

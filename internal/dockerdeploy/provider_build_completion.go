@@ -98,6 +98,9 @@ func completeProviderBuild(
 	if err := ctx.Err(); err != nil {
 		return ProviderBuildCompletionResult{}, err
 	}
+	if err := requireIdentityPolicyBuildEvidenceV1(input.Document); err != nil {
+		return ProviderBuildCompletionResult{}, err
+	}
 	if operation == nil {
 		return ProviderBuildCompletionResult{}, fmt.Errorf("complete provider build requires an operation lock")
 	}
