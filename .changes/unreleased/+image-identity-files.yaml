@@ -1,0 +1,2 @@
+kind: Added
+body: Verify bounded image account-file relationships against blueprint identity policy and encode redacted immutable-image evidence; policy-bearing execution remains inhibited.
