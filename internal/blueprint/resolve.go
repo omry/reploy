@@ -20,7 +20,7 @@ var builtInControlOperations = map[string]bool{
 const DefaultRuntimeUser = "reploy"
 
 func Resolve(source Syntax) (Document, error) {
-	if err := source.Environment.Runtime.IdentityPolicy.validate(); err != nil {
+	if err := source.Environment.Runtime.IdentityPolicy.Validate(); err != nil {
 		return Document{}, err
 	}
 	if source.Environment.Runtime.IdentityPolicy != nil && (source.Environment.Runtime.UserFieldPresent || source.Environment.Runtime.User != "") {
