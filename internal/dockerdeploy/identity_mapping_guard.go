@@ -14,6 +14,9 @@ func unmappedRuntimeDocumentV1(state deploy.StateV1) (blueprint.Document, error)
 	if err != nil {
 		return blueprint.Document{}, err
 	}
+	if document.Environment.Runtime.IdentityPolicy != nil {
+		return blueprint.Document{}, fmt.Errorf("environment %q: environment.runtime.identity_policy requires multi-identity runtime admission, which is not yet available; staging remains available", document.Environment.ID)
+	}
 	if state.IdentityMapping != nil || document.Environment.Runtime.IdentityMapping != nil {
 		return blueprint.Document{}, fmt.Errorf("environment %q: environment.runtime.identity_mapping requires multi-identity runtime admission, which is not yet available; stage and explicit build remain available", document.Environment.ID)
 	}
@@ -38,4 +41,13 @@ func requireUnmappedControlDeploymentV1(operation *deploy.OperationLock, kind de
 		return operation.RequireNoRetainedIdentityV1()
 	}
 	return requireUnmappedDeploymentV1(operation)
+}
+
+// D4 replaces this temporary rejection with verified final-image evidence in
+// the same build path. A portable declaration alone cannot produce a lock.
+func requireIdentityPolicyBuildEvidenceV1(document blueprint.Document) error {
+	if document.Environment.Runtime.IdentityPolicy != nil {
+		return fmt.Errorf("environment.runtime.identity_policy build completion and reuse require immutable-image identity evidence, which is not yet available")
+	}
+	return nil
 }

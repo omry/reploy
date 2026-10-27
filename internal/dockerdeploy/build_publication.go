@@ -66,6 +66,9 @@ func publishBuild(
 	if err := ctx.Err(); err != nil {
 		return deploy.StateV1{}, err
 	}
+	if err := requireIdentityPolicyBuildEvidenceV1(input.Document); err != nil {
+		return deploy.StateV1{}, err
+	}
 	if operation == nil {
 		return deploy.StateV1{}, fmt.Errorf("publish build requires an operation lock")
 	}
