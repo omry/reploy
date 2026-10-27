@@ -13,14 +13,17 @@ func resolveSyntaxVariables(source Syntax, variables map[string]any) (Syntax, er
 	source = cloneSyntaxValue(reflect.ValueOf(source)).Interface().(Syntax)
 	saved := source.Environment.Vars
 	mapping := source.Environment.Runtime.IdentityMapping
+	policy := source.Environment.Runtime.IdentityPolicy
 	source.Environment.Vars = nil
 	source.Environment.Runtime.IdentityMapping = nil
+	source.Environment.Runtime.IdentityPolicy = nil
 	value := reflect.ValueOf(&source).Elem()
 	if err := resolveSyntaxVariableValue(value, variables, "blueprint"); err != nil {
 		return Syntax{}, err
 	}
 	source.Environment.Vars = saved
 	source.Environment.Runtime.IdentityMapping = mapping
+	source.Environment.Runtime.IdentityPolicy = policy
 	return source, nil
 }
 

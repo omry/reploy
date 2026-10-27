@@ -577,6 +577,19 @@ func publishValidatedBuild(
 	if err := operation.RequireWritable(); err != nil {
 		return deploy.ValidatedBuildV1{}, err
 	}
+	state, found, err := operation.ReadStateV1()
+	if err != nil {
+		return deploy.ValidatedBuildV1{}, err
+	}
+	if found {
+		document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+		if err != nil {
+			return deploy.ValidatedBuildV1{}, err
+		}
+		if err := requireIdentityPolicyBuildEvidenceV1(document); err != nil {
+			return deploy.ValidatedBuildV1{}, err
+		}
+	}
 	if err := validatePublicationDeployment(operation, store, deploymentDir); err != nil {
 		return deploy.ValidatedBuildV1{}, err
 	}

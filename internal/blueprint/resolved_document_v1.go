@@ -23,6 +23,12 @@ type resolvedDocumentEnvelopeV1 struct {
 }
 
 func EncodeResolvedDocumentV1(document Document) (ResolvedDocumentV1, error) {
+	if err := document.Environment.Runtime.IdentityPolicy.validate(); err != nil {
+		return "", err
+	}
+	if document.Environment.Runtime.IdentityPolicy != nil && document.Environment.Runtime.User != DefaultRuntimeUser {
+		return "", fmt.Errorf("%s requires the unchanged internal build-account default", identityPolicyPathV1)
+	}
 	if err := document.Environment.Runtime.IdentityMapping.validate(); err != nil {
 		return "", err
 	}
