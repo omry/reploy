@@ -22,6 +22,7 @@ import (
 
 type healthArchiveMember struct {
 	name       string
+	linkname   string
 	content    []byte
 	kind       byte
 	size       int64
@@ -42,7 +43,7 @@ func healthArchive(t *testing.T, members ...healthArchiveMember) []byte {
 		if member.size != 0 {
 			size = member.size
 		}
-		header := &tar.Header{Name: member.name, Mode: 0600, Size: size, Typeflag: kind, Format: member.format, PAXRecords: member.paxRecords}
+		header := &tar.Header{Name: member.name, Linkname: member.linkname, Mode: 0600, Size: size, Typeflag: kind, Format: member.format, PAXRecords: member.paxRecords}
 		if err := writer.WriteHeader(header); err != nil {
 			t.Fatal(err)
 		}
