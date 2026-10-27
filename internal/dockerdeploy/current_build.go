@@ -107,6 +107,9 @@ func validateCurrentBuild(
 	if err := validateGenerationBuildLock(generation, lock, registry.ValidateRequirementProfileV1); err != nil {
 		return CurrentBuild{}, false, fmt.Errorf("current build: %w", err)
 	}
+	if err := validateSelectedIdentityPolicyV1(state.Blueprint, lock); err != nil {
+		return CurrentBuild{}, false, err
+	}
 	if lock.PortableRuntimeLayer != nil {
 		if _, err := ProjectEnvironmentOwnedReferencesV1(generation, lock, environment, deploymentDir); err != nil {
 			return CurrentBuild{}, false, err

@@ -104,6 +104,9 @@ func verifyLoadedCurrentBuildV1(
 	); err != nil {
 		return CurrentBuildVerificationResultV1{}, fmt.Errorf("verify current build lock: %w", err)
 	}
+	if err := validateSelectedIdentityPolicyV1(input.Current.State.Blueprint, input.Current.Lock); err != nil {
+		return CurrentBuildVerificationResultV1{}, err
+	}
 	document, err := blueprint.DecodeResolvedDocumentV1(input.Current.State.Blueprint)
 	if err != nil {
 		return CurrentBuildVerificationResultV1{}, fmt.Errorf("verify current build blueprint: %w", err)

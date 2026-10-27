@@ -65,7 +65,7 @@ func TestExecuteLockedProviderBuildV1RepublishesRuntimeOnlyDocumentUpdate(t *tes
 	}
 	document.Environment.ControlScript = "updated-control"
 	current.State.Blueprint = testResolvedBlueprintV1(t, document)
-	publicationLock, err := rebindCurrentBuildLockV1(reusableLock, document)
+	publicationLock, err := rebindCurrentBuildLockV1(CurrentBuild{Lock: reusableLock}, document)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestExecuteLockedProviderBuildV1PreservesReusedPortableToolProvenance(t *te
 	input, _, _, _, _ := providerBuildPreparationFixture(t)
 	currentLock, _ := portableToolReuseBuildLocksV1(t)
 	document, _ := testSelectedPlatformDocumentV1(t)
-	publicationLock, err := rebindCurrentBuildLockV1(currentLock, document)
+	publicationLock, err := rebindCurrentBuildLockV1(CurrentBuild{Lock: currentLock}, document)
 	if err != nil {
 		t.Fatal(err)
 	}

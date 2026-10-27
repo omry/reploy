@@ -66,7 +66,7 @@ func publishBuild(
 	if err := ctx.Err(); err != nil {
 		return deploy.StateV1{}, err
 	}
-	if err := requireIdentityPolicyBuildEvidenceV1(input.Document); err != nil {
+	if err := validateDocumentIdentityPolicyV1(input.Document, input.Lock); err != nil {
 		return deploy.StateV1{}, err
 	}
 	if operation == nil {
