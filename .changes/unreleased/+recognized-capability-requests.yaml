@@ -1,0 +1,2 @@
+kind: Changed
+body: Validate blueprint identity-role capability requests against a pinned Linux name catalog; requests remain empty by default and do not enable execution.

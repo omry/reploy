@@ -249,8 +249,6 @@ func (policy *IdentityPolicyV1) validate() error {
 			return fail("user " + name + ": " + err.Error())
 		}
 	}
-	// D2 adds the pinned recognized-name catalog. These requests remain inert
-	// behind the runtime and evidence-free build guards in this slice.
 	for name, role := range policy.Roles {
 		if runtimeidentity.ValidateUserName(name) != nil {
 			return fail("invalid role name")
@@ -262,8 +260,8 @@ func (policy *IdentityPolicyV1) validate() error {
 			return fail("role " + name + " capabilities must be a sorted array")
 		}
 		for i, capability := range role.Capabilities {
-			if !strings.HasPrefix(capability, "CAP_") || len(capability) == 4 || strings.Trim(capability, "ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789") != "" || i > 0 && capability == role.Capabilities[i-1] {
-				return fail("role " + name + " capabilities must be unique literal CAP_ names")
+			if !linuxCapabilityNameV1(capability) || i > 0 && capability == role.Capabilities[i-1] {
+				return fail("role " + name + " capabilities must be unique recognized literal Linux CAP_ names")
 			}
 		}
 	}
