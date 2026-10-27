@@ -23,7 +23,7 @@ type resolvedDocumentEnvelopeV1 struct {
 }
 
 func EncodeResolvedDocumentV1(document Document) (ResolvedDocumentV1, error) {
-	if err := document.Environment.Runtime.IdentityPolicy.validate(); err != nil {
+	if err := document.Environment.Runtime.IdentityPolicy.Validate(); err != nil {
 		return "", err
 	}
 	if err := document.Environment.validateIdentityRoleInventory(); err != nil {

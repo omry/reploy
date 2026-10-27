@@ -190,15 +190,15 @@ func (policy *IdentityPolicyV1) UnmarshalYAML(node *yaml.Node) error {
 		}
 		result.Roles[name] = IdentityPolicyRoleV1{User: user, Capabilities: caps}
 	}
-	if err := result.validate(); err != nil {
+	if err := result.Validate(); err != nil {
 		return err
 	}
 	*policy = result
 	return nil
 }
 
-// validate also protects programmatic resolution and persisted canonical JSON.
-func (policy *IdentityPolicyV1) validate() error {
+// Validate protects resolution, persisted policy and image-evidence boundaries.
+func (policy *IdentityPolicyV1) Validate() error {
 	if policy == nil {
 		return nil
 	}
