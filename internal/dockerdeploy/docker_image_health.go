@@ -116,6 +116,20 @@ func restoreDockerInspectionHealthchecks(ctx context.Context, endpoint string, a
 }
 
 func exportDockerImageHealthcheck(ctx context.Context, endpoint, imageID string) (*dockerHealthcheck, error) {
+	var actual *dockerHealthcheck
+	err := streamDockerImageArchiveV1(ctx, endpoint, imageID, func(ctx context.Context, input io.Reader) error {
+		var err error
+		actual, err = readDockerImageHealthcheckArchive(ctx, input, imageID)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return actual, nil
+}
+
+// Both consumers require the same pinned export, complete stream and successful exit.
+func streamDockerImageArchiveV1(ctx context.Context, endpoint, imageID string, read func(context.Context, io.Reader) error) error {
 	ctx, cancel := context.WithTimeout(ctx, imageHealthExportTimeout)
 	defer cancel()
 	spec := pinDockerEndpointV1(CommandSpec{Name: "docker", Args: []string{"image", "save", imageID}, Env: []string{"DOCKER_BUILDKIT=1"}}, endpoint)
@@ -125,12 +139,12 @@ func exportDockerImageHealthcheck(ctx context.Context, endpoint, imageID string)
 	cmd.Stderr = &stderr
 	stream, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start image export: %w", err)
+		return fmt.Errorf("start image export: %w", err)
 	}
-	actual, parseErr := readDockerImageHealthcheckArchive(ctx, stream, imageID)
+	parseErr := read(ctx, stream)
 	if parseErr != nil {
 		cancel()
 	}
@@ -138,15 +152,15 @@ func exportDockerImageHealthcheck(ctx context.Context, endpoint, imageID string)
 	// On errors, cancellation kills the CLI and Wait reaps it and closes pipes.
 	waitErr := cmd.Wait()
 	if parseErr != nil {
-		return nil, parseErr
+		return parseErr
 	}
 	if waitErr != nil {
-		return nil, fmt.Errorf("image export failed: %w: %s", waitErr, strings.TrimSpace(stderr.String()))
+		return fmt.Errorf("image export failed: %w: %s", waitErr, strings.TrimSpace(stderr.String()))
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return err
 	}
-	return actual, nil
+	return nil
 }
 
 type boundedImageHealthStderr struct{ buffer bytes.Buffer }
@@ -167,6 +181,39 @@ func (b *boundedImageHealthStderr) Len() int { return b.buffer.Len() }
 func (b *boundedImageHealthStderr) String() string { return b.buffer.String() }
 
 func readDockerImageHealthcheckArchive(ctx context.Context, input io.Reader, imageID string) (*dockerHealthcheck, error) {
+	archive, err := readDockerImageArchiveV1(ctx, input, imageID, nil)
+	if err != nil {
+		return nil, err
+	}
+	config := archive.config
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(config, &document); err != nil || document == nil {
+		return nil, fmt.Errorf("image config archive config is not an object")
+	}
+	var actual map[string]json.RawMessage
+	if err := json.Unmarshal(document["config"], &actual); err != nil || actual == nil {
+		return nil, fmt.Errorf("image config archive lacks actual config object")
+	}
+	if err := rejectHealthFieldAliases(actual, []string{"Healthcheck"}); err != nil {
+		return nil, err
+	}
+	var fields map[string]json.RawMessage
+	if raw := actual["Healthcheck"]; len(raw) != 0 && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+			return nil, fmt.Errorf("actual image healthcheck is not an object")
+		}
+		if err := rejectHealthFieldAliases(fields, []string{"Test", "Interval", "Timeout", "StartPeriod", "StartInterval", "Retries"}); err != nil {
+			return nil, err
+		}
+	}
+	var health *dockerHealthcheck
+	if err := json.Unmarshal(valueOrNull(actual["Healthcheck"]), &health); err != nil {
+		return nil, fmt.Errorf("decode actual image healthcheck: %w", err)
+	}
+	return health, nil
+}
+
+func readDockerImageArchiveV1(ctx context.Context, input io.Reader, imageID string, layers *imageIdentityLayersV1) (*dockerImageArchiveV1, error) {
 	if err := canonical.Digest(imageID).Validate(); err != nil {
 		return nil, err
 	}
@@ -223,37 +270,18 @@ func readDockerImageHealthcheckArchive(ctx context.Context, input io.Reader, ima
 			if err != nil {
 				return nil, fmt.Errorf("read image config metadata: %w", err)
 			}
+		} else if layers != nil && header.Typeflag == tar.TypeReg && strings.HasSuffix(name, ".tar") {
+			if err := layers.add(ctx, name, reader); err != nil {
+				return nil, err
+			}
 		} else {
 			if _, err := io.Copy(io.Discard, reader); err != nil {
 				return nil, fmt.Errorf("read image config archive member: %w", err)
 			}
 		}
 	}
-	// A tar terminator alone does not prove command success or absence of trailing
-	// duplicate evidence. Require any remaining bytes to be zero archive padding.
-	buffer := make([]byte, 32<<10)
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		n, err := limited.Read(buffer)
-		for _, value := range buffer[:n] {
-			if value != 0 {
-				return nil, fmt.Errorf("image config archive contains data after its terminator")
-			}
-		}
-		if limited.N <= 0 {
-			return nil, fmt.Errorf("image config archive exceeds resource limits")
-		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-	}
-	if tracked.count < 1024 || tracked.count%512 != 0 || !bytes.Equal(tracked.tail, make([]byte, 1024)) {
-		return nil, fmt.Errorf("image config archive is truncated or lacks complete terminator")
+	if err := finishImageArchiveV1(ctx, limited, tracked); err != nil {
+		return nil, err
 	}
 	if len(manifest) == 0 || len(config) == 0 {
 		return nil, fmt.Errorf("image config archive lacks manifest or requested config")
@@ -270,31 +298,39 @@ func readDockerImageHealthcheckArchive(ctx context.Context, input io.Reader, ima
 	if err := rejectDuplicateJSONKeys(config); err != nil {
 		return nil, err
 	}
-	var document map[string]json.RawMessage
-	if err := json.Unmarshal(config, &document); err != nil || document == nil {
-		return nil, fmt.Errorf("image config archive config is not an object")
-	}
-	var actual map[string]json.RawMessage
-	if err := json.Unmarshal(document["config"], &actual); err != nil || actual == nil {
-		return nil, fmt.Errorf("image config archive lacks actual config object")
-	}
-	if err := rejectHealthFieldAliases(actual, []string{"Healthcheck"}); err != nil {
-		return nil, err
-	}
-	var fields map[string]json.RawMessage
-	if raw := actual["Healthcheck"]; len(raw) != 0 && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
-			return nil, fmt.Errorf("actual image healthcheck is not an object")
+	return &dockerImageArchiveV1{manifest: manifest, config: config}, nil
+}
+
+type dockerImageArchiveV1 struct{ manifest, config []byte }
+
+func finishImageArchiveV1(ctx context.Context, limited *io.LimitedReader, tracked *imageHealthArchiveReader) error {
+	// A tar terminator alone does not prove command success or absence of trailing
+	// duplicate evidence. Require any remaining bytes to be zero archive padding.
+	buffer := make([]byte, 32<<10)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		if err := rejectHealthFieldAliases(fields, []string{"Test", "Interval", "Timeout", "StartPeriod", "StartInterval", "Retries"}); err != nil {
-			return nil, err
+		n, err := limited.Read(buffer)
+		for _, value := range buffer[:n] {
+			if value != 0 {
+				return fmt.Errorf("image config archive contains data after its terminator")
+			}
+		}
+		if limited.N <= 0 {
+			return fmt.Errorf("image config archive exceeds resource limits")
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
 		}
 	}
-	var health *dockerHealthcheck
-	if err := json.Unmarshal(valueOrNull(actual["Healthcheck"]), &health); err != nil {
-		return nil, fmt.Errorf("decode actual image healthcheck: %w", err)
+	if tracked.count < 1024 || tracked.count%512 != 0 || !bytes.Equal(tracked.tail, make([]byte, 1024)) {
+		return fmt.Errorf("image config archive is truncated or lacks complete terminator")
 	}
-	return health, nil
+	return nil
 }
 
 func validateImageHealthManifest(data []byte, expectedName string) error {
