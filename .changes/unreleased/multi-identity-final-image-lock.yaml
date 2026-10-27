@@ -1,0 +1,2 @@
+kind: Added
+body: Bind portable identity policies to verified account evidence from the finalized build image. Reject stale policy evidence and changed executable-role bindings during build reuse. Public multi-identity execution remains unavailable pending runtime admission.

@@ -29,7 +29,7 @@ type CurrentBuildReuseInput struct {
 // reads no external state; malformed current state or candidate inputs remain
 // errors. Progress, when supplied, explains the rejected reuse boundary.
 func CurrentBuildMatches(current CurrentBuild, input CurrentBuildReuseInput) (bool, error) {
-	if err := requireIdentityPolicyBuildEvidenceV1(input.Document); err != nil {
+	if err := validateSelectedIdentityPolicyV1(current.State.Blueprint, current.Lock); err != nil {
 		return false, err
 	}
 	mismatch := func(reason string) (bool, error) {
@@ -202,11 +202,40 @@ func portableToolSelectionsMatchCurrentBuildV1(
 // policy, and portable-tool provenance of a build that already passed
 // CurrentBuildMatches.
 func rebindCurrentBuildLockV1(
-	lock deploy.BuildLockV1,
+	current CurrentBuild,
 	document blueprint.Document,
 ) (deploy.BuildLockV1, error) {
-	if err := requireIdentityPolicyBuildEvidenceV1(document); err != nil {
-		return deploy.BuildLockV1{}, err
+	lock := current.Lock
+	if document.Environment.Runtime.IdentityPolicy != nil || lock.IdentityPolicy != nil {
+		if err := validateSelectedIdentityPolicyV1(current.State.Blueprint, lock); err != nil {
+			return deploy.BuildLockV1{}, err
+		}
+		// Validate against the candidate digest only after authenticating the old
+		// selected blueprint. Rebinding cannot manufacture new image evidence.
+		candidate := lock
+		var err error
+		candidate.BlueprintDigest, err = blueprint.DocumentDigestV1(document)
+		if err != nil {
+			return deploy.BuildLockV1{}, err
+		}
+		if err := validateDocumentIdentityPolicyV1(document, candidate); err != nil {
+			return deploy.BuildLockV1{}, err
+		}
+		previous, err := blueprint.DecodeResolvedDocumentV1(current.State.Blueprint)
+		if err != nil {
+			return deploy.BuildLockV1{}, err
+		}
+		before, err := identityPolicyInventoryV1(previous)
+		if err != nil {
+			return deploy.BuildLockV1{}, err
+		}
+		after, err := identityPolicyInventoryV1(document)
+		if err != nil {
+			return deploy.BuildLockV1{}, err
+		}
+		if !bytes.Equal(before, after) {
+			return deploy.BuildLockV1{}, fmt.Errorf("identity policy executable-role inventory changed; fresh image evidence required")
+		}
 	}
 	blueprintPayload, err := blueprint.EncodeResolvedDocumentV1(document)
 	if err != nil {

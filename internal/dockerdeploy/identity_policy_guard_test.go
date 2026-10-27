@@ -171,7 +171,7 @@ func TestIdentityPolicyGuardV1CompletionStopsBeforeFinalizeAssembleAndPublish(t 
 			},
 		}
 		_, err := completeProviderBuild(t.Context(), operation, store, input, backend)
-		requirePolicyGuardErrorV1(t, err)
+		requireIdentityEvidenceErrorV1(t, err)
 		if !reflect.DeepEqual(before, identityGuardTreeV1(t, input.DeploymentDir)) {
 			t.Fatal("completion changed deployment files")
 		}
@@ -211,19 +211,18 @@ func TestIdentityPolicyGuardV1DirectPublicationAndReuseHaveNoEffects(t *testing.
 			return nil
 		},
 	})
-	requirePolicyGuardErrorV1(t, err)
-	// Validated publication has no document argument. It must check its selected state.
+	requireIdentityEvidenceErrorV1(t, err)
+	// Validated publication authenticates its selected blueprint before effects.
 	_, err = publishValidatedBuild(t.Context(), operation, providerstore.Store{}, "demo", dir, deploy.BuildLockV1{}, ValidatedBuildInputsV1{}, newValidatedPublicationBackendV1())
-	requirePolicyGuardErrorV1(t, err)
+	requireIdentityEvidenceErrorV1(t, err)
 	current, input := currentBuildReuseFixture(t)
 	input.Document = policyGuardDocumentV1(t, input.Document)
 	match, err := CurrentBuildMatches(current, input)
-	requirePolicyGuardErrorV1(t, err)
-	if match {
+	if err != nil || match {
 		t.Fatal("reused policy without evidence")
 	}
-	_, err = rebindCurrentBuildLockV1(current.Lock, input.Document)
-	requirePolicyGuardErrorV1(t, err)
+	_, err = rebindCurrentBuildLockV1(current, input.Document)
+	requireIdentityEvidenceErrorV1(t, err)
 	if !reflect.DeepEqual(before, identityGuardTreeV1(t, dir)) {
 		t.Fatal("publication/reuse changed deployment files")
 	}
@@ -324,5 +323,12 @@ func TestIdentityPolicyGuardV1AllControlModesRejectBeforeQueueOrCleanup(t *testi
 				t.Fatal("control mode changed state")
 			}
 		})
+	}
+}
+
+func requireIdentityEvidenceErrorV1(t *testing.T, err error) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), "identity") {
+		t.Fatalf("expected missing or mismatched image identity evidence, got %v", err)
 	}
 }
