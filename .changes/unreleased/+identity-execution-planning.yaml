@@ -1,0 +1,2 @@
+kind: Added
+body: Add internal execution-map planning that preserves ID reservations and separates active identities from prior admission. Public mapped execution remains inhibited.
