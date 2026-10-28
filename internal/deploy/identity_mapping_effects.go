@@ -10,7 +10,8 @@ import (
 
 // ObserveEffects checks the trusted caller's exact pending operation. It changes
 // no state and grants no payload permission. BeginEffects must already be durable.
-// Active geometry is the selected candidate, never the retained reservation union.
+// Configure requires the full candidate; native-execute requires its freshly
+// checked stored active projection. Neither uses the retained reservation union.
 func (ops IdentityMappingOperationsV1) ObserveEffects(ctx context.Context, expected StateV1, active identitymapping.Geometry, operationID string) (StateV1, error) {
 	if err := ops.Operation.RequireHeld(); err != nil {
 		return StateV1{}, err
@@ -25,7 +26,11 @@ func (ops IdentityMappingOperationsV1) ObserveEffects(ctx context.Context, expec
 		return StateV1{}, fmt.Errorf("mapped create requires its recorded effects-pending operation")
 	}
 	canonical, err := identitymapping.ValidateGeometry(active)
-	if err != nil || !reflect.DeepEqual(canonical, m.PendingOperation.Candidate.numeric()) {
+	wanted := m.PendingOperation.Candidate.numeric()
+	if m.PendingOperation.Kind == "native-execute" && m.PendingOperation.Native != nil {
+		wanted = m.PendingOperation.Native.Active.numeric()
+	}
+	if err != nil || !reflect.DeepEqual(canonical, wanted) {
 		return StateV1{}, fmt.Errorf("mapped create active geometry differs from its pending candidate: %v", err)
 	}
 	if err := ops.checkPending(ctx, state, operationID); err != nil {

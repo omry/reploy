@@ -12,34 +12,42 @@ import (
 )
 
 const IdentityMappingStateSchemaV1 = "identity-mapping-v1"
+const IdentityMappingStateSchemaV2 = "identity-mapping-v2"
+const IdentityMappingNativeProcessModelV1 = "native-master-v1"
 
-// IdentityMappingStateV1 is deployment-local retained authority, not execution
-// admission. InstallationID identifies the mapping owner across uninstall.
+// IdentityMappingStateV1 holds versioned deployment-local mapping authority.
+// Protected assignments alone are not native admission; v2 records it separately.
+// InstallationID identifies the mapping owner across uninstall.
 // InstallationBinding identifies only its currently installed service.
 type IdentityMappingStateV1 struct {
-	Schema              string                      `json:"schema"`
-	InstallationID      string                      `json:"installation_id"`
-	OwnerDir            string                      `json:"owner_dir"`
-	InstallationBinding *string                     `json:"installation_binding"`
-	Revision            string                      `json:"revision"`
-	OperatorUID         string                      `json:"operator_uid"`
-	OperatorGID         string                      `json:"operator_gid"`
-	Profile             string                      `json:"profile"`
-	UIDAssignments      []IdentityMappingIntervalV1 `json:"uid_assignments"`
-	GIDAssignments      []IdentityMappingIntervalV1 `json:"gid_assignments"`
-	DormantUIDs         []IdentityMappingIntervalV1 `json:"dormant_uids"`
-	DormantGIDs         []IdentityMappingIntervalV1 `json:"dormant_gids"`
-	Supervisor          *string                     `json:"supervisor"`
-	Engine              *string                     `json:"engine"`
-	AdmittedGeneration  *EnvironmentGenerationState `json:"admitted_generation"`
-	RetainedStorage     []string                    `json:"retained_storage"`
-	Revoked             bool                        `json:"revoked"`
-	PendingOperation    *IdentityMappingOperationV1 `json:"pending_operation"`
+	Schema              string                       `json:"schema"`
+	InstallationID      string                       `json:"installation_id"`
+	OwnerDir            string                       `json:"owner_dir"`
+	InstallationBinding *string                      `json:"installation_binding"`
+	Revision            string                       `json:"revision"`
+	OperatorUID         string                       `json:"operator_uid"`
+	OperatorGID         string                       `json:"operator_gid"`
+	Profile             string                       `json:"profile"`
+	UIDAssignments      []IdentityMappingIntervalV1  `json:"uid_assignments"`
+	GIDAssignments      []IdentityMappingIntervalV1  `json:"gid_assignments"`
+	DormantUIDs         []IdentityMappingIntervalV1  `json:"dormant_uids"`
+	DormantGIDs         []IdentityMappingIntervalV1  `json:"dormant_gids"`
+	Supervisor          *string                      `json:"supervisor"`
+	Engine              *string                      `json:"engine"`
+	AdmittedGeneration  *EnvironmentGenerationState  `json:"admitted_generation"`
+	RetainedStorage     []string                     `json:"retained_storage"`
+	Revoked             bool                         `json:"revoked"`
+	PendingOperation    *IdentityMappingOperationV1  `json:"pending_operation"`
+	ProcessModel        string                       `json:"process_model,omitempty"`
+	AcceptedUIDs        *[]IdentityMappingIntervalV1 `json:"accepted_uids,omitempty"`
+	AcceptedGIDs        *[]IdentityMappingIntervalV1 `json:"accepted_gids,omitempty"`
+	NativeProcess       *string                      `json:"native_process,omitempty"`
 }
 
 // IdentityMappingOperationV1 retains an inhibited candidate separately from
-// protected assignments. A pending candidate is reserved, never admitted.
-// B5 owns operation transitions; later effect owners must verify exact handles.
+// protected assignments. Intent and effects-pending reserve without admission;
+// a native release-attempted operation retains its committed admission attempt.
+// Trusted effect owners must verify exact handles for each phase.
 type IdentityMappingOperationV1 struct {
 	OperationID        string                      `json:"operation_id"`
 	Kind               string                      `json:"kind"`
@@ -50,6 +58,7 @@ type IdentityMappingOperationV1 struct {
 	OwnedObjects       []string                    `json:"owned_objects"`
 	Phase              string                      `json:"phase"`
 	Inhibited          bool                        `json:"inhibited"`
+	Native             *NativeIdentityOperationV1  `json:"native,omitempty"`
 }
 
 func validateIdentityMappingStateV1(state StateV1) error {
@@ -57,7 +66,7 @@ func validateIdentityMappingStateV1(state StateV1) error {
 	if m == nil {
 		return nil
 	}
-	if m.Schema != IdentityMappingStateSchemaV1 || !safeRecoveryIdentity(m.InstallationID) || !validMappingDecimalV1(m.Revision, 64, true) {
+	if (m.Schema != IdentityMappingStateSchemaV1 && m.Schema != IdentityMappingStateSchemaV2) || !safeRecoveryIdentity(m.InstallationID) || !validMappingDecimalV1(m.Revision, 64, true) {
 		return fmt.Errorf("identity mapping requires its schema, stable owner ID and positive revision")
 	}
 	if !filepath.IsAbs(m.OwnerDir) || filepath.Clean(m.OwnerDir) != m.OwnerDir || !safeRecoveryIdentity(m.OwnerDir) {
@@ -96,7 +105,7 @@ func validateIdentityMappingStateV1(state StateV1) error {
 		if err := ValidateEnvironmentGenerationState(*m.AdmittedGeneration); err != nil {
 			return fmt.Errorf("identity mapping admitted generation: %w", err)
 		}
-		if len(m.UIDAssignments) == 0 || m.Supervisor == nil || m.Engine == nil {
+		if len(m.UIDAssignments) == 0 || m.Schema == IdentityMappingStateSchemaV1 && m.Supervisor == nil || m.Engine == nil {
 			return fmt.Errorf("identity mapping admission requires retained assignments and bindings")
 		}
 	}
@@ -114,6 +123,12 @@ func validateIdentityMappingStateV1(state StateV1) error {
 		if i == 1 {
 			protected = m.GIDAssignments
 		}
+		if m.Schema == IdentityMappingStateSchemaV2 && m.AcceptedUIDs != nil && m.AcceptedGIDs != nil {
+			protected = *m.AcceptedUIDs
+			if i == 1 {
+				protected = *m.AcceptedGIDs
+			}
+		}
 		for _, value := range values {
 			if !slices.ContainsFunc(protected, func(old IdentityMappingIntervalV1) bool {
 				return mappingDecimalV1(value.ContainerStart) >= mappingDecimalV1(old.ContainerStart) &&
@@ -128,9 +143,10 @@ func validateIdentityMappingStateV1(state StateV1) error {
 		return err
 	}
 	if pending := m.PendingOperation; pending != nil {
+		nativeRelease := m.Schema == IdentityMappingStateSchemaV2 && pending.Kind == "native-execute" && pending.Phase == "release-attempted"
 		if !safeRecoveryIdentity(pending.OperationID) || !safeRecoveryIdentity(pending.Kind) || !pending.Inhibited ||
 			!validMappingDecimalV1(pending.ExpectedRevision, 64, true) || mappingDecimalV1(pending.ExpectedRevision) > mappingDecimalV1(m.Revision) ||
-			(pending.Phase != "intent" && pending.Phase != "effects-pending" && pending.Phase != "verified") {
+			(pending.Phase != "intent" && pending.Phase != "effects-pending" && pending.Phase != "verified" && !nativeRelease) {
 			return fmt.Errorf("identity mapping pending operation requires exact inhibited authority and phase")
 		}
 		if pending.Candidate.Profile != m.Profile {
@@ -156,7 +172,7 @@ func validateIdentityMappingStateV1(state StateV1) error {
 			return err
 		}
 	}
-	return nil
+	return validateNativeMappingStateV1(m)
 }
 
 func (m IdentityMappingStateV1) geometry() IdentityMappingGeometryV1 {
