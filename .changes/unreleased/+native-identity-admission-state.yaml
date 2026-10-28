@@ -1,0 +1,2 @@
+kind: Added
+body: Add internal native-process admission state with separate admitted ID provenance, retained reservations and one-shot release attempts. Existing supervisor admissions cannot migrate automatically; public mapped execution remains inhibited.

@@ -112,7 +112,8 @@ func (lock *OperationLock) CommitIdentityMappingV1(expectedGeneration *Environme
 		}
 		if next.InstallationID != "" || next.OwnerDir != "" || next.Revision != "" || next.InstallationBinding != nil ||
 			len(next.UIDAssignments)+len(next.GIDAssignments)+len(next.DormantUIDs)+len(next.DormantGIDs)+len(next.RetainedStorage) != 0 ||
-			next.AdmittedGeneration != nil || next.Supervisor != nil || next.Engine != nil || next.Revoked || next.PendingOperation != nil {
+			next.AdmittedGeneration != nil || next.Supervisor != nil || next.Engine != nil || next.Revoked || next.PendingOperation != nil ||
+			next.Schema != IdentityMappingStateSchemaV1 || next.ProcessModel != "" || next.AcceptedUIDs != nil || next.AcceptedGIDs != nil || next.NativeProcess != nil {
 			return StateV1{}, fmt.Errorf("first mapping configuration cannot supply retained authority")
 		}
 		next.InstallationID, err = newOpaqueAdmissionIDV1(rand.Reader, "mapping", "mapping owner")
