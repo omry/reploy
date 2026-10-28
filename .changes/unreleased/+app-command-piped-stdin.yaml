@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve piped and redirected stdin for app commands, including when output is captured, without allocating a nonterminal TTY.

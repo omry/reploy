@@ -1,7 +1,10 @@
 package dockerdeploy
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,6 +13,108 @@ import (
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
 )
+
+func TestAppCommandForwardsNonterminalStdin(t *testing.T) {
+	for _, name := range []string{"pipe", "redirected input", "redirected output", "empty pipe", "closed input", "execution error"} {
+		t.Run(name, func(t *testing.T) {
+			payload := []byte("scripted input\n")
+			var input *os.File
+			if name == "redirected input" {
+				var err error
+				input, err = os.CreateTemp(t.TempDir(), "stdin")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := input.Write(payload); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := input.Seek(0, io.SeekStart); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				var err error
+				var writer *os.File
+				input, writer, err = os.Pipe()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if name == "empty pipe" || name == "closed input" {
+					payload = nil
+				}
+				if _, err := writer.Write(payload); err != nil {
+					t.Fatal(err)
+				}
+				if err := writer.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if name == "closed input" {
+					if err := input.Close(); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			var captured, stderr bytes.Buffer
+			var stdout io.Writer = &captured
+			if name == "redirected output" {
+				file, err := os.CreateTemp(t.TempDir(), "stdout")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer file.Close()
+				stdout = file
+			}
+			originalInput, originalCommand := os.Stdin, runCurrentAppCommand
+			t.Cleanup(func() {
+				os.Stdin, runCurrentAppCommand = originalInput, originalCommand
+				_ = input.Close()
+			})
+			os.Stdin = input
+			called := false
+			executionErr := errors.New("execution failed")
+			runCurrentAppCommand = func(ctx context.Context, command CurrentAppCommandRunInputV1) error {
+				called = true
+				if ctx == nil || command.RunOptions.Stdin != input || command.TTY {
+					t.Fatal("public app command dropped stdin or requested a nonterminal TTY")
+				}
+				if command.RunOptions.Stdout != stdout || command.RunOptions.Stderr != &stderr {
+					t.Fatal("public app command replaced output streams")
+				}
+				got, err := io.ReadAll(command.RunOptions.Stdin)
+				if name == "closed input" {
+					if !errors.Is(err, os.ErrClosed) {
+						t.Fatalf("closed reader error = %v", err)
+					}
+					return err
+				}
+				if err != nil || !bytes.Equal(got, payload) {
+					t.Fatalf("stdin did not arrive unchanged through EOF: %v", err)
+				}
+				if name == "execution error" {
+					return executionErr
+				}
+				return nil
+			}
+			err := AppCommand(AppCommandOptions{Dir: appCommandStateDir(t), CommandArgs: []string{"serve"}, Stdout: stdout, Stderr: &stderr})
+			if !called {
+				t.Fatal("public app command did not reach execution")
+			}
+			switch name {
+			case "closed input":
+				if !errors.Is(err, os.ErrClosed) {
+					t.Fatalf("closed-input error was lost: %v", err)
+				}
+			case "execution error":
+				if err != executionErr {
+					t.Fatalf("execution error was replaced: %v", err)
+				}
+			default:
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
 
 func TestAppCommandUsesCurrentGenerationWithoutProviderBuild(t *testing.T) {
 	dir := appCommandStateDir(t)
