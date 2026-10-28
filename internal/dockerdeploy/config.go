@@ -117,6 +117,7 @@ func AppCommand(options AppCommandOptions) error {
 	if terminalOutput == nil {
 		terminalOutput = os.Stdout
 	}
+	stdin, _, tty := shellCommandIO(os.Stdin, terminalOutput)
 	stateSchema, err := runtimeStateSchema(options.Dir)
 	if err != nil {
 		return err
@@ -136,8 +137,8 @@ func AppCommand(options AppCommandOptions) error {
 	return runCurrentAppCommand(ctx, CurrentAppCommandRunInputV1{
 		DeploymentDir: options.Dir, Arguments: append([]string(nil), options.CommandArgs...),
 		DeployedOnly: options.DeployedOnly, OutputDir: options.OutputDir, OutputFile: options.OutputFile,
-		Wait: options.Wait, Runtime: runtime, TTY: writerLooksTerminal(terminalOutput),
-		RunOptions: RunOptions{Stdin: appCommandStdin(terminalOutput), Stdout: options.Stdout, Stderr: options.Stderr, DockerPreflightTimeout: options.DockerPreflightTimeout},
+		Wait: options.Wait, Runtime: runtime, TTY: tty,
+		RunOptions: RunOptions{Stdin: stdin, Stdout: options.Stdout, Stderr: options.Stderr, DockerPreflightTimeout: options.DockerPreflightTimeout},
 	})
 }
 
@@ -156,13 +157,6 @@ func validateCurrentAppCommandRequestV1(dir string, arguments []string, deployed
 	}
 	_, _, err = MatchEnvironmentCommand(document, arguments, deployedOnly)
 	return err
-}
-
-func appCommandStdin(output io.Writer) io.Reader {
-	if !writerLooksTerminal(output) || !readerLooksTerminal(os.Stdin) {
-		return nil
-	}
-	return os.Stdin
 }
 
 func appCommandError(err error) error {
