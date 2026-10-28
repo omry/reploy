@@ -13,6 +13,7 @@ import (
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/identitymapping"
+	"github.com/omry/reploy/internal/providers"
 )
 
 // IdentityMappingEvidenceV1 is a trusted effect-owner seam, not operator input.
@@ -20,6 +21,8 @@ import (
 // returns exact planned retained-storage handles without effects. Unused proves that the
 // exact intent's candidate has never been used, including storage/preparation.
 // Verify reconciles the recorded owner, operation, generations and exact handles.
+// For native-execute it proves the exact inhibited instance before admission;
+// in release-attempted it must prove its acknowledgement or owned retirement.
 // Container absence alone cannot satisfy any of these proofs. G/H supply real
 // effect owners; B5 exercises their metadata boundary with injected effects.
 type IdentityMappingEvidenceV1 interface {
@@ -31,10 +34,11 @@ type IdentityMappingEvidenceV1 interface {
 // IdentityMappingOperationsV1 holds no independent authority or admission cache.
 // Each call rereads the selected owner under its existing operation lock.
 type IdentityMappingOperationsV1 struct {
-	Operation *OperationLock
-	Evidence  IdentityMappingEvidenceV1
-	hostCheck func(context.Context, string, []identitymapping.Interval, []identitymapping.Interval) (identitymapping.HostIdentity, error)
-	write     func(string, []byte) error
+	Operation            *OperationLock
+	Evidence             IdentityMappingEvidenceV1
+	ValidateProfileOwner providers.RequirementProfileOwnerValidator
+	hostCheck            func(context.Context, string, []identitymapping.Interval, []identitymapping.Interval) (identitymapping.HostIdentity, error)
+	write                func(string, []byte) error
 }
 
 type IdentityMappingStatusV1 struct {
@@ -219,12 +223,19 @@ func (ops IdentityMappingOperationsV1) BeginEffects(ctx context.Context, expecte
 		if ops.Evidence == nil {
 			return fmt.Errorf("effects require fresh inactive inventory")
 		}
-		handles, err := ops.Evidence.Plan(ctx, cloneMappingStateV1(*state), p.Candidate.numeric())
+		active := p.Candidate.numeric()
+		if p.Native != nil {
+			active = p.Native.Active.numeric()
+		}
+		handles, err := ops.Evidence.Plan(ctx, cloneMappingStateV1(*state), active)
 		handles = append([]string(nil), handles...)
 		if err != nil || !reflect.DeepEqual(handles, p.OwnedObjects) {
 			return fmt.Errorf("effect inventory differs from the recorded intent: %v", err)
 		}
 		p.Phase = "effects-pending"
+		if p.Native != nil {
+			p.ExpectedRevision = strconv.FormatUint(mappingDecimalV1(state.IdentityMapping.Revision)+1, 10)
+		}
 		return nil
 	})
 }
@@ -253,6 +264,9 @@ func (ops IdentityMappingOperationsV1) Recover(ctx context.Context, expected Sta
 	}
 	if expected.IdentityMapping.PendingOperation.Phase == "intent" {
 		return StateV1{}, fmt.Errorf("intent has no effects to reconcile; retain it or prove it unused")
+	}
+	if expected.IdentityMapping.PendingOperation.Kind == "native-execute" {
+		return ops.recoverNative(ctx, expected)
 	}
 	verified, err := ops.change(ctx, expected, func(state *StateV1) error {
 		if err := ops.Evidence.Verify(ctx, cloneMappingStateV1(*state)); err != nil {
@@ -284,10 +298,17 @@ func (ops IdentityMappingOperationsV1) Recover(ctx context.Context, expected Sta
 
 func (ops IdentityMappingOperationsV1) checkPending(ctx context.Context, expected StateV1, operationID string) error {
 	m := expected.IdentityMapping
-	if m == nil || m.PendingOperation == nil || m.PendingOperation.Kind != "configure" || m.PendingOperation.OperationID != operationID ||
-		!reflect.DeepEqual(m.PendingOperation.ExpectedGeneration, expected.Current) || !reflect.DeepEqual(m.PendingOperation.PriorAccepted, m.AdmittedGeneration) ||
+	if m == nil || m.PendingOperation == nil || (m.PendingOperation.Kind != "configure" && m.PendingOperation.Kind != "native-execute") || m.PendingOperation.OperationID != operationID ||
+		!reflect.DeepEqual(m.PendingOperation.ExpectedGeneration, expected.Current) || m.PendingOperation.Phase != "release-attempted" && !reflect.DeepEqual(m.PendingOperation.PriorAccepted, m.AdmittedGeneration) ||
 		m.PendingOperation.Phase == "intent" && m.PendingOperation.ExpectedRevision != m.Revision {
 		return fmt.Errorf("recovery requires its exact pending owner, operation and generations")
+	}
+	if m.PendingOperation.Kind == "native-execute" {
+		if m.PendingOperation.Native == nil {
+			return fmt.Errorf("native recovery requires its recorded active map")
+		}
+		_, err := ops.checkNativePending(ctx, expected)
+		return err
 	}
 	_, _, err := ops.check(ctx, expected, m.PendingOperation.Candidate.numeric())
 	return err
