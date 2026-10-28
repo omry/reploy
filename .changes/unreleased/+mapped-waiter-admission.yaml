@@ -1,0 +1,2 @@
+kind: Added
+body: Add internal owned-waiter observations and a bounded one-shot stdin release protocol for mapped containers. Missing storage/network proof blocks release, and mapped application execution remains unavailable pending final startup qualification.
