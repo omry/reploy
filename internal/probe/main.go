@@ -8,9 +8,18 @@ import (
 	"syscall"
 
 	"github.com/omry/reploy/internal/canonical"
+	"github.com/omry/reploy/internal/mappedlaunch"
 )
 
 func Main(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == mappedlaunch.Command {
+		input, _ := stdin.(*os.File)
+		if err := mappedWaitV1(args[1:], input); err != nil {
+			_, _ = fmt.Fprintf(stderr, "reploy-probe: mapped startup: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 	if len(args) == 1 && args[0] == "application-launch-proof-v1" {
 		if err := waitForApplicationLaunchV1(); err != nil {
 			_, _ = fmt.Fprintf(stderr, "reploy-probe: application startup: %v\n", err)
