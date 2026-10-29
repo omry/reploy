@@ -46,16 +46,28 @@ func main() {
 		result.Threads = append(result.Threads, fields)
 	}
 	result.Securebits, _, _ = syscall.RawSyscall6(syscall.SYS_PRCTL, 27, 0, 0, 0, 0, 0)
-	for _, fd := range os.Args[1:] {
-		value, err := strconv.Atoi(fd)
+	// Numbers can be reused by the new Go runtime. Compare kernel identities
+	// across every live fd instead: this detects files, directories, sockets,
+	// pidfds and racing duplicates without confusing a reused fd with a leak.
+	private := map[string]bool{}
+	for _, identity := range os.Args[1:] {
+		private[identity] = true
+	}
+	fds, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		panic(err)
+	}
+	for _, entry := range fds {
+		fd, err := strconv.Atoi(entry.Name())
 		if err != nil {
 			panic(err)
 		}
-		// The fixture gives each inherited private handle a unique inode.
-		// Runtime-created descriptors can reuse its number after exec.
-		link, err := os.Readlink(fmt.Sprintf("/proc/self/fd/%d", value))
-		if err == nil && strings.Contains(link, "mapped-private-canary") {
-			result.PrivateLeaks = append(result.PrivateLeaks, link)
+		var status syscall.Stat_t
+		if syscall.Fstat(fd, &status) == nil {
+			identity := fmt.Sprintf("%d:%d", status.Dev, status.Ino)
+			if private[identity] {
+				result.PrivateLeaks = append(result.PrivateLeaks, identity)
+			}
 		}
 	}
 	input, err := io.ReadAll(os.Stdin)

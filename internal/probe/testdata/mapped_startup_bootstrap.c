@@ -29,6 +29,8 @@ int main(int argc, char **argv) {
         unshare(CLONE_NEWNET)) die("prepare namespace authority");
     gid_t initial_groups[] = {100, 201};
     if (setgroups(2, initial_groups)) die("initial supplementary groups");
+    /* A non-CLOEXEC high-numbered duplicate must disappear too. */
+    if (dup2(3, 4096) != 4096) die("high private descriptor");
     unsigned long long ceiling = strtoull(argv[2], NULL, 0) | 0x11c0ULL;
     if (!strcmp(argv[3], "ambient")) ceiling |= 1;
     FILE *limit = fopen("/proc/sys/kernel/cap_last_cap", "r");

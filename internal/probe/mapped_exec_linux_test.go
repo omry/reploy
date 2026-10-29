@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"math"
@@ -15,8 +16,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 	"unsafe"
@@ -207,6 +211,12 @@ func mappedProductionBinaryV1(t *testing.T, directory string) string {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build exact production probe: %v: %s", err, output)
 	}
+	mappedVerifyExecTailV1(t, probe)
+	return probe
+}
+
+func mappedVerifyExecTailV1(t *testing.T, probe string) {
+	t.Helper()
 	disassembly, err := exec.Command("go", "tool", "objdump", "-s", "github.com/omry/reploy/internal/probe.mappedExecTailV1", probe).CombinedOutput()
 	if err != nil || !bytes.Contains(disassembly, []byte("TEXT ")) {
 		t.Fatalf("inspect exact production tail: %v: %s", err, disassembly)
@@ -223,7 +233,6 @@ func mappedProductionBinaryV1(t *testing.T, directory string) string {
 	if calls != 3 || strings.Contains(string(disassembly), "runtime.") {
 		t.Fatalf("unexpected raw exec-or-exit tail: %s", disassembly)
 	}
-	return probe
 }
 
 func TestMappedProductionExecTailV1(t *testing.T) {
@@ -318,6 +327,32 @@ func TestMappedProductionStartupV1(t *testing.T) {
 			mappedProductionCaseV1(t, bootstrap, probe, payload, directory, profile, uidBase, gidBase, 0, 0, nil, 0, "no-filter", 122)
 		})
 	}
+	// Link the same production package with one test-only concurrent opener.
+	// No test command, callback or hook is added to the shipped launcher.
+	testProbe := filepath.Join(directory, "descriptor-test-probe")
+	build := exec.Command("go", "test", "-c", "-buildvcs=false", "-o", testProbe, ".")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build descriptor adversary: %v: %s", err, output)
+	}
+	mappedVerifyExecTailV1(t, testProbe)
+	for _, profile := range []string{"exact", "bounded"} {
+		for _, mask := range []uint64{0, 0xc4, 0x400c1} {
+			for repetition := range 3 {
+				t.Run(fmt.Sprintf("%s/descriptor-race/mask%x/%d", profile, mask, repetition), func(t *testing.T) {
+					mappedProductionCaseV1(t, bootstrap, testProbe, payload, directory, profile, uidBase, gidBase, 0, 0, nil, mask, "descriptor-race", 0)
+				})
+			}
+		}
+		t.Run(profile+"/descriptor-no-close-control", func(t *testing.T) {
+			mappedProductionCaseV1(t, bootstrap, testProbe, payload, directory, profile, uidBase, gidBase, 0, 0, nil, 0, "descriptor-no-close", 0)
+		})
+		for _, mode := range []string{"descriptor-cloexec", "descriptor-shared-close"} {
+			t.Run(profile+"/"+mode+"-control", func(t *testing.T) {
+				mappedProductionCaseV1(t, bootstrap, testProbe, payload, directory, profile, uidBase, gidBase, 0, 0, nil, 0, mode, 0)
+			})
+		}
+	}
 }
 
 func mappedProductionCaseV1(t *testing.T, bootstrap, probe, payload, directory, profile string, uidBase, gidBase uint64, uid, gid uint32, groups []uint32, mask uint64, mode string, expectedExit int) {
@@ -342,13 +377,23 @@ func mappedProductionCaseV1(t *testing.T, bootstrap, probe, payload, directory, 
 		t.Fatal(err)
 	}
 	defer canary.Close()
+	if err := canary.Chmod(0o644); err != nil {
+		t.Fatal(err) // Public dummy data, readable by disposable namespace IDs.
+	}
+	private, identities := mappedPrivateDescriptorsV1(t, canary, directory)
 	executable := payload
 	if mode == "bad-exec" {
 		executable = filepath.Join(directory, "missing-executable")
 	}
-	args := []string{probe, fmt.Sprint(mask), mode, "/reploy-probe", mappedlaunch.Command, string(encoded), time.Now().Add(15 * time.Second).UTC().Format(time.RFC3339Nano), "sandbox-exec", fmt.Sprintf("%s%016x", mappedCapabilityArgumentV1, mask), "--uid", fmt.Sprint(uid), "--gid", fmt.Sprint(gid), "--groups", strings.Join(groupText, ","), "--public", "deny", "--local", "deny", "--ambiguous", "require-both", "--", executable, "3"}
+	args := []string{probe, fmt.Sprint(mask), mode, "/reploy-probe", mappedlaunch.Command, string(encoded), time.Now().Add(15 * time.Second).UTC().Format(time.RFC3339Nano), "sandbox-exec", fmt.Sprintf("%s%016x", mappedCapabilityArgumentV1, mask), "--uid", fmt.Sprint(uid), "--gid", fmt.Sprint(gid), "--groups", strings.Join(groupText, ","), "--public", "deny", "--local", "deny", "--ambiguous", "require-both", "--", executable}
+	args = append(args, identities...)
+	if strings.HasPrefix(mode, "descriptor-") {
+		prefix := append([]string{}, args[:4]...)
+		prefix = append(prefix, "-test.run=^TestMappedDescriptorRaceHelperV1$", "--", mode, canary.Name())
+		args = append(prefix, args[4:]...)
+	}
 	command := exec.CommandContext(ctx, bootstrap, args...)
-	command.ExtraFiles = []*os.File{canary}
+	command.ExtraFiles = private
 	input, err := command.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -444,6 +489,12 @@ func mappedProductionCaseV1(t *testing.T, bootstrap, probe, payload, directory, 
 		}
 		return
 	}
+	if mode == "descriptor-shared-close" {
+		if string(stdout) != "shared-table-damaged\n" {
+			t.Fatal("shared-close control did not observe old-table damage", string(stdout))
+		}
+		return
+	}
 	var observed struct {
 		PID          int                 `json:"pid"`
 		Threads      []map[string]string `json:"threads"`
@@ -454,6 +505,20 @@ func mappedProductionCaseV1(t *testing.T, bootstrap, probe, payload, directory, 
 	}
 	if err := json.Unmarshal(stdout, &observed); err != nil {
 		t.Fatal(err, string(stdout), stderr.String())
+	}
+	if mode == "descriptor-no-close" {
+		for _, identity := range identities {
+			if !slices.Contains(observed.PrivateLeaks, identity) {
+				t.Fatalf("negative control did not detect inherited descriptor identity %s: %v", identity, observed.PrivateLeaks)
+			}
+		}
+		return
+	}
+	if mode == "descriptor-cloexec" {
+		if !slices.Contains(observed.PrivateLeaks, identities[0]) {
+			t.Fatal("CLOEXEC-only control did not detect racing private descriptor")
+		}
+		return
 	}
 	plan := sandboxExecPlanV1{UID: uid, GID: gid, Groups: groups, MappedCapabilities: &mask}
 	for _, thread := range observed.Threads {
@@ -476,5 +541,124 @@ func mappedProductionCaseV1(t *testing.T, bootstrap, probe, payload, directory, 
 		if observed.NativeDrop["Uid"] != "200 200 200 200" || observed.NativeDrop["CapPrm"] != "0000000000000000" || observed.NativeDrop["CapEff"] != "0000000000000000" {
 			t.Fatal("native UID change retained capability authority", observed.NativeDrop)
 		}
+	}
+}
+
+func mappedPrivateDescriptorsV1(t *testing.T, canary *os.File, directory string) ([]*os.File, []string) {
+	t.Helper()
+	private := []*os.File{canary}
+	for _, name := range []string{directory, filepath.Dir(directory)} {
+		file, err := os.Open(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = file.Close() })
+		private = append(private, file)
+	}
+	sockets, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fd := range sockets {
+		file := os.NewFile(uintptr(fd), "private-socket")
+		t.Cleanup(func() { _ = file.Close() })
+		private = append(private, file)
+	}
+	pidfd, err := unix.PidfdOpen(os.Getpid(), 0)
+	if err != nil {
+		t.Fatalf("descriptor qualification requires pidfd support: %v", err)
+	}
+	file := os.NewFile(uintptr(pidfd), "private-pidfd")
+	t.Cleanup(func() { _ = file.Close() })
+	private = append(private, file)
+	identities := make([]string, 0, len(private))
+	for _, file := range private {
+		var status unix.Stat_t
+		if err := unix.Fstat(int(file.Fd()), &status); err != nil {
+			t.Fatal(err)
+		}
+		identities = append(identities, fmt.Sprintf("%d:%d", status.Dev, status.Ino))
+	}
+	return private, identities
+}
+
+// This entry exists only in the test binary. The actual Main, waiter, network
+// setup and production exec transition run unchanged with a racing old-table
+// opener. Shipped-binary cases above separately bind the production image.
+func TestMappedDescriptorRaceHelperV1(t *testing.T) {
+	args := flag.Args()
+	if len(args) < 3 || !strings.HasPrefix(args[0], "descriptor-") {
+		t.Skip("disposable descriptor helper only")
+	}
+	ready := make(chan struct{})
+	var damaged, opened uint32
+	go func() {
+		runtime.LockOSThread()
+		fd, err := unix.Open(args[1], unix.O_RDONLY, 0)
+		if err != nil {
+			panic(err)
+		}
+		close(ready)
+		for {
+			if _, _, errno := syscall.RawSyscall(unix.SYS_FCNTL, 4096, unix.F_GETFD, 0); errno == unix.EBADF {
+				atomic.StoreUint32(&damaged, 1)
+				for {
+				}
+			}
+			next, err := unix.Open(args[1], unix.O_RDONLY, 0)
+			if err != nil {
+				panic(err)
+			}
+			_ = unix.Close(fd)
+			fd = next
+			atomic.AddUint32(&opened, 1)
+		}
+	}()
+	<-ready
+	if args[0] != "descriptor-race" {
+		binding, err := mappedlaunch.DecodeBinding([]byte(args[3]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := mappedlaunch.Read(os.Stdin, binding); err != nil {
+			t.Fatal(err)
+		}
+		if args[0] == "descriptor-shared-close" {
+			marker := []byte("shared-table-damaged\n")
+			mappedSharedCloseControlV1(&damaged, &marker[0])
+		}
+		if args[0] == "descriptor-cloexec" {
+			if err := unix.CloseRange(3, uint(^uint32(0)), unix.CLOSE_RANGE_CLOEXEC); err != nil {
+				t.Fatal(err)
+			}
+			before := atomic.LoadUint32(&opened)
+			for atomic.LoadUint32(&opened)-before < 2 {
+				runtime.Gosched()
+			}
+		}
+		separator := slices.Index(args[2:], "--") + 2
+		payload := args[separator+1:]
+		if err := syscall.Exec(payload[0], payload, os.Environ()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.Exit(Main(args[2:], os.Stdin, os.Stdout, os.Stderr))
+}
+
+// Deliberately wrong test-only closer. A peer detects the shared table's lost
+// high fd. Stay in a raw tail so a runtime poller failure cannot masquerade as
+// that specific independent observation. The parent bounds/reaps the process.
+//
+//go:nosplit
+//go:norace
+func mappedSharedCloseControlV1(damaged *uint32, marker *byte) {
+	_, _, errno := syscall.RawSyscall6(unix.SYS_CLOSE_RANGE, 3, uintptr(^uint32(0)), 0, 0, 0, 0)
+	if errno == 0 {
+		for atomic.LoadUint32(damaged) == 0 {
+		}
+		syscall.RawSyscall(unix.SYS_WRITE, 1, uintptr(unsafe.Pointer(marker)), uintptr(len("shared-table-damaged\n")))
+	}
+	syscall.RawSyscall(unix.SYS_EXIT_GROUP, 0, 0, 0)
+	for {
 	}
 }

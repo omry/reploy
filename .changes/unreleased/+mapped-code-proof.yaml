@@ -1,0 +1,2 @@
+kind: Security
+body: Require exact protected-code and mount evidence before internal mapped startup release. Public mapped execution remains gated on production admission and runtime qualification.
