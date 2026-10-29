@@ -222,7 +222,16 @@ func (a *ownedMappedWaiterV1) release() (acceptedState deploy.StateV1, failure e
 	if err != nil || image != string(a.binding.Image) || namespace != p.namespace || client.version != p.version {
 		return deploy.StateV1{}, fmt.Errorf("mapped release image or engine changed: %v", err)
 	}
+	// Read the selected immutable plan outside the admission writer. Fresh F
+	// observations and the final process fence run inside its existing proof.
+	sandbox, err := a.sandboxRequest()
+	if err != nil {
+		return deploy.StateV1{}, err
+	}
 	verify := func(ctx context.Context) error {
+		if err := verifyMappedSandboxV1(ctx, p.state, p.ops.Evidence, sandbox); err != nil {
+			return err
+		}
 		pid, err := a.observeContainer(ctx, client)
 		if err != nil || pid != a.pid {
 			return fmt.Errorf("mapped waiter is no longer the pinned process: %v", err)
