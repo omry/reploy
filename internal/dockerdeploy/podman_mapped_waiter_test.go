@@ -18,15 +18,36 @@ import (
 	"testing"
 	"time"
 
+	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/identitymapping"
 	"github.com/omry/reploy/internal/mappedlaunch"
 	"github.com/omry/reploy/internal/providers"
+	"github.com/omry/reploy/internal/providers/registry"
 )
 
 type waiterEffectFixtureV1 struct {
-	fail  bool
-	calls int
+	fail           bool
+	calls          int
+	sandboxFailure error
+	sandboxChange  func(*mappedSandboxProofV1)
+}
+
+func (e *waiterEffectFixtureV1) MappedSandbox(_ context.Context, _ deploy.StateV1, request mappedSandboxRequestV1) (mappedSandboxProofV1, error) {
+	digest, err := canonical.Sum("mapped-sandbox", "v1", request)
+	if err != nil {
+		return mappedSandboxProofV1{}, err
+	}
+	code := make([]mappedCodePathV1, len(request.RequiredCode))
+	for i, name := range request.RequiredCode {
+		code[i] = mappedCodePathV1{name, name}
+	}
+	proof := mappedSandboxProofV1{Request: digest, NetworkPolicy: request.NetworkPolicy, ReadOnlyRoot: true,
+		Code: code, ObservedCode: slices.Clone(code), Mounts: []mappedSandboxMountV1{}}
+	if e.sandboxChange != nil {
+		e.sandboxChange(&proof)
+	}
+	return proof, e.sandboxFailure
 }
 
 func (*waiterEffectFixtureV1) Plan(context.Context, deploy.StateV1, identitymapping.Geometry) ([]string, error) {
@@ -134,7 +155,7 @@ func newWaiterFixtureV1(t *testing.T) *waiterFixtureV1 {
 	if err := os.WriteFile(filepath.Join(filepath.Dir(operation.Path()), "state.json"), encoded, 0600); err != nil {
 		t.Fatal(err)
 	}
-	f.prepared = &preparedMappedPodmanCreateV1{ops: deploy.IdentityMappingOperationsV1{Operation: operation, Evidence: f.effect}, state: state, active: identitymapping.Geometry{Profile: "exact", UIDs: []identitymapping.Interval{{HostStart: 100000, Count: 1}}, GIDs: []identitymapping.Interval{{HostStart: 100000, Count: 1}}}, operation: "operation", spec: spec, endpoint: f.client.endpoint, version: f.client.version, namespace: "fixture-namespace"}
+	f.prepared = &preparedMappedPodmanCreateV1{ops: deploy.IdentityMappingOperationsV1{Operation: operation, Evidence: f.effect, ValidateProfileOwner: registry.ValidateRequirementProfileV1}, state: state, active: identitymapping.Geometry{Profile: "exact", UIDs: []identitymapping.Interval{{HostStart: 100000, Count: 1}}, GIDs: []identitymapping.Interval{{HostStart: 100000, Count: 1}}}, operation: "operation", spec: spec, endpoint: f.client.endpoint, version: f.client.version, namespace: "fixture-namespace"}
 	f.binding = mappedlaunch.Binding{Schema: "mapped-release-v1", Installation: "installation", Operation: "operation", Generation: state.Current.BuildLockDigest, Revision: "1", Image: lock.FinalImage.ConfigDigest, Role: "app", Plan: rendererDigest("c")}
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	t.Cleanup(cancel)
