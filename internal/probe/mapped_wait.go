@@ -90,7 +90,8 @@ func mappedWaitV1(args []string, input *os.File) error {
 	if len(args) < 3 || args[2] != "sandbox-exec" {
 		return fmt.Errorf("mapped waiter requires fixed binding and admission deadline")
 	}
-	if _, err := parseSandboxExecPlanV1(args[3:], true); err != nil {
+	plan, err := parseMappedSandboxExecPlanV1(args[3:])
+	if err != nil {
 		return err
 	}
 	binding, err := mappedlaunch.DecodeBinding([]byte(args[0]))
@@ -106,7 +107,8 @@ func mappedWaitV1(args []string, input *os.File) error {
 	if err := waitMappedReleaseV1(ctx, input, binding); err != nil {
 		return err
 	}
-	// E2 owns the qualified credential/descriptor/direct-exec tail. An accepted
-	// frame alone cannot substitute for that proof or execute an ordinary path.
-	return fmt.Errorf("mapped startup requires a qualified final exec transition")
+	if plan.MappedCapabilities == nil {
+		return fmt.Errorf("mapped startup requires a qualified final exec transition")
+	}
+	return sandboxAndExecApplicationV1(plan)
 }

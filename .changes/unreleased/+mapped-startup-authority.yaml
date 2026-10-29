@@ -1,0 +1,2 @@
+kind: Added
+body: Add an internal mapped startup transition with explicit capability ceilings and exact credentials. Public mapped execution remains gated on the remaining admission and runtime proofs.
