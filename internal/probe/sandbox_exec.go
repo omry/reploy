@@ -10,6 +10,7 @@ import (
 )
 
 type sandboxExecPlanV1 struct {
+	MappedCapabilities     *uint64
 	UID                    uint32
 	GID                    uint32
 	Groups                 []uint32

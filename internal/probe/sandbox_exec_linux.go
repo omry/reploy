@@ -74,6 +74,11 @@ func sandboxAndExecApplicationV1(plan sandboxExecPlanV1) error {
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("trusted sandbox setup must begin as container root")
 	}
+	if plan.MappedCapabilities != nil {
+		if err := validateMappedStartupV1(plan); err != nil {
+			return err
+		}
+	}
 	if plan.PrepareTemporaryHome {
 		if err := prepareApplicationTemporaryHomeV1(plan.UID, plan.GID); err != nil {
 			return fmt.Errorf("prepare private temporary home: %w", err)
@@ -123,6 +128,9 @@ func sandboxAndExecApplicationV1(plan sandboxExecPlanV1) error {
 			portableToolObservedExecArgvV1(int(statusFile.Fd()), plan, plan.Argv),
 			environment,
 		)
+	}
+	if plan.MappedCapabilities != nil {
+		return execMappedApplicationV1(plan, environment)
 	}
 	if err := dropApplicationAuthorityV1(plan.UID, plan.GID, plan.Groups); err != nil {
 		return err
