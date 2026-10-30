@@ -3,6 +3,7 @@
 package dockerdeploy
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -25,6 +27,7 @@ import (
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
 	"github.com/omry/reploy/internal/identitymapping"
+	"github.com/omry/reploy/internal/mappedlaunch"
 	"github.com/omry/reploy/internal/providers"
 	"github.com/omry/reploy/internal/providers/registry"
 )
@@ -43,14 +46,49 @@ func (mappedCreateFixtureEvidenceV1) Verify(context.Context, deploy.StateV1) err
 	return errors.New("fixture never grants lifecycle admission")
 }
 
-func mappedCreateIntegrationSpecV1(t *testing.T, name, image, nonce, endpoint string) CommandSpec {
+func mappedCreateDiagnosticStartupV1(t *testing.T, binding mappedlaunch.Binding, nonce string, wait time.Duration) []string {
+	t.Helper()
+	encoded, err := canonical.Marshal(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []string{mappedlaunch.Command, string(encoded), time.Now().Add(wait).UTC().Format(time.RFC3339Nano), "sandbox-exec", "--mapped-capabilities=0000000000000000", "--uid", "0", "--gid", "0", "--public", "deny", "--local", "deny", "--ambiguous", "require-both", "--", "/probe", "admission-wait", nonce, "cap-report"}
+}
+
+func mappedCreateIntegrationSpecV1(t *testing.T, name, image, nonce, endpoint string, binding mappedlaunch.Binding) CommandSpec {
 	t.Helper()
 	profile, err := materializePodmanDockerSeccomp()
 	if err != nil {
 		t.Fatal(err)
 	}
-	args := []string{"create", "--name", name, "--user", "0:0", "--pull", "never", "--read-only", "--cap-drop", "ALL", "--security-opt", "seccomp=" + profile, "--security-opt", "no-new-privileges=true", "--network", "none", "--tmpfs", "/run:rw,noexec,nosuid,nodev,size=4m,mode=1777", "--label", "io.reploy.c1-fixture=" + nonce, "--entrypoint", "/reploy-probe", image, "admission-wait", nonce, "cap-report"}
+	args := []string{"create", "--name", name, "--user", "0:0", "--interactive", "--pull", "never", "--read-only", "--cap-drop", "ALL", "--security-opt", "seccomp=" + profile, "--security-opt", "no-new-privileges=true", "--network", "none", "--tmpfs", "/run:rw,noexec,nosuid,nodev,size=4m,mode=1777", "--label", "io.reploy.c1-fixture=" + nonce, "--entrypoint", "/reploy-probe", image}
+	args = append(args, mappedCreateDiagnosticStartupV1(t, binding, nonce, 2*time.Minute)...)
 	return CommandSpec{Name: "docker", Args: args, Env: []string{"DOCKER_HOST=" + endpoint, "DOCKER_CONTEXT="}, builtinSeccompIndex: slices.Index(args, "seccomp="+profile)}
+}
+
+func mappedCreateDiagnosticBindingV1(t *testing.T, state deploy.StateV1, image, operationID string) mappedlaunch.Binding {
+	t.Helper()
+	if state.IdentityMapping == nil || state.IdentityMapping.PendingOperation == nil || state.IdentityMapping.PendingOperation.ExpectedGeneration == nil {
+		t.Fatal("diagnostic binding requires the exact pending generation")
+	}
+	generation := state.IdentityMapping.PendingOperation.ExpectedGeneration
+	imageDigest := canonical.Digest(image)
+	if err := imageDigest.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	binding := mappedlaunch.Binding{Schema: "mapped-release-v1", Installation: state.IdentityMapping.InstallationID, Operation: operationID, Generation: generation.BuildLockDigest, Revision: state.IdentityMapping.PendingOperation.ExpectedRevision, Image: imageDigest, Role: "app", Plan: rendererDigest("c")}
+	if err := binding.Validate(); err != nil {
+		t.Fatalf("diagnostic binding is not canonical: %v", err)
+	}
+	encoded, err := canonical.Marshal(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := mappedlaunch.DecodeBinding(encoded)
+	if err != nil || decoded != binding {
+		t.Fatalf("diagnostic binding did not round-trip canonically: %v", err)
+	}
+	return binding
 }
 
 func mappedCreateIntegrationStateV1(t *testing.T, image, endpoint string) (deploy.IdentityMappingOperationsV1, deploy.StateV1) {
@@ -140,8 +178,69 @@ func readMappedKernelIntervalsV1(t *testing.T, pid int, kind string) []identitym
 	return values
 }
 
+// This host check exercises the actual production dispatcher without requiring
+// a live engine. The production /reploy-probe waits on a real pipe for the
+// release frame; the conformance payload remains a separate /probe argv target.
+func TestMappedC1ProductionDispatcherWaitsWithoutReleaseV1(t *testing.T) {
+	probe := filepath.Join(t.TempDir(), "reploy-probe")
+	build := exec.CommandContext(t.Context(), "go", "build", "-buildvcs=false", "-o", probe, "../../cmd/reploy-probe")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build production probe: %v\n%s", err, output)
+	}
+	digest := canonical.Digest("sha256:" + strings.Repeat("a", 64))
+	state := deploy.StateV1{IdentityMapping: &deploy.IdentityMappingStateV1{
+		InstallationID: "c1-host-fixture",
+		PendingOperation: &deploy.IdentityMappingOperationV1{
+			OperationID:        "c1-host-operation",
+			ExpectedRevision:   "1",
+			ExpectedGeneration: &deploy.EnvironmentGenerationState{BuildLockDigest: digest},
+		},
+	}}
+	binding := mappedCreateDiagnosticBindingV1(t, state, string(digest), "c1-host-operation")
+	spec := mappedCreateIntegrationSpecV1(t, "c1-host-fixture", string(digest), "0123456789abcdef0123456789abcdef", "unix:///tmp/c1-host-fixture.sock", binding)
+	policy := mappedCreatePolicyFixtureV1(t)
+	request, err := mappedPodmanApplicationCreateRequestV1(spec, "c1-host-namespace", policy)
+	if err != nil {
+		t.Fatalf("generated C1 request rejected by strict mapped constructor: %v", err)
+	}
+	body := request.body
+	if request.policy != policy || policy.finalCapabilities != 0 || policy.setupCapabilities != 0 || body.Tty || !body.OpenStdin || !body.StdinOnce || !body.AttachStdin || !body.HostConfig.ReadonlyRootfs || !slices.Equal(body.HostConfig.CapDrop, []string{"ALL"}) || len(body.HostConfig.CapAdd) != 0 || body.HostConfig.AutoRemove || body.HostConfig.RestartPolicy == nil || *body.HostConfig.RestartPolicy != (mappedRestartPolicyV1{Name: "no", MaximumRetryCount: 0}) {
+		t.Fatalf("generated C1 request changed the exact fixed policy or stdin tuple: policy=%+v body=%+v", request.policy, body)
+	}
+	if err := validateMappedCreateStartupV1(body.Cmd, policy); err != nil {
+		t.Fatalf("generated C1 startup failed the actual parser: %v", err)
+	}
+	command := slices.Clone(body.Cmd)
+	input, inputWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	defer inputWriter.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	process := exec.CommandContext(ctx, probe, command...)
+	process.Stdin = input
+	var stdout, stderr bytes.Buffer
+	process.Stdout, process.Stderr = &stdout, &stderr
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := inputWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	err = process.Wait()
+	if err == nil || ctx.Err() != nil || !strings.Contains(stderr.String(), "read mapped release header") || !strings.Contains(stderr.String(), "EOF") {
+		t.Fatalf("production mapped waiter did not report the expected causal EOF: err=%v context=%v stderr=%q", err, ctx.Err(), stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("conformance payload ran before release frame: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
 // Opt in only on a disposable eligible host. The image contains the existing
-// conformance probe at /probe and /reploy-probe, with no host data mounted.
+// production probe at /reploy-probe and conformance payload at /probe, with no
+// host data mounted. The production waiter remains inhibited until its frame.
 func TestMappedPodmanCreateLiveV1(t *testing.T) {
 	endpoint, image := os.Getenv("REPLOY_C1_TEST_ENDPOINT"), os.Getenv("REPLOY_C1_TEST_IMAGE")
 	if endpoint == "" && image == "" {
@@ -165,8 +264,9 @@ func TestMappedPodmanCreateLiveV1(t *testing.T) {
 			if err != nil {
 				t.Fatalf("real B Configure: %v", err)
 			}
-			firstSpec := mappedCreateIntegrationSpecV1(t, "reploy-c1-"+nonce, image, nonce, endpoint)
-			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, intent, active, operationID, firstSpec); err == nil {
+			binding := mappedCreateDiagnosticBindingV1(t, intent, image, operationID)
+			firstSpec := mappedCreateIntegrationSpecV1(t, "reploy-c1-"+nonce, image, nonce, endpoint, binding)
+			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, intent, active, operationID, firstSpec, mappedCreatePolicyFixtureV1(t)); err == nil {
 				t.Fatal("intent granted a dispatchable preparation")
 			}
 			pending, err := ops.BeginEffects(t.Context(), intent, operationID)
@@ -176,25 +276,25 @@ func TestMappedPodmanCreateLiveV1(t *testing.T) {
 			if profile == "exact" {
 				checkMappedEngineRefusalsV1(t, ops, pending, active, operationID, firstSpec)
 			}
-			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, "foreign-operation", firstSpec); err == nil {
+			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, "foreign-operation", firstSpec, mappedCreatePolicyFixtureV1(t)); err == nil {
 				t.Fatal("foreign operation admitted")
 			}
-			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, intent, active, operationID, firstSpec); err == nil {
+			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, intent, active, operationID, firstSpec, mappedCreatePolicyFixtureV1(t)); err == nil {
 				t.Fatal("stale revision admitted")
 			}
 			foreign := firstSpec
 			foreign.Args = slices.Clone(firstSpec.Args)
 			foreign.Args[slices.Index(foreign.Args, "--entrypoint")+2] = string(rendererDigest("a"))
-			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, foreign); err == nil || !strings.Contains(err.Error(), "selected generation") {
+			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, foreign, mappedCreatePolicyFixtureV1(t)); err == nil || !strings.Contains(err.Error(), "selected generation") {
 				t.Fatal("foreign image was not rejected by current-generation binding", err)
 			}
 			for repeat := 0; repeat < 2; repeat++ {
 				t.Run(strconv.Itoa(repeat), func(t *testing.T) {
-					spec := mappedCreateIntegrationSpecV1(t, fmt.Sprintf("reploy-c1-%s-%d", nonce, repeat), image, nonce, endpoint)
+					spec := mappedCreateIntegrationSpecV1(t, fmt.Sprintf("reploy-c1-%s-%d", nonce, repeat), image, nonce, endpoint, binding)
 					if repeat == 1 {
 						spec.Args[slices.Index(spec.Args, "--entrypoint")+2] = pending.Current.Reference
 					}
-					prepared, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, spec)
+					prepared, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, spec, mappedCreatePolicyFixtureV1(t))
 					if err != nil {
 						t.Fatal("production C1 preparation", err)
 					}
@@ -233,11 +333,23 @@ func TestMappedPodmanCreateLiveV1(t *testing.T) {
 							t.Error("exact fixture cleanup", err)
 						}
 					}()
-					// Private test starts only the trusted waiter. No product payload
-					// admission or public mapped execution is exercised or claimed.
-					if _, err := client.request(t.Context(), http.MethodPost, "/v1.44/containers/"+ownedID+"/start", nil); err != nil {
+					// Private test starts only the trusted production waiter. The
+					// conformance payload at /probe is after the mapped release
+					// frame and is never reached by this diagnostic.
+					startContext, cancelStart := context.WithTimeout(t.Context(), 30*time.Second)
+					defer cancelStart()
+					input, inputWriter, err := os.Pipe()
+					if err != nil {
 						t.Fatal(err)
 					}
+					defer input.Close()
+					defer inputWriter.Close()
+					start := prepared.spec
+					start.Args = []string{"start", "--attach", "--interactive", ownedID}
+					startErr := make(chan error, 1)
+					go func() {
+						startErr <- runCommandWithoutDockerPreflight(start, RunOptions{Context: startContext, Stdin: input})
+					}()
 					var pid int
 					deadline := time.Now().Add(20 * time.Second)
 					for time.Now().Before(deadline) {
@@ -277,6 +389,16 @@ func TestMappedPodmanCreateLiveV1(t *testing.T) {
 					if _, err := unmappedRuntimeDocumentV1(state); err == nil {
 						t.Fatal("public mapped-execution guard was bypassed")
 					}
+					cancelStart()
+					_ = inputWriter.Close()
+					select {
+					case err := <-startErr:
+						if err != nil && !strings.Contains(err.Error(), "context canceled") {
+							t.Logf("trusted waiter stopped after bounded diagnostic cancellation: %v", err)
+						}
+					case <-time.After(5 * time.Second):
+						t.Error("trusted waiter did not stop after bounded diagnostic cancellation")
+					}
 				})
 			}
 		})
@@ -302,7 +424,7 @@ func checkMappedEngineRefusalsV1(t *testing.T, ops deploy.IdentityMappingOperati
 			spec.Args = slices.Clone(spec.Args)
 			if kind == "remote" {
 				spec.Env = []string{"DOCKER_HOST=tcp://127.0.0.1:1", "DOCKER_CONTEXT="}
-				if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, spec); err == nil {
+				if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, spec, mappedCreatePolicyFixtureV1(t)); err == nil {
 					t.Fatal("remote endpoint admitted")
 				}
 				return
@@ -371,7 +493,7 @@ func checkMappedEngineRefusalsV1(t *testing.T, ops deploy.IdentityMappingOperati
 			case "invalid generated policy":
 				spec.Args = slices.Delete(spec.Args, slices.Index(spec.Args, "--read-only"), slices.Index(spec.Args, "--read-only")+1)
 			}
-			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, spec); err == nil {
+			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, spec, mappedCreatePolicyFixtureV1(t)); err == nil {
 				t.Fatal("incompatible engine admitted")
 			}
 		})
@@ -446,7 +568,7 @@ func checkMappedEngineRefusalsV1(t *testing.T, ops deploy.IdentityMappingOperati
 			go server.Serve(listener)
 			defer server.Close()
 			spec.Env = []string{"DOCKER_HOST=unix://" + path, "DOCKER_CONTEXT="}
-			p, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, spec)
+			p, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, spec, mappedCreatePolicyFixtureV1(t))
 			if err != nil {
 				t.Fatal("valid preparation fixture", err)
 			}
@@ -474,7 +596,7 @@ func checkMappedEngineRefusalsV1(t *testing.T, ops deploy.IdentityMappingOperati
 
 // A selected incompatible host must fail before contacting the endpoint.
 func TestMappedPodmanCreateRejectsMissingAuthorityBeforeEngineV1(t *testing.T) {
-	if _, err := prepareMappedPodmanCreateV1(t.Context(), deploy.IdentityMappingOperationsV1{}, deploy.StateV1{}, mappedGeometryFixtureV1("exact"), "unowned", CommandSpec{Env: []string{"DOCKER_HOST=unix://" + filepath.Join(t.TempDir(), "absent.sock")}}); err == nil {
+	if _, err := prepareMappedPodmanCreateV1(t.Context(), deploy.IdentityMappingOperationsV1{}, deploy.StateV1{}, mappedGeometryFixtureV1("exact"), "unowned", CommandSpec{Env: []string{"DOCKER_HOST=unix://" + filepath.Join(t.TempDir(), "absent.sock")}}, mappedCreatePolicyFixtureV1(t)); err == nil {
 		t.Fatal("unowned create preparation succeeded")
 	}
 }
