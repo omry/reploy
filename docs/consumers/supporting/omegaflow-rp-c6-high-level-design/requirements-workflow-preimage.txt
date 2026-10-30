@@ -1,0 +1,246 @@
+---
+status: Evaluation pending
+updated: 2026-10-29
+summary: OmegaFlow preparation inspection and launch admission needs; minimum Reploy delivery remains undecided.
+---
+
+# OmegaFlow
+
+## Design outputs
+
+The active `global:swe:design` run retains this consumer record and its required
+tracking. Its additional outputs follow the
+[design document contract](supporting/omegaflow-rp-c6-requirements/design-contract.md):
+`omegaflow-rp-c6-requirements.md`, `omegaflow-rp-c6-high-level-design.md`, and
+`omegaflow-rp-c6-implementation-plan.md`, alongside this file. Each is authored
+at its responsible phase; the architecture and slice plan are not yet approved.
+Durable supporting material belongs under `supporting/<owning-document-stem>/`.
+Feedback for later AWD improvements is collected in
+[design workflow feedback](supporting/omegaflow-rp-c6-requirements/design-workflow-feedback.md).
+
+The current [requirements draft](omegaflow-rp-c6-requirements.md) carries the full
+corrected RP-C6 scope. Its
+[interview synthesis](supporting/omegaflow-rp-c6-requirements/interview-synthesis.md)
+separates existing project constraints from engineering investigations. Formal
+requirements review and approval remain pending; no HLD, implementation plan or
+delivery readiness is implied.
+
+## Use case and source
+
+OmegaFlow needs to inspect the workload it will launch, evaluate its own policy,
+and launch exactly that inspected preparation. Reploy must reject relevant
+changes before workload or bootstrap execution begins.
+
+Source: the 2026-10-29 planning draft in the OmegaFlow checkout,
+`temp/part-c-delivery/implementation-through-C6.1/RP-C6-HANDOFF-PLANNING.md`
+(read from `/home/omry/dev/omegaflow`), corrected by the maintainer-relayed
+OmegaFlow scope clarification on 2026-10-29. The clarification below takes
+precedence over the earlier handoff where they differ. These are consumer
+requirements, not an approved Reploy API or an installed-release conformance
+claim.
+
+The subsequent [OmegaFlow clarification](supporting/omegaflow-rp-c6-requirements/consumer-clarifications.md)
+removes raw Bash/system-rc byte export from the pending scope and makes
+invalidation depend on changes to the bound prepared state. It takes precedence
+over older byte-export or unconditional tag-change language in source evidence
+and preliminary estimates.
+
+## Corrected ownership and supplied-input scope
+
+OmegaFlow defines the blueprint; Reploy delivers and enforces it. Bash, `/bin/sh`,
+loaders and libraries supplied by the workload image remain Reploy's
+responsibility. OmegaFlow does not need to enumerate or snapshot that image
+dependency closure. OmegaFlow owns compatibility checks against its qualified
+Bash build table. Reploy must expose the resolved Bash and selected system-rc
+facts for the generation actually launched. The selected system-rc path must be
+absent; the consumer reports `/etc/bash.bashrc` for all three current profiles.
+
+For consumer-supplied inputs, OmegaFlow reports a complete expected-SHA-256
+inventory of 18 payload files plus `manifest.json`, approximately 7.9 MiB total:
+
+- `bin/envoy` and `bin/awsh`; helper commands use the same Awsh executable;
+- `etc/awsh-bashrc`, `etc/inputrc` and `etc/bash-builds.json`;
+- one terminal database entry and 12 locale files; and
+- `manifest.json`, with its expected digest supplied separately.
+
+Retain established paths under `/omegaflow-runtime`. These are regular files
+without symbolic-link or hardlink aliases. The reported staged modes are `0555`
+for directories/executables and `0444` for data. The workload needs read/execute
+access; source numeric UID/GID preservation is not required. The adapter rcfile
+sources no additional startup files. These inventory facts are consumer-reported,
+not independently verified measurements in this record.
+
+Protected copies are acceptable. Verify the bytes actually retained against the
+supplied expected hashes, then deliver those exact contents at the declared
+paths. Computing fresh hashes without checking the supplied expectations could
+accept inputs mutated before capture. Once an independent protected capture
+exists, changes to its original source need not invalidate it. Enforce explicit
+size bounds and reject unsupported sizes. Copying is an implementation candidate,
+not a requirement to introduce a general filesystem snapshot service.
+
+Distinguish protected supplied inputs from unprotected application data. Videos
+and other application data can remain live; mutation, disappearance and processing
+errors are acceptable ordinary runtime failures. `/run/omegaflow` remains writable
+for live sockets and FIFOs. Those resources are not protected startup payload.
+
+Protect retained runtime contents against source mutation after verification,
+workload writes and mount shadowing through Reploy delivery machinery. File
+permissions alone do not establish the boundary. Hostile-host-root containment
+and stronger same-identity isolation are outside the clarified requirement.
+
+## Requirements and acceptance
+
+1. Select the workload image through existing public preparation machinery.
+   Observe its immutable identity and inherited environment, and evaluate image
+   plus application environment before OmegaFlow adds reserved composition
+   values. Forbidden inherited values must not disappear from observation.
+2. Compose final native blueprints through OmegaFlow's existing Hydra entry and
+   prepare with the same selected image. Reject image replacement rather than
+   silently changing composed YAML or reusing checks for another image.
+3. Inspect the prepared generation's final image/platform, effective environment,
+   execution identity, mounts, endpoints, resolved executable path/type/hash and required
+   selected system-rc absence. Keep configured private environment values private.
+   Define bounded metadata/hash/absence evidence, safe path resolution, and explicit
+   absent, symbolic-link, non-regular-file and error behavior. Inspection must
+   not start bootstrap or execute untrusted workload code.
+4. Bind the observations to one public immutable identity. Accept that expected
+   identity at controlled-session admission, using Reploy's existing ownership
+   and cleanup. Bind the protected supplied-input capture and relevant image
+   facts through admission and use; pinning only the image is insufficient.
+5. Prove public inspection and public launch work together. Relevant rebuilds,
+   changes to the selected immutable image, bound blueprint/environment/mount facts,
+   protected content or selected generation must invalidate stale facts. Moving an
+   original tag while the inspected immutable image is retained and launched does
+   not by itself invalidate the binding. Source changes after an independent
+   verified capture and changes to unprotected application data need not invalidate
+   that capture. Each stale case must prove
+   bootstrap did not start. Malformed,
+   oversized, unknown-version and forged identities must fail closed;
+   interruptions must leave no active workload or leaked reservation.
+6. Retain the exact release/source identity, public contract and native test
+   evidence. Qualify OmegaFlow against an explicitly selected compatible release
+   before claiming the consumer is unblocked.
+
+## Current support and gaps
+
+The Reploy source inspection on 2026-10-29 identified reusable internal generation
+and build identities in [controlled-session planning](../../internal/dockerdeploy/controlled_session_plan.go),
+and executable hash, ownership, permission and symbolic-link observations in the
+[probe protocol](../../internal/probe/protocol.go). These do not establish the
+complete public inspection/admission contract above. The inspected
+[public launch options](../../internal/cli/controlled_session.go) do not accept
+the consumer's expected preparation identity. Existing executable metadata/hash
+observations do not establish the complete public absence and admission contract.
+The current scope does not require raw Bash or system-rc byte export; see the
+[consumer clarifications](supporting/omegaflow-rp-c6-requirements/consumer-clarifications.md).
+
+The [controlled-session design](../CONTROLLED_SESSION_DESIGN.md) keeps internal
+generation/build/plan digests out of the public session stream. A separate
+preparation interface with an opaque public binding is a candidate, not a
+selected design. Reuse existing preparation, immutable-image selection, build
+verification, inspection and session admission. Do not add a parallel image
+selector, inspection daemon, receipt authority or build pipeline.
+
+Reploy owns generic facts, image delivery, protected supplied-input delivery and
+admission. OmegaFlow owns its reserved environment policy, Bash compatibility
+checks, supplied runtime contents, mount acceptance policy and recording behavior.
+
+## Separate endpoint dependency
+
+The handoff reports that optional host publication for private endpoints is
+already known Reploy backlog work. Its exact backlog item is not yet confirmed;
+do not create a duplicate. Related endpoint-address and network-policy items are
+not an exact match. Existing private controlled-session networking must remain
+distinct from the native-blueprint validation gap reported for OmegaFlow's
+selected installed release.
+
+The handoff reports this dependency blocks C6.1 acceptance. RP-C6 separately
+blocks C6.2/C6.3 and dependent launch acceptance. Resolving one does not prove the
+other is resolved.
+
+## Delivery decision and next step
+
+**Minimum delivery: undecided.** Evaluate which acceptance checks are essential
+to unblock RP-C6 and recommend the smallest coherent contract from the actual
+code. Produce bottom-up production/test estimates, proposed delivery cuts,
+acceptance evidence and release/adoption prerequisites. Any deferred consumer
+requirements need explicit consumer agreement; do not silently weaken the
+launch guarantee to make the delivery smaller.
+
+Resolve image selection through final preparation, protected-input capture,
+private-value handling, identity lifetime, cancellation, concurrent replacement,
+platform support, bounds and errors during design. Review the resulting design
+through the required local deep design review and remote PR cycle before
+implementation. Return to design if costs or mechanisms expand.
+
+## Progress and evidence
+
+### Revised preliminary size estimate, 2026-10-29
+
+This is a source-based planning estimate, not a reviewed LLD, measured result or
+approved set of slices. Counts are added plus removed lines; tests include
+fixtures. Documentation, review bookkeeping, generated output, release execution
+and OmegaFlow-side integration are excluded.
+
+| Responsibility | Production LOC | Test/fixture LOC |
+| --- | ---: | ---: |
+| Bind selected image through preparation; inherited/application/final environment observations | 250–400 | 400–650 |
+| Bounded resolved-Bash inspection/export and selected system-rc absence evidence | 300–450 | 600–900 |
+| Generic protected supplied-input declaration/capture, expected-hash verification, exact path/mode delivery and mount protection | 350–550 | 700–1150 |
+| Expected preparation identity at existing admission; stale-state refusal and capture lifetime/cleanup | 250–400 | 500–850 |
+| Public CLI/schema integration and end-to-end inspection/launch qualification | 150–250 | 500–800 |
+| **Total** | **1300–2050** | **2700–4350** |
+
+Expect approximately four to six implementation PRs after design, subject to
+coherent cuts and the repository's production-size limits. These rows are
+responsibilities, not approved task IDs. The superseded estimate was 1550–2500
+production and 3200–5200 test LOC. The narrower inventory and protection boundary
+reduce estimated work and uncertainty; they do not establish implementation
+readiness or a measured saving.
+
+The estimate assumes reuse of the existing controlled-session platform and
+ownership model, the consumer's explicit bounded payload inventory and supplied
+expected hashes, and reuse of existing artifact storage/materialization where
+it meets the required delivery boundary. The public API and delivery mechanism
+remain undecided. It does not estimate a general mutable-tree
+snapshot service, a new image-selection pipeline, remote-engine support,
+multi-identity activation or private-environment injection. Unsupported inputs
+must refuse; a read-only bind or permission change alone is not a substitute for
+protected delivery. If necessary protection cannot fit this scope, resolve
+the design and re-estimate before committing to delivery.
+
+Basis: [current session admission](../../internal/dockerdeploy/current_controlled_session_run.go)
+already loads verified current builds under both deployment locks and owns queue
+leases; [runtime input handling](../../internal/dockerdeploy/current_runtime_files.go)
+validates generated inputs under the operation lock. Those locks do not by
+themselves prevent external bind-source mutation. The
+[image inspector](../../internal/dockerdeploy/docker_image_inspect.go) already
+extracts inherited environment, while the [probe](../../internal/probe/protocol.go)
+returns executable metadata/hashes but still needs the complete bounded public
+inspection/absence and admission semantics. The historical estimate above included
+byte export, which the consumer subsequently removed from the required scope.
+The [artifact store](../../internal/providerstore/store.go) already offers
+`PublishExpected`, which compares retained bytes against an expected descriptor
+before atomic publication. That is a reuse candidate, not proof of complete
+runtime delivery, reachability/cleanup integration or mount-shadow resistance.
+No new runtime proof or tests ran for this estimate.
+
+Optional host endpoint publication remains a separately identified dependency
+with an unconfirmed exact backlog item; its cost is excluded. Delivery of RP-C6
+alone therefore does not claim to unblock all OmegaFlow acceptance.
+
+### Delivery status
+
+- Maintainer priority on 2026-10-29: once the global helper blocker is fixed,
+  finalize E2.2 through PR approval, then pause E before E2.3 and run
+  `global:swe:design` for this consumer record. Follow its requirements, HLD and
+  LLD review/approval gates; stop before implementation. The remaining E slices
+  stay unfinished and preserved.
+- Evaluation is queued in [the backlog](../BACKLOG.md); no delivery cuts,
+  implementation, release selection or consumer qualification are approved.
+- This is separate from milestone E and does not expand its delivery scope.
+- The source handoff reports C6.1 preserved and unaccepted, with two unresolved
+  ownership findings. Those campaign conditions have not been independently
+  revalidated here. It authorizes no campaign recovery or dependency upgrade.
+- After prerequisite delivery and release selection, OmegaFlow must use its
+  reviewed dependency-adoption and guarded campaign-recovery path.

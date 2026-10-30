@@ -5,6 +5,7 @@ it into a subdirectory only when that improves navigation.
 
 | Consumer | Current need | Status | Next step |
 | --- | --- | --- | --- |
+| [OmegaFlow](omegaflow.md) | Public preparation inspection and admission of the inspected workload; separate private-endpoint dependency | Requirements/HLD approved; LLD unfinished and paused for E | Resume detailed engineering when prioritized |
 | [Dingo](dingo.md) | Development workspace and robot deployment capabilities | Historical needs recorded; current gaps need revalidation | Evaluate and prioritize against current Reploy behavior |
 
 ## What belongs here

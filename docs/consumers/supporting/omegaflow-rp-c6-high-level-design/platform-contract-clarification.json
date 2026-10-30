@@ -1,0 +1,29 @@
+{
+  "kind": "existing-product-platform-contract-clarification",
+  "recorded_at": "2026-10-29T19:54:37.593375+00:00",
+  "source": "Maintainer messages in this conversation",
+  "messages": [
+    "Include my current setup in the first delivery: Reploy running inside WSL2, using Docker Desktop\u2019s Linux-container engine. Record the tested versions and filesystem locations.",
+    "This is meant for public use. WSL and general Windows, Linux and Mac support.",
+    "nothing new here I think. Reploy is already for all those environments."
+  ],
+  "resolved_stage": "f01-f03-s03-distinguish-settled-owner-decisions-from",
+  "disposition": "Inherit existing public Reploy host support. The agent incorrectly treated platform support as a new owner choice. WSL2/Desktop is one required qualification case, not the entire delivery cohort.",
+  "hosts": [
+    "native Windows",
+    "WSL2",
+    "Linux",
+    "native macOS"
+  ],
+  "workloads": "Linux containers; first OmegaFlow qualified workload remains linux/amd64",
+  "acceptance": "Complete public inspection -> admission -> launch with success, relevant refusal/no-bootstrap, cancellation and cleanup cases on supported host/engine combinations. Retain exact versions, architecture and filesystem/storage locations. Keep identical integrity guarantees.",
+  "not_included": [
+    "Windows-container workloads",
+    "Podman",
+    "rootless engines",
+    "remote engines"
+  ],
+  "requirements_approval": "Reuse unchanged requirements R1-R11 and prior actual approval; this instruction clarifies existing host coverage and required qualification without approving an HLD, LLD or implementation.",
+  "hld_approved": false,
+  "implementation_authorized": false
+}

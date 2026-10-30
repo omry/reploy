@@ -1,0 +1,91 @@
+{
+  "scope": "Observed local mechanism-proof environment, not full public acceptance",
+  "kernel": "6.18.54.1-microsoft-standard-WSL2",
+  "process_platform": "Linux-6.18.54.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "checkout": "/home/omry/dev/reploy",
+  "proof_workspace": "/home/omry/dev/reploy/temp/omegaflow-hld-copy-0bzst26e",
+  "original_source": "/home/omry/dev/reploy/temp/omegaflow-hld-copy-0bzst26e/original",
+  "retained_capture": "/home/omry/dev/reploy/temp/omegaflow-hld-copy-0bzst26e/capture",
+  "retained_file": "/home/omry/dev/reploy/temp/omegaflow-hld-copy-0bzst26e/capture/payload",
+  "container_path": "/runtime/payload",
+  "read_only_mount_target": "/runtime",
+  "proof_result": "/home/omry/.local/state/awd/reploy-E-resume-20261028/OmegaFlow-hld-protected-copy-proof-result.json",
+  "commands": [
+    {
+      "argv": [
+        "docker",
+        "version",
+        "--format",
+        "{{json .}}"
+      ],
+      "exit_code": 0,
+      "stdout": "{\"Client\":{\"Version\":\"29.8.1\",\"ApiVersion\":\"1.56\",\"DefaultAPIVersion\":\"1.56\",\"GitCommit\":\"4a63305\",\"GoVersion\":\"go1.26.8\",\"Os\":\"linux\",\"Arch\":\"amd64\",\"BuildTime\":\"Tue Sep 15 16:24:42 2026\",\"Context\":\"default\"},\"Server\":{\"Platform\":{\"Name\":\"Docker Desktop 4.93.0 (240920)\"},\"Version\":\"29.8.1\",\"ApiVersion\":\"1.56\",\"MinAPIVersion\":\"1.40\",\"Os\":\"linux\",\"Arch\":\"amd64\",\"Components\":[{\"Name\":\"Engine\",\"Version\":\"29.8.1\",\"Details\":{\"ApiVersion\":\"1.56\",\"Arch\":\"amd64\",\"BuildTime\":\"Tue Sep 15 16:25:38 2026\",\"Experimental\":\"false\",\"GitCommit\":\"464cd50\",\"GoVersion\":\"go1.26.8\",\"KernelVersion\":\"6.18.54.1-microsoft-standard-WSL2\",\"MinAPIVersion\":\"1.40\",\"Module\":\"github.com/moby/moby/v2\",\"ModuleVersion\":\"v2.0.0+unknown\",\"Os\":\"linux\"}},{\"Name\":\"containerd\",\"Version\":\"v2.3.5\",\"Details\":{\"GitCommit\":\"1294c24a7da8e5a793ed378161673abe94118892\"}},{\"Name\":\"runc\",\"Version\":\"1.5.1\",\"Details\":{\"GitCommit\":\"v1.5.1-0-g8f2685a4\"}},{\"Name\":\"docker-init\",\"Version\":\"0.19.0\",\"Details\":{\"GitCommit\":\"de40ad0\"}}],\"GitCommit\":\"464cd50\",\"GoVersion\":\"go1.26.8\",\"KernelVersion\":\"6.18.54.1-microsoft-standard-WSL2\",\"BuildTime\":\"2026-09-15T16:25:38.000000000+00:00\"}}\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "docker",
+        "info",
+        "--format",
+        "{\"os_type\":{{json .OSType}},\"architecture\":{{json .Architecture}},\"operating_system\":{{json .OperatingSystem}},\"docker_root_dir\":{{json .DockerRootDir}}}"
+      ],
+      "exit_code": 0,
+      "stdout": "{\"os_type\":\"linux\",\"architecture\":\"x86_64\",\"operating_system\":\"Docker Desktop (containerized)\",\"docker_root_dir\":\"/var/lib/docker\"}\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "docker",
+        "context",
+        "inspect",
+        "--format",
+        "{{json .Endpoints.docker.Host}}"
+      ],
+      "exit_code": 0,
+      "stdout": "\"unix:///var/run/docker.sock\"\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "findmnt",
+        "-J",
+        "-T",
+        "/home/omry/dev/reploy/temp/omegaflow-hld-copy-0bzst26e",
+        "-o",
+        "TARGET,FSTYPE,SOURCE"
+      ],
+      "exit_code": 0,
+      "stdout": "{\n   \"filesystems\": [\n      {\n         \"target\": \"/\",\n         \"fstype\": \"ext4\",\n         \"source\": \"/dev/sdd\"\n      }\n   ]\n}\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "go",
+        "version"
+      ],
+      "exit_code": 0,
+      "stdout": "go version go1.26.8 linux/amd64\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "wsl.exe",
+        "--version"
+      ],
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "<3>WSL (3447587 - ) ERROR: UtilAcceptVsock:281: accept4 failed 110\n"
+    },
+    {
+      "argv": [
+        "cmd.exe",
+        "/c",
+        "ver"
+      ],
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "<3>WSL (3448526 - ) ERROR: UtilAcceptVsock:281: accept4 failed 110\n"
+    }
+  ],
+  "distro_os_release": "PRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.4 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo\n"
+}

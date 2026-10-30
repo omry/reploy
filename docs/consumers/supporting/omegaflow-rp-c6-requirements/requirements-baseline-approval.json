@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "kind": "maintainer-requirements-baseline-approval",
+  "recorded_at": "2026-10-29T17:52:54.693444+00:00",
+  "source": "Maintainer message in this conversation",
+  "message": "approved then.",
+  "run_id": "run_3k0spmw1cd3w8pmjsq65ggeese",
+  "gate": "f01-f01-s19-user-gate-before-record-explicit-human-a",
+  "request": "/home/omry/.local/state/awd/reploy-E-resume-20261028/OmegaFlow-requirements-baseline-approval-request-02.json",
+  "request_sha256": "150e7a008bb1169b5a13e54360ac4c4382c29c1e62641648a72a5cd0877f8865",
+  "approved_artifacts": {
+    "docs/consumers/omegaflow.md": "0f7f51ac1a2df979014cd44fe15519401bacb6f06d64ae06ea22de038e98d3cb",
+    "docs/consumers/omegaflow-rp-c6-requirements.md": "c1c823193042e0ce513d175fffafe2add489bc49bf56cfad61401302029ef9c6"
+  },
+  "scope": "Full revised OmegaFlow RP-C6 requirements including R4 metadata/hash/absence without raw byte export and R9 actual-bound-state invalidation.",
+  "not_approved": [
+    "HLD",
+    "LLD or slices",
+    "implementation",
+    "commit",
+    "publication",
+    "release"
+  ],
+  "review_stamp": false
+}
