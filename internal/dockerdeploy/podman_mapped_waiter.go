@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path"
 	"slices"
 	"strings"
 	"sync"
@@ -70,9 +71,14 @@ func startMappedWaiterWithBackendV1(ctx context.Context, p *preparedMappedPodman
 		return nil, fmt.Errorf("mapped waiter requires a valid binding and admission deadline")
 	}
 	m := p.state.IdentityMapping
-	body, name, err := podmanApplicationCreateRequest(p.spec, p.namespace)
+	request, err := p.request()
+	body, name := request.body, request.name
 	if err != nil || body.Tty || len(body.Cmd) == 0 || body.Cmd[0] != "sandbox-exec" {
 		return nil, fmt.Errorf("mapped waiter requires qualified non-TTY sandbox stdin transport")
+	}
+	startup, err := mappedStartupCommandV1(body.Cmd, p.policy)
+	if err != nil {
+		return nil, err
 	}
 	if m == nil || m.PendingOperation == nil || m.PendingOperation.Native == nil || p.state.Current == nil ||
 		b.Installation != m.InstallationID || b.Operation != p.operation || b.Generation != p.state.Current.BuildLockDigest || b.Revision != m.Revision ||
@@ -103,7 +109,7 @@ func startMappedWaiterWithBackendV1(ctx context.Context, p *preparedMappedPodman
 		prefix = append(prefix, "--label", key+"="+value)
 	}
 	copy.spec.Args = append(prefix, copy.spec.Args[entry:entry+3]...)
-	command := append([]string{mappedlaunch.Command, string(encoded), deadline.UTC().Format(time.RFC3339Nano)}, body.Cmd...)
+	command := append([]string{mappedlaunch.Command, string(encoded), deadline.UTC().Format(time.RFC3339Nano)}, startup...)
 	copy.spec.Args = append(copy.spec.Args, command...)
 	runContext, cancel := context.WithCancel(options.Context)
 	r, w := io.Pipe()
@@ -151,11 +157,16 @@ func startMappedWaiterWithBackendV1(ctx context.Context, p *preparedMappedPodman
 }
 
 func (a *ownedMappedWaiterV1) observeContainer(ctx context.Context, client *podmanHealthcheckClient) (int, error) {
-	data, err := client.request(ctx, http.MethodGet, "/v1.44/containers/"+a.container+"/json", nil)
+	_, err := a.prepared.request()
+	if err != nil {
+		return 0, err
+	}
+	data, err := client.request(ctx, http.MethodGet, "/v"+client.version+"/libpod/containers/"+a.container+"/json", nil)
 	var object struct {
-		ID, Image    string
-		RestartCount *int
-		Config       struct {
+		ID, Image                   string
+		RestartCount                *int
+		BoundingCaps, EffectiveCaps *[]string
+		Config                      struct {
 			Labels          map[string]string
 			Entrypoint, Cmd []string
 			Tty             *bool
@@ -164,13 +175,24 @@ func (a *ownedMappedWaiterV1) observeContainer(ctx context.Context, client *podm
 			Running bool
 			Pid     int
 		}
-		HostConfig struct{ RestartPolicy *struct{ Name string } }
+		HostConfig struct {
+			AutoRemove    *bool
+			RestartPolicy *struct {
+				Name              string
+				MaximumRetryCount *int
+			}
+			SecurityOpt *[]string
+		}
 	}
 	entry := slices.Index(a.prepared.spec.Args, "--entrypoint")
 	if err != nil || json.Unmarshal(data, &object) != nil || object.ID != a.container || strings.TrimPrefix(object.Image, "sha256:") != strings.TrimPrefix(string(a.binding.Image), "sha256:") || object.Config.Tty == nil || *object.Config.Tty ||
 		object.Config.Labels["io.reploy.native-operation"] != a.binding.Operation || object.Config.Labels["io.reploy.native-installation"] != a.binding.Installation ||
 		!slices.Equal(object.Config.Entrypoint, []string{"/reploy-probe"}) || !slices.Equal(object.Config.Cmd, a.prepared.spec.Args[entry+3:]) ||
-		object.RestartCount == nil || *object.RestartCount != 0 || object.HostConfig.RestartPolicy == nil || object.HostConfig.RestartPolicy.Name != "" && object.HostConfig.RestartPolicy.Name != "no" {
+		object.RestartCount == nil || *object.RestartCount != 0 || object.HostConfig.AutoRemove == nil || *object.HostConfig.AutoRemove ||
+		object.HostConfig.RestartPolicy == nil || object.HostConfig.RestartPolicy.Name != "no" || object.HostConfig.RestartPolicy.MaximumRetryCount == nil || *object.HostConfig.RestartPolicy.MaximumRetryCount != 0 ||
+		!mappedObservedCapabilitiesV1(object.BoundingCaps, a.prepared.policy.setupCapabilities) ||
+		!mappedObservedCapabilitiesV1(object.EffectiveCaps, a.prepared.policy.setupCapabilities) ||
+		!mappedObservedSecurityV1(object.HostConfig.SecurityOpt, a.prepared.policy.profile) {
 		return 0, fmt.Errorf("mapped waiter runtime identity or inhibited command changed")
 	}
 	if !object.State.Running {
@@ -180,6 +202,51 @@ func (a *ownedMappedWaiterV1) observeContainer(ctx context.Context, client *podm
 		return 0, fmt.Errorf("running mapped waiter has no exact host PID")
 	}
 	return object.State.Pid, nil
+}
+
+// Native inspect exposes complete OCI sets. Compat CapAdd/CapDrop are deltas
+// from configurable engine defaults and cannot establish the selected set.
+func mappedObservedCapabilitiesV1(names *[]string, expected uint64) bool {
+	if names == nil {
+		return false
+	}
+	var observed uint64
+	for _, name := range *names {
+		bit := slices.Index(mappedCapabilityNamesV1, strings.TrimPrefix(name, "CAP_"))
+		if bit < 0 || observed&(uint64(1)<<bit) != 0 {
+			return false
+		}
+		observed |= uint64(1) << bit
+	}
+	return observed == expected
+}
+
+// Podman normalizes NNP and may retain an engine-side profile pathname rather
+// than inline bytes. This is provenance only: release still requires F's fresh
+// exact KernelPolicy/KernelFacts proof for this instance, never this pathname.
+func mappedObservedSecurityV1(options *[]string, profile string) bool {
+	if options == nil || len(*options) != 2 {
+		return false
+	}
+	var nnp, seccomp bool
+	for _, option := range *options {
+		switch {
+		case option == "no-new-privileges" || option == "no-new-privileges=true":
+			if nnp {
+				return false
+			}
+			nnp = true
+		case strings.HasPrefix(option, "seccomp="):
+			value := strings.TrimPrefix(option, "seccomp=")
+			if seccomp || value != profile && (!strings.HasPrefix(value, "/") || path.Clean(value) != value || strings.ContainsAny(value, "\x00\r\n")) {
+				return false
+			}
+			seccomp = true
+		default:
+			return false
+		}
+	}
+	return nnp && seccomp
 }
 
 type mappedWaiterEvidenceV1 struct {

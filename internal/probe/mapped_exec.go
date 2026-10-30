@@ -12,6 +12,19 @@ import (
 // inhibited. Ordinary sandbox/restricted-exec parsing does not accept it.
 const mappedCapabilityArgumentV1 = "--mapped-capabilities="
 
+// ValidateMappedSandboxArgumentsV1 lets the host use the actual startup parser
+// before creating an inhibited instance. It grants no runtime qualification.
+func ValidateMappedSandboxArgumentsV1(args []string, ceiling uint64) error {
+	plan, err := parseMappedSandboxExecPlanV1(args)
+	if err != nil {
+		return err
+	}
+	if plan.MappedCapabilities == nil || *plan.MappedCapabilities != ceiling {
+		return fmt.Errorf("mapped startup capability argument differs from selected policy")
+	}
+	return nil
+}
+
 func parseMappedSandboxExecPlanV1(args []string) (sandboxExecPlanV1, error) {
 	var ceiling *uint64
 	if len(args) > 0 && strings.HasPrefix(args[0], mappedCapabilityArgumentV1) {

@@ -30,6 +30,8 @@ type mappedSandboxRequestV1 struct {
 	RuntimePolicy canonical.Digest     `json:"runtime_policy"`
 	NetworkPolicy canonical.Digest     `json:"network_policy"`
 	RequiredCode  []string             `json:"required_code"`
+	KernelPolicy  canonical.Digest     `json:"kernel_policy"`
+	KernelFacts   mappedKernelFactsV1  `json:"kernel_facts"`
 }
 
 type mappedCodePathV1 struct {
@@ -44,6 +46,8 @@ type mappedSandboxProofV1 struct {
 	Request       canonical.Digest
 	NetworkPolicy canonical.Digest
 	ReadOnlyRoot  bool
+	KernelPolicy  canonical.Digest
+	KernelFacts   mappedKernelFactsV1
 	// Code is F's complete closure from the pinned image, including loaders,
 	// interpreters and dependency search paths. ObservedCode is its live view.
 	Code, ObservedCode []mappedCodePathV1
@@ -66,7 +70,8 @@ func (a *ownedMappedWaiterV1) sandboxRequest() (mappedSandboxRequestV1, error) {
 		lock.FinalImage.RootFSSubject != p.state.Current.RootFSSubject {
 		return mappedSandboxRequestV1{}, fmt.Errorf("mapped sandbox generation or image changed")
 	}
-	body, _, err := podmanApplicationCreateRequest(p.spec, p.namespace)
+	create, err := p.request()
+	body := create.body
 	separator := slices.Index(body.Cmd, "--")
 	if err != nil || separator < 0 || separator+1 >= len(body.Cmd) || !mappedCodeAbsoluteV1(body.Cmd[separator+1]) {
 		return mappedSandboxRequestV1{}, fmt.Errorf("mapped sandbox executable is unavailable")
@@ -78,13 +83,18 @@ func (a *ownedMappedWaiterV1) sandboxRequest() (mappedSandboxRequestV1, error) {
 	slices.Sort(required)
 	// ReadBuildLock already validated the closed string-only network policy.
 	network, _ := canonical.Sum("mapped-network", "v1", lock.RuntimePolicy.Network)
-	return mappedSandboxRequestV1{a.binding, a.container, strconv.Itoa(a.pid), policy, network, slices.Compact(required)}, nil
+	return mappedSandboxRequestV1{Binding: a.binding, Container: a.container, PID: strconv.Itoa(a.pid),
+		RuntimePolicy: policy, NetworkPolicy: network, RequiredCode: slices.Compact(required),
+		KernelPolicy: canonical.Digest(p.policy.identity), KernelFacts: p.policy.facts()}, nil
 }
 
 func verifyMappedSandboxV1(ctx context.Context, state deploy.StateV1, evidence deploy.IdentityMappingEvidenceV1, request mappedSandboxRequestV1) error {
 	owner, ok := evidence.(mappedSandboxEvidenceV1)
 	if !ok || ctx.Err() != nil {
 		return fmt.Errorf("mapped sandbox observation provider is unavailable")
+	}
+	if err := request.KernelFacts.validate(); err != nil || request.KernelPolicy != request.KernelFacts.Identity {
+		return fmt.Errorf("mapped sandbox requires the exact compiled kernel policy tuple")
 	}
 	digest, err := canonical.Sum("mapped-sandbox", "v1", request)
 	if err != nil {
@@ -97,6 +107,7 @@ func verifyMappedSandboxV1(ctx context.Context, state deploy.StateV1, evidence d
 		return fmt.Errorf("mapped sandbox observation failed: %w", err)
 	}
 	if ctx.Err() != nil || proof.Request != digest || proof.NetworkPolicy != request.NetworkPolicy || !proof.ReadOnlyRoot ||
+		proof.KernelPolicy != request.KernelPolicy || proof.KernelFacts != request.KernelFacts ||
 		len(proof.Code) == 0 || !slices.Equal(proof.Code, proof.ObservedCode) || proof.Mounts == nil {
 		return fmt.Errorf("mapped sandbox proof is missing, stale or substituted")
 	}
