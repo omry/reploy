@@ -23,9 +23,10 @@ type preparedMappedPodmanCreateV1 struct {
 	endpoint  string
 	version   string
 	namespace string
+	policy    mappedSeccompPolicyV1
 }
 
-func prepareMappedPodmanCreateV1(ctx context.Context, ops deploy.IdentityMappingOperationsV1, expected deploy.StateV1, active identitymapping.Geometry, operationID string, spec CommandSpec) (*preparedMappedPodmanCreateV1, error) {
+func prepareMappedPodmanCreateV1(ctx context.Context, ops deploy.IdentityMappingOperationsV1, expected deploy.StateV1, active identitymapping.Geometry, operationID string, spec CommandSpec, policy mappedSeccompPolicyV1) (*preparedMappedPodmanCreateV1, error) {
 	state, err := ops.ObserveEffects(ctx, expected, active, operationID)
 	if err != nil {
 		return nil, err
@@ -40,16 +41,18 @@ func prepareMappedPodmanCreateV1(ctx context.Context, ops deploy.IdentityMapping
 	}
 	spec = pinDockerEndpointV1(spec, target.Endpoint)
 	spec.Args, spec.Env = slices.Clone(spec.Args), slices.Clone(spec.Env)
-	p := &preparedMappedPodmanCreateV1{ops: ops, state: state, active: active, operation: operationID, spec: spec, endpoint: target.Endpoint}
+	p := &preparedMappedPodmanCreateV1{ops: ops, state: state, active: active, operation: operationID, spec: spec, endpoint: target.Endpoint, policy: policy}
 	client, namespace, err := p.observe(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer client.http.CloseIdleConnections()
-	body, _, err := podmanApplicationCreateRequest(spec, namespace)
+	p.namespace = namespace
+	request, err := p.request()
 	if err != nil {
 		return nil, err
 	}
+	body := request.body
 	// Storage preparation belongs to F; this internal seam cannot grant access
 	// to external host binds or implicitly create persistent named volumes.
 	for _, mount := range body.HostConfig.Mounts {
@@ -66,6 +69,13 @@ func prepareMappedPodmanCreateV1(ctx context.Context, ops deploy.IdentityMapping
 	}
 	p.version, p.namespace = client.version, namespace
 	return p, nil
+}
+
+func (p *preparedMappedPodmanCreateV1) request() (mappedPodmanCreateRequestV1, error) {
+	if p == nil || p.state.Platform.OS != "linux" || p.state.Platform.Architecture != p.policy.abi {
+		return mappedPodmanCreateRequestV1{}, fmt.Errorf("mapped policy ABI differs from selected Linux image platform")
+	}
+	return mappedPodmanApplicationCreateRequestV1(p.spec, p.namespace, p.policy)
 }
 
 func (p *preparedMappedPodmanCreateV1) observe(ctx context.Context) (*podmanHealthcheckClient, string, error) {
@@ -112,10 +122,11 @@ func (p *preparedMappedPodmanCreateV1) create(ctx context.Context, raw commandRu
 	if client.version != p.version || namespace != p.namespace {
 		return "", fmt.Errorf("mapped Podman engine identity or parent namespace changed after preparation")
 	}
-	body, name, err := podmanApplicationCreateRequest(p.spec, namespace)
+	request, err := p.request()
 	if err != nil {
 		return "", err
 	}
+	body, name := request.body, request.name
 	image, err := p.verifyImage(ctx, client)
 	if err != nil {
 		return "", err
