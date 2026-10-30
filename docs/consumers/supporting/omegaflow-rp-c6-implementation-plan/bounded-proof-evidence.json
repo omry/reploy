@@ -1,0 +1,20 @@
+{
+  "OmegaFlow-lld-stream-proof-result.json": {
+    "path": "/home/omry/.local/state/awd/reploy-E-resume-20261028/OmegaFlow-lld-stream-proof-result.json",
+    "sha256": "77296342e921500e313d3dddf9d4410edf7a39c8dc5697842119f4e272050310"
+  },
+  "OmegaFlow-lld-stream-proof-attempt01-result.json": {
+    "path": "/home/omry/.local/state/awd/reploy-E-resume-20261028/OmegaFlow-lld-stream-proof-attempt01-result.json",
+    "sha256": "0d80e32b8ec4bcb5dc94479851a944a9d1d43abd1b0f307768164486f94b22e8"
+  },
+  "OmegaFlow-lld-image-namespace-proof-result.json": {
+    "path": "/home/omry/.local/state/awd/reploy-E-resume-20261028/OmegaFlow-lld-image-namespace-proof-result.json",
+    "sha256": "29258adecb304005864b7a03cf41c33df43b105d64bac0180105181e2fda8be0"
+  },
+  "watchdog_focused_test": {
+    "command": "go test ./internal/dockerdeploy -run '^(TestControlledSessionWatchdogParentLossRemovesOnlyManifestResources|TestControlledSessionWatchdogRetriesParentLossCleanupWhileDockerIsUnavailable|TestControlledSessionWatchdogRejectsPriorBootBeforeReady)$' -count=1",
+    "exit_code": 0,
+    "output": "ok github.com/omry/reploy/internal/dockerdeploy 0.008s",
+    "limits": "Existing shared algorithm tests, not native child-process proof."
+  }
+}
