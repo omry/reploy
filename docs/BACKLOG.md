@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-10-18
+updated: 2026-10-29
 summary: Active planning surface for Reploy design and implementation gaps.
 ---
 
@@ -20,6 +20,9 @@ This file is the day-to-day queue for design and implementation gaps.
 - Keep each item small enough for one focused change.
 - Put only the most urgent items in `Now`.
 - Prefer richer items with brief context and concrete acceptance checks.
+- Keep detailed consumer requirements, evidence and progress in
+  [the consumer directory](consumers/README.md). Link to those records where
+  possible; keep backlog entries focused on priority and the next action.
 - Move completed items out instead of keeping a long archive here.
 - Treat install, packaging, deployment, and blueprint items as operator-facing
   product work, not only as internal refactors.
@@ -281,7 +284,7 @@ This file is the day-to-day queue for design and implementation gaps.
       from two differently located user homes without editing the published
       blueprint or adding a preparation script; cover custom XDG roots
       (including XDG_STATE_HOME) and invalid/missing sources. Extend the portable-checkout need in
-      [Dingo gaps](DINGO_GAPS.md#portable-local-checkout-binding), keeping
+      [Dingo needs](consumers/dingo.md#portable-local-checkout-binding), keeping
       checkout-relative and per-user storage resolution distinct. Define the
       resolution base for each supported relative path and its behavior when
       checkout or staging locations change; never assume a fixed relationship
@@ -303,14 +306,10 @@ This file is the day-to-day queue for design and implementation gaps.
       fresh stage, restage, install, update, missing values, and precedence.
 
 - [ ] `P2` Evaluate and prioritize the Dingo development-environment gaps.
-      Use `docs/DINGO_GAPS.md` as the needs and evidence record for portable
-      checkout binding, development execution, shell initialization, pinned
-      source workspaces, ROS dependencies, robot hardware and networking, and
-      ARM64 handoff. Confirm each boundary against current behavior, separate
-      broadly useful Reploy capabilities from ROS-specific integration, and
-      turn accepted priorities into focused follow-up backlog items without
-      treating this document as an implementation plan. Portable host
-      bind-source resolution is tracked separately above.
+      Revalidate [the consumer needs and evidence](consumers/dingo.md) against
+      current behavior and turn accepted priorities into focused follow-ups.
+      Keep general Reploy capabilities distinct from ROS-specific integration;
+      portable host bind-source resolution remains tracked separately above.
 
 - [ ] `P2` Implement Reploy repository schemas and publication tooling.
       Follow `docs/REPOSITORY_DESIGN.md` as the policy source. Define strict

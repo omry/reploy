@@ -4,7 +4,16 @@ updated: 2026-08-02
 summary: Specific Reploy capability and usability gaps exposed by the Dingo ROS 2 development workspace.
 ---
 
-# Dingo Gaps
+# Dingo
+
+## Current tracking status
+
+The needs and observations below were recorded on 2026-08-02. Moving this
+document into the consumer directory on 2026-10-29 does not revalidate those
+historical gaps against current Reploy behavior. Evaluation and prioritization
+remain queued in [the backlog](../BACKLOG.md). No new implementation, delivery
+approval or qualified release is claimed by this move. Link future shared
+designs and delivery evidence here as the needs are evaluated.
 
 ## Purpose
 
