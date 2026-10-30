@@ -1,0 +1,12 @@
+{
+  "run_id": "run_3k0spmw1cd3w8pmjsq65ggeese",
+  "source_sections": {
+    "requirements": "existing requirements in docs/consumers/omegaflow.md, identical decisions to approved clean requirements",
+    "hld": "High-level design section in docs/consumers/omegaflow.md"
+  },
+  "input_preimage": "docs/consumers/supporting/omegaflow-rp-c6-implementation-plan/approved-hld-workflow-preimage.txt",
+  "sha256": "348371b18433691d73b3589ff6502b817bef1cc40dfedf197a8c39ded646337e",
+  "output_sections": "new Low-level design and implementation plan section; replace historical estimate with current plan link under explicit approval; preserve accepted requirements and HLD",
+  "clean_output": "docs/consumers/omegaflow-rp-c6-implementation-plan.md",
+  "implementation_authorized": false
+}
