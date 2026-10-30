@@ -10,7 +10,9 @@ import (
 // A portable declaration is intent, including when its leaves are unresolved.
 // Later reviewed runtime admission must replace this guard as one complete cut.
 func unmappedRuntimeDocumentV1(state deploy.StateV1) (blueprint.Document, error) {
-	document, err := blueprint.DecodeResolvedDocumentV1(state.Blueprint)
+	// The public guard continues to inhibit even fresh mapped entry. The private
+	// mode boundary adds no public activation or occupied-exec qualification.
+	document, err := runtimeDocumentForEntryModeV1(state, mappedEntryFreshInstanceV1)
 	if err != nil {
 		return blueprint.Document{}, err
 	}
