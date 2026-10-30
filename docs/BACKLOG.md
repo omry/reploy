@@ -34,6 +34,14 @@ This file is the day-to-day queue for design and implementation gaps.
 
 ## Pre-release
 
+- [ ] `P2` Evaluate the minimum public preparation inspection and launch
+      admission delivery that can unblock OmegaFlow RP-C6.
+      Follow [the consumer requirements and progress record](consumers/omegaflow.md).
+      Requirements and HLD are approved; complete the remaining LLD engineering
+      and review with bottom-up estimates, delivery cuts and explicit deferrals
+      when prioritized. Keep the separate endpoint dependency and milestone E
+      unchanged; no implementation is authorized by this backlog entry.
+
 - [ ] `P2` Move the exhaustive portable-tool build matrix to the release gate.
       PR CI currently requires the complete Java matrix added in #222; its
       roughly 1m42s cost is acceptable for now but will grow with tools and
