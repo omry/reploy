@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-10-29
+updated: 2026-10-30
 summary: Active planning surface for Reploy design and implementation gaps.
 ---
 
@@ -33,6 +33,13 @@ This file is the day-to-day queue for design and implementation gaps.
   user action.
 
 ## Pre-release
+
+- [ ] `P2` Evaluate an operator-authorized host-session service profile for Flux
+      packaged SSH. Follow [the consumer requirements and evidence](consumers/flux-ssh.md).
+      Agree the smallest disposable-host qualification scope before design;
+      preserve ordinary defaults and the current multi-identity E priority.
+      This is a separate capability proposal, not an approved hotfix or authority
+      to expose host-root resources.
 
 - [ ] `P2` Evaluate the minimum public preparation inspection and launch
       admission delivery that can unblock OmegaFlow RP-C6.
