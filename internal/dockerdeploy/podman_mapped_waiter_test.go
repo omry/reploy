@@ -43,6 +43,7 @@ func (e *waiterEffectFixtureV1) MappedSandbox(_ context.Context, _ deploy.StateV
 		code[i] = mappedCodePathV1{name, name}
 	}
 	proof := mappedSandboxProofV1{Request: digest, NetworkPolicy: request.NetworkPolicy, ReadOnlyRoot: true,
+		KernelPolicy: request.KernelPolicy, KernelFacts: request.KernelFacts,
 		Code: code, ObservedCode: slices.Clone(code), Mounts: []mappedSandboxMountV1{}}
 	if e.sandboxChange != nil {
 		e.sandboxChange(&proof)
@@ -132,7 +133,7 @@ func newWaiterFixtureV1(t *testing.T) *waiterFixtureV1 {
 			w.WriteHeader(500)
 			return
 		}
-		object := map[string]any{"Id": f.id, "Image": f.binding.Image, "RestartCount": 0, "Config": map[string]any{"Labels": f.body.Labels, "Entrypoint": f.body.Entrypoint, "Cmd": f.body.Cmd, "Tty": f.body.Tty}, "State": map[string]any{"Running": !f.stopped, "Pid": f.pid}, "HostConfig": map[string]any{"RestartPolicy": map[string]any{"Name": "no"}}}
+		object := map[string]any{"Id": f.id, "Image": f.binding.Image, "RestartCount": 0, "Config": map[string]any{"Labels": f.body.Labels, "Entrypoint": f.body.Entrypoint, "Cmd": f.body.Cmd, "Tty": f.body.Tty}, "State": map[string]any{"Running": !f.stopped, "Pid": f.pid}, "HostConfig": map[string]any{"RestartPolicy": map[string]any{"Name": "no", "MaximumRetryCount": 0}, "AutoRemove": false, "CapAdd": f.body.HostConfig.CapAdd, "CapDrop": f.body.HostConfig.CapDrop, "SecurityOpt": f.body.HostConfig.SecurityOpt}}
 		if f.objectChange != nil {
 			f.objectChange(object)
 		}
@@ -143,6 +144,8 @@ func newWaiterFixtureV1(t *testing.T) *waiterFixtureV1 {
 	spec := sameIDApplicationSpec(t)
 	spec.Args = slices.DeleteFunc(spec.Args, func(s string) bool { return s == "--tty" })
 	entry := slices.Index(spec.Args, "--entrypoint")
+	// Independent trusted startup input, checked against the compiled policy.
+	spec.Args = slices.Insert(spec.Args, entry+4, "--mapped-capabilities=0000000000000000")
 	spec.Args[entry+2] = string(lock.FinalImage.ConfigDigest)
 	name := spec.Args[slices.Index(spec.Args, "--name")+1]
 	empty := []deploy.IdentityMappingIntervalV1{}
@@ -156,6 +159,7 @@ func newWaiterFixtureV1(t *testing.T) *waiterFixtureV1 {
 		t.Fatal(err)
 	}
 	f.prepared = &preparedMappedPodmanCreateV1{ops: deploy.IdentityMappingOperationsV1{Operation: operation, Evidence: f.effect, ValidateProfileOwner: registry.ValidateRequirementProfileV1}, state: state, active: identitymapping.Geometry{Profile: "exact", UIDs: []identitymapping.Interval{{HostStart: 100000, Count: 1}}, GIDs: []identitymapping.Interval{{HostStart: 100000, Count: 1}}}, operation: "operation", spec: spec, endpoint: f.client.endpoint, version: f.client.version, namespace: "fixture-namespace"}
+	f.prepared.policy = mappedPolicyForSpecFixtureV1(t, spec, state.Platform.Architecture, 0)
 	f.binding = mappedlaunch.Binding{Schema: "mapped-release-v1", Installation: "installation", Operation: "operation", Generation: state.Current.BuildLockDigest, Revision: "1", Image: lock.FinalImage.ConfigDigest, Role: "app", Plan: rendererDigest("c")}
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	t.Cleanup(cancel)
@@ -175,12 +179,12 @@ func newWaiterFixtureV1(t *testing.T) *waiterFixtureV1 {
 			if f.createFailure {
 				return "", errors.New("uncertain create; journal retained")
 			}
-			body, _, err := podmanApplicationCreateRequest(p.spec, p.namespace)
+			request, err := p.request()
 			if err != nil {
 				return "", err
 			}
 			f.mu.Lock()
-			f.body = body
+			f.body = request.body
 			f.mu.Unlock()
 			return f.id, ctx.Err()
 		},

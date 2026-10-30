@@ -36,6 +36,7 @@ type podmanApplicationCreate struct {
 		CapDrop, CapAdd, SecurityOpt, Dns []string
 		Tmpfs                             map[string]string
 		Mounts                            []podmanApplicationMount
+		RestartPolicy                     *mappedRestartPolicyV1 `json:",omitempty"`
 	}
 }
 
