@@ -1,1 +1,2 @@
 testdata/controlled-session/*.jsonl text eol=lf
+internal/dockerdeploy/seccomp/docker-v0.2.4.json text eol=lf
