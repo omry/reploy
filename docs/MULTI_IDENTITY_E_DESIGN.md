@@ -1,559 +1,407 @@
 ---
-status: Proposed E implementation plan; not implementation or runtime qualification
-updated: 2026-10-28
-summary: Host-admitted native process startup, exact final authority, lifecycle and entry-point qualification.
+status: Remaining-E LLD reviewed and maintainer accepted; public mapped execution remains inhibited
+updated: 2026-10-30
+summary: Concrete remaining E contracts, shared admission boundaries and source-based implementation slices after merged E2.2.
 ---
 
-# Multi-Identity E Design
+# Multi-identity E detailed design and remaining implementation plan
 
-## Authority and delivery boundary
+## Authority, scope and stopping point
 
-This LLD refines E1–E4 in the [implementation plan](MULTI_IDENTITY_IMPLEMENTATION_PLAN.md).
-Its explicit design dependencies are that plan, the authoritative
-[security contract](MULTI_IDENTITY_SECURITY_CONTRACT.md), the approved
+This document refines the E contract in the [campaign plan](MULTI_IDENTITY_IMPLEMENTATION_PLAN.md).
+Its other explicit governing dependencies are the authoritative
+[security contract](MULTI_IDENTITY_SECURITY_CONTRACT.md), the approved native-process
 [mail reconciliation](MULTI_IDENTITY_MAIL_RECONCILIATION.md), and the
-[D design](MULTI_IDENTITY_D_DESIGN.md). Source code, upstream specifications and
-private experiments are context, not additional normative authorities.
+[D design](MULTI_IDENTITY_D_DESIGN.md). Those four documents remain unchanged.
+Source, test receipts and supporting investigations are context, not extra authorities.
 
-Baseline: merged D at `8a0f78c19f15e007db9a28344dd6754f0a9587a7`.
-D supplies canonical users, groups, roles, explicit capability requests,
-immutable-image account evidence, coverage and generation invalidation. It does
-not authorize runtime grants. This document proposes E internals and decimal
-slice boundaries. It does not change approved public syntax, mapping profiles,
-installation scope or trust expectations. No E implementation is delivered here.
-The four dependency documents remain unchanged.
+The input implementation is merged E2.2 at
+`944d564fc3565cf91f3d72af4f4730fbd6155b3a`. Available prerequisites are E1.1's pure
+identity closure, E1.2's native admission journal, E1.3's owned waiter and one-shot
+release, E2.1's final credential transition, and E2.2's descriptor closure and
+sandbox-proof boundary. Their implementation is retained, not scheduled again.
+This plan covers only unfinished E2.3, E3.1, E3.2, E4.1 and E4.2.
 
-The initial execution cohort remains non-root staging/user-scope installation
-on local rootless Linux Podman. Docker, rootful, system-scope and remote mapped
-execution remain outside scope. Public mapped execution remains inhibited until
-generic-launch after G3. Completing E does not establish F storage/network,
-G activation, H restore/ownership, I secrets, J interface or K release qualification.
+The initial mapped cohort stays non-root staging/user-scope local rootless Linux
+Podman. Docker, rootful, system-scope, remote engines and new native Windows/macOS
+mapped support remain outside E. Exact and bounded mappings keep their approved
+semantics. There is no default profile, global allocator or new public syntax.
+OmegaFlow work is not a prerequisite. Public mapped entries remain inhibited
+through E; F storage/network observations, G orchestration and the generic-launch
+qualification gate after G3 remain required before activation.
 
-## Direction: reuse host admission and direct exec
+The native application master owns its children and may use only admitted
+workload authority. No privileged resident Reploy supervisor or application-callable
+privilege socket is introduced. Same-UID roles do not create isolation.
 
-Use the existing installation operation lock, retained mapping state, owned
-Podman create seam, live-run queue and host service controller. Add an explicit
-mapped branch to the existing startup verifier. That branch waits while the host
-checks the new container, then drops setup authority and directly execs the
-selected application. Postfix or Dovecot manages its own native children. There
-is no resident privileged Reploy supervisor, broker, allocator, new scheduler,
-or application-callable privilege socket. Existing ordinary startup remains strict.
+## Existing contracts that remain fixed
 
-The alternatives are inferior for the approved requirement: reusing the ordinary
-helper unchanged loses every requested capability; extending a permanent
-identity supervisor restores a process model the mail amendment replaced;
-launching a privileged helper through live exec creates an unproved stronger
-process beside untrusted code. None is the default or a fallback. Unsupported
-runtime combinations fail before application effects.
+- C is the selected configuration candidate; R is the complete retained reservation
+  union; P is previously admitted authority. E1.1/E1.2 keep their distinction,
+  exact/bounded rules, generation binding and never-admitted/dormant handling.
+- The host owns the installation operation lock, current D image evidence,
+  selected role, engine identity, exact create and pending native transaction.
+  No caller-supplied geometry, role name or digest authenticates those facts.
+- E1.3 starts only the immutable trusted waiter and consumes one bounded stdin
+  release frame. The admission context, map revision, image, instance and plan
+  bind that attempt. Partial/duplicate/stale frames, lost responses and timeout
+  never authorize another release. Application input after the frame is data.
+- E2.1/E2.2 establish exact final credentials and groups, P/E/B equal to the
+  accepted ceiling, empty I/A and NNP. The final raw tail detaches the descriptor
+  table with CLOSE_RANGE_UNSHARE, keeps constructed fd 0/1/2, then execs or exits
+  the process. No Go cleanup or application callback runs after table closure.
+- Empty capability entries retain ordinary locked NOROOT/drop-all behavior.
+  Current nonempty startup tuples require UID 0. Nonzero UID plus nonempty caps,
+  mapped private-environment transfer, observed-exit supervision and TTY transport
+  remain unqualified and refuse. D's capability catalog is not a runtime allowlist.
+- E2.2's sandbox request already binds exact generation/image, container/PID,
+  runtime/network policy, required code and current complete resolved mounts.
+  Missing, stale or substituted trusted F evidence denies release. Positive
+  injected tests do not supply a production F provider.
 
-Roles select initial credentials and requested ceilings for Reploy-controlled
-entries. They do not isolate same-UID processes or constrain a native master with
-SETUID/SETGID to role transitions. Exact maps expose the explicitly accepted
-container IDs. Bounded maps expose their whole accepted range. The administrator
-coordinates host ranges across independent installations; Reploy checks current
-host authority and preserves reservations but does not allocate globally.
+## Private data and handoff contracts
 
-## Current code and required seams
+These are internal Go values, not blueprint inputs, new persisted ledgers or
+public comparison tokens. Use existing canonical digest and mapping types.
 
-| Existing code | Reuse | Required E change |
-| --- | --- | --- |
-| `deploy/identity_mapping_state.go`, `identity_mapping_operations.go` | Revision, generation, held-lock mutation, protected/dormant reservations, uncertain-effect recovery | Native process binding and explicit execution-acceptance transition; preserve legacy supervisor meaning |
-| `deploy/identity_mapping_effects.go` | Fresh host observation tied to the pending operation | Keep configuration-candidate equality; separately validate accepted execution geometry |
-| `dockerdeploy/podman_mapping_compile.go`, `podman_mapping_create.go` | Interval projection through current parent maps, immutable image, local endpoint/peer checks, exact owned create | Kernel-map attestation, trusted wait/release and admission receipt |
-| `probe/sandbox_exec_linux.go`, `startup_exec_linux.go` | Locked OS thread, trusted setup, direct exec, ordinary capability clearing | Separate exact nonempty-capability path, all-thread and descriptor proof |
-| `dockerdeploy/application_sandbox_plan.go`, `podman_application_create.go` | Ordinary strict sandbox and compatible API transport | Typed mapped plan and explicit setup/app capability separation; do not relax ordinary validation |
-| `dockerdeploy/podman_seccomp.go`, `runtime_policy_compile.go` | Pinned policy provenance, protected-path and mount collision checks | Mapped effective kernel policy and immutable-code closure |
-| `dockerdeploy/live_run_container.go`, `deploy/live_run_queue_file.go` | Owned container/lease recording, cancellation, completion and cleanup | Native-master lifetime and fresh replacement admission |
-| Current workload/command/test/shell/session entry planners | Existing role resolution, queue/lock integration and early guards | Shared mapped planner behind retained public inhibition; no raw engine bypass |
-
-Paths in this table are under `internal/`. The existing compatible-create seam
-is not production admission: its fixture deliberately refuses lifecycle admission.
-The ordinary transient runner currently unlocks before container start. The
-mapped path must retain or reacquire the admission lock and revalidate its fence
-before release. It cannot inherit that ordering unchanged.
-
-## Internal contracts and state
-
-### Invocation-local plan
-
-Add one typed mapped entry plan to the existing execution planning boundary.
-Provisional Go names below describe responsibility, not new public API:
-
-- `MappedEntryPlanV1`: installation/owner identity, operation/run ID, exact
-  generation and mapping revision, immutable image ID, entry kind, role,
-  final UID/GID and supplementary groups, accepted capability set, active
-  UID/GID maps, protected code paths and effective policy identity.
-- `MappedContainerObservationV1`: exact owned container/image ID, live PID and
-  process start identity, complete kernel maps, namespace identities, current
-  engine/API/runtime tuple and all required isolation observations.
-- `MappedReleaseV1`: the in-memory result of checking that plan and observation
-  against the current held-lock state. It is consumed by that attempt only.
-
-These values are not reusable bearer tokens, durable approval caches or a
-second policy database. Recompute plans from the generation's locked D evidence
-and fresh host/runtime facts. Reject unknown fields/versions, malformed intervals,
-integer overflow, noncanonical groups, image or generation mismatch and any
-unsupported entry before create. Never execute image NSS to resolve identities.
-
-### Retained state and acceptance
-
-Use versioned `identity-mapping-v2` with `process_model: native-master-v1`,
-existing engine binding and no supervisor binding for native admission. Preserve
-v1 reading and its supervisor semantics. Old readers reject v2. Do not write a
-fake supervisor identity or infer conversion from new generation contents.
-
-Use three numeric sets, separately for UID and GID, retaining affine host bindings:
-
-- C: selected requested configuration candidate, including the selected profile.
-- R: complete protected reservation union, including B recovery and uncertain work.
-- P: assignments previously authorized by a committed native admission transaction.
-
-P is a subset of R with identical container-to-host associations. The existing
-v1 UIDAssignments/GIDAssignments are R, not P. Recover verifies owned effects and
-adds reservations without setting AdmittedGeneration. A later non-null global
-AdmittedGeneration cannot prove which rows in that union were admitted. Never
-copy that union into P or promote it because a container exists.
-
-In v2 retain UIDAssignments/GIDAssignments for R. Add AcceptedUIDs/AcceptedGIDs
-for P. Existing DormantUIDs/DormantGIDs describe P minus the last admitted active
-map only; never-admitted reservations are derived as R minus P and remain
-protected. AdmittedGeneration and engine/process binding describe the latest
-admission. P plus dormant fields reconstruct its active map, avoiding another
-persisted active-map copy. Empty P requires absent admitted generation and empty
-dormant sets. Nonempty P requires the native binding, admitted generation, valid
-both-domain geometry and P subset R. Bounded P, once admitted, is the complete
-unchanged accepted range. Partial or ambiguous v1 admission cannot migrate.
-
-Existing v1 admitted supervisor state remains readable/reserved and refuses the
-native path. A never-admitted v1 state may enter v2 under the checked lock with
-P empty and its complete R, retained objects and pending intent preserved. An
-old unresolved operation must be reconciled or exactly adopted by its owning
-operation, never silently overwritten to create a new admission.
-
-### E1.1 input and output
-
-Proposed internal entry: PlanIdentityExecutionV1(input) -> plan or error.
-Input carries the selected immutable generation digest and validated D policy
-lock, C, optional prior R and P, and runtime-required user/group names for the
-explicitly selected runtime tuple. E1.2 constructs this input under the existing
-operation lock from exact versioned state, image/generation and current mapping
-revision; a caller-supplied numeric geometry is not historical admission proof.
-The planner validates consistency but does not authenticate host state itself.
-Runtime-required names must already be explicitly declared in the D policy and
-verified by its immutable-image evidence. They cannot insert IDs or enlarge C.
-All declared users/groups contribute to the required identity closure, not just
-the currently selected role. Same numeric ID aliases do not create isolation.
-
-The output contains Active, ProspectiveReservations, ProspectiveAccepted, and
-DormantUIDs/DormantGIDs. Prospective means a proposed post-admission value, not
-an already authorized mutation or reusable release token. E1.1 performs no I/O,
-state mutation, engine call, callback, host check or payload release. It returns
-independent canonical values and deterministic, redacted generation diagnostics.
-
-For exact mappings:
-1. Validate policy/image evidence, generation, both-domain geometry and profile.
-2. Use existing RetainGeometry to reject changed protected bindings or host-ID
-   reassignment, preserving the entire R even for an ID omitted by C.
-3. Require every declared/runtime-required ID to be covered by C. Project A from
-   those identities using C's exact host associations; do not inherit omitted
-   IDs from R. Root/runtime setup accounts require explicit declared evidence.
-4. Require C subset (A union P), with identical host associations. A new surplus
-   row fails even when it was reserved by an earlier never-admitted operation.
-   Previously admitted inactive rows may be present in C but not in A.
-5. Return Active=A, ProspectiveReservations=R union C,
-   ProspectiveAccepted=P union A, Dormant=(P union A) minus A. Preserve R minus
-   ProspectiveAccepted as never-admitted reserved authority, not dormant IDs.
-
-For bounded mappings retain the complete C as Active and ProspectiveAccepted;
-unused numeric IDs are accepted range authority and need no fabricated names.
-All declarations and explicit runtime accounts still need coverage and evidence.
-Existing bounded R/P cannot change geometry. Do not substitute exact for bounded.
-
-Use interval validation/union already in identitymapping. Compare canonical
-unions to reject unexplained exact rows; subtract canonical interval boundaries
-for dormant sets. Work scales with declarations and interval boundaries, never
-with the number of numeric IDs in a range. Reject zero-sized, overlapping,
-overflowing, sentinel-containing, mixed-profile or contradictory inputs.
-
-### E1.2 integration and commit boundary
-
-One existing operation journal remains the owner. Keep configure semantics:
-ObserveEffects(configure) requires active geometry equal to Candidate C and
-retains B's existing proof rules. A distinct closed native-execute operation
-stores Candidate C plus its computed Active A and generation/lock/map/provenance
-binding. ObserveEffects(native-execute) requires the exact stored A and reruns
-its fresh owner/revision/generation, host-authority and planner checks. Unknown
-kinds, missing A and stale plan bindings reject. Native-execute exists only in
-v2; configure cannot opt into projection by supplying a smaller map.
-
-Reuse the current C creator, immutable-image binding, parent-map compiler,
-endpoint fences and owned cleanup. Extend their existing per-operation observation
-boundary; do not create another engine transport, policy cache or observer service.
-The create request uses A, not R or an exact C containing dormant historical rows.
-
-B configuration/recovery can extend R, never P. The host's successful locked
-admission transaction atomically commits the exact A into P, updates generation,
-process/engine binding and dormant sets, and retains the exact owned release
-attempt before release. A lost response is uncertain execution, not another
-release or permission to infer acceptance from engine inspection. The waiter
-alone never writes P. Errors before that transaction leave P unchanged; all
-reservations and uncertain object ownership remain protected. H owns eventual
-checked reservation release; E never shrinks R as cleanup.
-
-### E1.1 acceptance examples
-
-| Prior provenance / candidate | Required result |
+| Value | Closed contents and ownership |
 | --- | --- |
-| R reserves never-admitted UID 300; current declarations need 200; C={200} | Active={200}; retain 300 in R minus P |
-| Same history; C={200,300} | Reject surplus 300; reservation is not admission |
-| P contains admitted 200; later B recovery reserves 400 | Preserve 400 as never-admitted; global AdmittedGeneration does not promote it |
-| P contains old 300; current declarations need 200; C may include 300 | Active excludes 300; prospective P retains it; Dormant contains 300 |
-| Prior binding changes host ID or reassigns protected host authority | Reject; no cleanup shrinks R |
-| Bounded 0..511 with undeclared 201 | Preserve whole range; reject out-of-range 600 |
+| `mappedKernelPolicyV1` | Seed digest, selected native ABI, final uint64 capability bitmap, sorted setup capability names, canonical profile bytes and derived identity. E2.3.1 owns creation and defensive cloning. |
+| `mappedEntryModeV1` | Fresh instance, occupied exec or host-native. E3.2 owns the enum/refusal helper; E4.1.1 derives it from the actual controlled entry, not a public safety assertion. |
+| `mappedEntryPlanV1` | Installation, operation/run identity, selected build-lock/image/runtime/network digests, expected mapping revision, entry kind/mode, locked role/executable/argv/environment, UID/GID/sorted groups, active geometry, kernel policy and stream options. E4.1.1 owns construction from validated snapshots. |
+| Extended sandbox request/proof | Add mandatory `KernelPolicy` digest to `mappedSandboxRequestV1` and `mappedSandboxProofV1`. The digest binds the compiler's ABI/cap/profile inputs; the existing request hash binds it to container/PID/image/generation and other policy/code/mount facts. E2.3.2 owns validation; F's trusted owner supplies actual observations. No missing-field compatibility fallback on release. |
+| Owned instance | E3.1.1 combines the existing owned waiter, final plan, live-run/lease and transient-versus-master entry kind. Persistent identity uses the existing workload lifecycle record. Do not persist a copy of final authorization or invent an independent instance registry. |
 
-E1.1 owns the pure planner and numeric tests. E1.2 owns versioned state,
-provenance sourcing and atomic persistence. E1.3 owns runtime observations,
-framed release and owned cleanup. No release is authorized by a planner result.
+E4.1.1 computes `Binding.Plan` as the canonical private entry payload digest before
+constructing the binding; exclude the digest/binding field itself to avoid a
+recursive identity. Include exact normalized startup arguments and kernel policy.
+The trusted constructor supplies the binding, never a caller's arbitrary digest.
+Earlier E2.3.2 integration extends the existing sandbox request hash and verifies
+the derived policy against the trusted startup inputs and exact instance. It
+does not construct a final entry plan or introduce a temporary plan digest.
+Its fixtures retain their existing trusted binding; production entry integration
+later requires E4.1.1's complete binding through E4.1.2.
+The binding revision is the expected pending-operation revision for that attempt.
+The admission writer advances state; retain its returned accepted state/revision
+without mistaking that expected advance for stale input or reusing the old plan
+for a second operation.
 
-Do not make runtime-required accounts automatic. For example, the private Podman
-fixture needs GID 5 for devpts. Production acceptance requires exact image evidence
-and the explicit runtime-account decision prescribed by the architecture. A
-missing account or unsupported runtime tuple is an actionable admission error.
+The fresh runtime observer returns exact container ID, image/owner labels,
+running/exited state, process/start identity, automatic-removal setting and restart policy/count through the
+existing pinned endpoint. A running observation does not acknowledge exec.
+Existing phase-specific trusted effect evidence alone may resolve the native
+release journal; exact retirement must be proved before its recovery writer
+clears uncertainty. Run queue/lifecycle completion under the existing operation
+lock and call the existing native recovery methods without nested lock ownership.
 
-### Admission ordering and crash behavior
+## 1. Derived mapped syscall policy
 
-| Phase | Permitted action | Failure / crash handling |
-| --- | --- | --- |
-| Locked plan | Validate owner, host delegation/principals, generation, retained mapping state, entry and qualification | Refuse without engine effects; preserve prior accepted ledger |
-| Owned create intent | Journal the operation and exact owner labels; create immutable-image container running only trusted waiter | Uncertain POST remains journaled; discover only by exact ownership evidence, never blindly create again |
-| Trusted wait | Start waiter with bounded timeout; pin process identity; read complete kernel maps and isolation | Missing/extra map rows, stale PID, wrong namespace/owner/image, disconnect or timeout prevents release and triggers owned cleanup |
-| Locked release | Recheck current operation/revision/generation, host authority and container observation; require F-owned storage/network proof | A changed fence invalidates the attempt; do not release on earlier evidence |
-| Accepted release | Persist admission and live-container ownership under the lock, then release waiter once | Lost release response is uncertain execution; retain reservation and ownership until exact reconciliation; never issue an unbound second release |
-| Running / exit | Host controller observes master/container, closes lease, performs owned cleanup | Cleanup failure retains ownership and IDs; recovery cannot manufacture success or re-exec payload |
+### Pure compiler and identity
 
-The host, not application output, owns the admission verdict. For a fresh
-container, reuse the existing host command/session attach transport. Start the
-trusted waiter blocked on its initial stdin request; do not require a separate
-socket, mounted control file or resident relay. After the locked checks, the
-host sends one 4-byte unsigned big-endian length followed by that many UTF-8
-JSON bytes, bounded to 64 KiB. The closed version-1 request binds installation,
-operation/run ID, generation, mapping revision, exact container/image ID, role
-and the canonical final-plan digest fixed in the trusted launch arguments.
-Reject duplicate/unknown keys, invalid length/version/digest or binding mismatch.
-The digest binds an attempt; it is not a secret or reusable authorization token.
+Add one private mapped-policy compiler beside `podman_seccomp.go`. Inputs are the
+fixed embedded seed, target ABI, exact final capability bitmap and exact setup
+capability set. The caller derives capabilities from the locked role and required
+trusted setup; the compiler does not authorize them. Setup is the union of the
+accepted ceiling and individually required existing setup capabilities, never an
+implicit application grant. Sort/deduplicate canonical inputs and reject unknown
+ABIs, bits outside the kernel/catalog or contradictory tuples.
 
-The waiter consumes exactly this frame using unbuffered reads on fd 0. Remaining
-bytes are application stdin and must neither be prefetched nor parsed as a second
-request. EOF, cancellation or the existing command-admission deadline before a
-complete frame aborts without application exec; there is no retry on that waiter.
-Host application input is sent only after the release frame. The final exec
-preserves constructed streams only; there is no remaining control parser or
-private descriptor. A literal copy of a frame in later application stdin has no
-control meaning. A new host operation always creates a fresh attempt.
+Verify the embedded seed digest before parsing. Retain its default-deny action,
+ordinary unrelated rules and their capability conditions. Remove every allow for
+`mount`, `umount`, `umount2`, `pivot_root`, `fsopen`, `fsconfig`, `fsmount`, `fspick`,
+`open_tree`, `move_mount`, `mount_setattr`, `setns`, `unshare`, `open_by_handle_at`
+and `name_to_handle_at`, including names grouped inside capability-conditioned
+rules. Remove empty rules. A later seed change requires review of this transform;
+unknown policy shapes/actions reject instead of passing through unchecked.
 
-Container identity and process readiness come from the owned runtime/process
-observations, not a marker in application logs. A lost attach/release response
-is uncertain execution, never evidence to send the frame again. E1.3 must test
-partial/coalesced frames, EOF, stdin canaries and all planned stream modes.
-Raw TTY modes cannot carry this frame unless the trusted adapter proves an
-unambiguous pre-application handoff; an unqualified mode rejects before create.
-The disposable SIGUSR1 fixture tests the underlying startup transition, not this
-production transport protocol or TTY support.
+Replace all seed clone/clone3 rules. For each admitted ABI, allow legacy clone
+only when its flag argument has no namespace-creation bits. Include NEWNS,
+NEWCGROUP, NEWUTS, NEWIPC, NEWUSER, NEWPID, NEWNET and NEWTIME. The closed ABI
+table is amd64 → X86_64 and arm64 → AARCH64; legacy clone flags use
+argument 0 for these native ABIs. Retain only the selected native architecture;
+remove its compatibility subarchitectures. The resulting filter must reject
+compatibility and unknown audit architectures, not merely omit them from tests.
+Do not infer support from the seed's broader architecture list. Adding an ABI
+requires separately bound qualification of its syscall interpretation and positive
+controls before acceptance. The namespace mask is 0x7e020080,
+checked against target headers. Production tests cover each admitted ABI and
+refuse unknown entries before create. Return ENOSYS for
+clone3 regardless of capabilities, allowing qualified libc fallback. Preserve
+ordinary fork/vfork/thread creation and required accepted setuid/setgid/chroot
+operations. Do not broaden a rule because a setup phase needs extra authority.
 
-The lock need not remain held for the application's lifetime. It must fence the
-plan, create identity, state acceptance and release. Cancellation, lock loss or
-controller restart before release cannot default to application startup. A crash
-after recording accepted state but before confirmed exec leaves an uncertain
-owned instance; recovery checks it and cleans up or reports uncertainty. It does
-not treat a recorded admission as permission to launch another instance.
+The derived profile has a private canonical identity over seed digest, admitted
+ABI set, final/setup capability sets and exact canonical policy bytes. Its size
+is bounded by the fixed seed and fixed replacement rules. No user-selected policy
+path, unconfined fallback, policy service or new persisted authorization cache is
+added. Ordinary unmapped profile bytes and validation remain unchanged.
 
-## Final credentials, code and kernel policy
+### Mapped create and pre-release evidence
 
-### Capability transition
+Keep `podmanApplicationCreateRequest` strict for ordinary application setup.
+Introduce a private typed mapped wrapper with mandatory compiler output. It first
+uses the existing strict generated-command parser, then applies only the mapped
+capability union, exact derived inline profile and fixed native launch arguments.
+It cannot accept arbitrary CLI options or an arbitrary profile string. All mapped
+prepare/create/observe/sandbox-request paths use this same representation.
+The constructor requires that its final capability mask equals the trusted
+startup argument. Container root/setup and final application authority stay
+separate. Retain immutable-image, read-only-root, no-new-privileges, exact maps,
+no engine restart, endpoint pinning and resource-owner checks.
 
-The trusted setup capability set is the minimum needed for the selected setup,
-plus the explicitly accepted application ceiling. Setup-only SETPCAP, CHOWN or
-NET_ADMIN must not become implicit application grants. The final verifier checks
-all real/effective/saved/filesystem UID/GID fields, exact supplementary groups,
-P/E/B equal to the accepted ceiling, I/A empty and NNP set. Verify the post-exec
-application state through a trusted test payload; a pre-exec capset success is
-not proof that exec preserved the set.
+The mapped overlay always transmits `AutoRemove=false` and
+`RestartPolicy={Name:"no",MaximumRetryCount:0}`. Preserve ordinary request
+serialization and its `--rm` behavior; use the mapped wrapper for these fields.
+Before release, require explicit matching automatic-removal and restart-policy
+observations and `RestartCount=0`. Missing or conflicting fields refuse. Only
+the exact host owner removes the instance after observing or conservatively
+recovering its outcome; an exit or lost attach response must not erase ownership
+through engine auto-removal.
 
-For the empty ceiling, preserve the ordinary locked-NOROOT, drop-all, NNP path.
-For a nonempty ceiling, use a separately qualified securebits/direct-exec path;
-blindly applying NOROOT destroys required capabilities. The fresh experiment
-qualified the underlying transition only at UID/GID 0:0 in a private user
-namespace. It did not qualify every identity/capability combination. Nonzero UID
-with nonempty P/E requires a distinct successful mechanism proof before support;
-otherwise reject that tuple. Do not add ambient capabilities, file capabilities,
-set-ID recovery or an implicit root-only portable policy to fill this gap.
+Include the policy identity in the sandbox request's hashed expected facts.
+E4.1.1 later includes it in the canonical `mappedlaunch.Binding.Plan`; E2.3.2
+does not depend on that later constructor. Extend the trusted effect-owner response with the selected
+kernel-policy identity and current observation binding. Reject absent/mismatched
+policy, capability or ABI evidence before release. The trusted owner runs inside
+the existing admission writer and must not reacquire OperationLock.
 
-### Go thread and descriptor transition
+Engine-reported policy strings are provenance. `Seccomp: 2` shows filter mode;
+neither alone establishes effective semantics. Qualifying a runtime tuple requires
+the actual derived bytes through the selected engine/libseccomp/OCI path, exact
+create/process observations and paired syscall controls. If compatible metadata
+or sufficient evidence is unavailable, that tuple refuses. No post-start payload
+inspection is substituted for the pre-release gate. E implements the closed
+request/verifier and negative behavior; production F effect observations and
+public activation remain independent gates.
 
-Use a locked launching OS thread in the existing trusted startup process. Before
-it changes per-thread credentials, construct and validate all arguments,
-environment, raw exec pointers, policy inputs and application streams. Perform
-thread-local raw credential/capability syscalls on that thread. Other Go threads
-may still have setup authority while only trusted startup code runs. No
-application code, callbacks or application-selected hooks may run in that window.
-LockOSThread alone is not proof: successful Linux exec replaces the process image
-and destroys the other threads. Post-exec tests must inspect every surviving
-application thread and all final credential/capability fields.
+## 2. One owned instance lifetime
 
-The last transition must detach the launch thread's descriptor table and close
-all private descriptors atomically using `close_range(3, ~0U,
-CLOSE_RANGE_UNSHARE)`. This design preserves only constructed fd 0/1/2; it does
-not introduce additional inherited application handles. The old shared Go table
-can still gain descriptors, but they cannot enter the launch thread's detached
-table. CLOEXEC-only marking or enumerating and closing a shared table is
-insufficient. Test private files, directory descriptors, sockets, pidfds and
-high-numbered descriptors, including a concurrent opener on an old table.
+### Ownership and phases
 
-After closure, enter a bounded raw exec-or-exit tail with prevalidated pointers.
-Use no Go allocation, scheduler transition, logging, callbacks or ordinary error
-cleanup there. Do not call ordinary `syscall.Exec` after closure: its argument
-conversion and runtime preparation occur before its raw exec syscall. Close or
-exec failure must terminate the entire trusted startup process with a raw
-exit-group syscall, never return to a Go caller with a partially closed table.
-Unavailable/denied close_range or UNSHARE support refuses; no shared-table fallback.
+Add a mapped branch at the existing admitted-container/lifecycle boundary, not a
+second supervisor or database. Its private input uses the already implemented E4.1.1 final entry plan and holds the existing operation
+lock, run/lease identity, native pending operation, exact generation/map revision,
+compiled final plan and owned waiter. It cannot adopt a container selected only
+by name. Use existing live-run queue entries for transient instances and existing
+workload-lifecycle records for persistent instances; both retain exact container
+ID, engine binding and the selected generation/runtime binding.
 
-The disposable Go 1.26.8 linux/amd64 binary demonstrates this mechanism from a
-non-leader thread with stronger peer threads still present before exec. Its
-final-tail disassembly contains raw syscall calls only, without allocation,
-stack-growth or panic calls. This is a planning result, not qualification of
-the production binary. E2.1/E2.2 must bind source, compiler, architecture and
-emitted tail, and repeat the thread/fd adversaries with actual setup and effective
-policy. Include runtime signal/preemption behavior and all failure paths in that
-qualification. A compiler/runtime upgrade invalidates a binary-specific result.
-Do not transplant the fixture's amd64 syscall numbers to another architecture.
+| Phase | Required action and failure rule |
+| --- | --- |
+| Planned | Validate exact current locked state and entry. No engine effect on rejection. |
+| Intent/create | Persist native intent and exact owner labels; create once. Lost response retains uncertainty and owned-object evidence. |
+| Waiting | Hold admission ownership, verify complete maps/process/policy and trusted F facts. Do not unlock as the ordinary transient runner does before start. |
+| Release attempted | Commit native acceptance and exact live ownership under the lock, then send the single frame. A frame write is not proof of application startup. |
+| Attached run | Release the operation lock only after the release attempt/ownership is recorded. Retain the existing live-run lease, bounded cancellation and exact instance identity. |
+| Exit/cancel | Observe the owned instance result; stop/clean that instance as required, then reacquire the existing lock and complete its queue/lifecycle ownership. |
+| Cleanup uncertain | Retain exact container/operation ownership and reservations; report recovery required. No successful completion or replacement while absence is unproved. |
 
-### Effective policy and immutable code
+PID/start identity, immutable image, owner labels and restart count must remain
+bound to the created instance. Application output cannot establish startup,
+ownership, completion or release acknowledgement. Preserve the native journal's
+release-attempted uncertainty until its existing trusted evidence verifies actual
+acknowledged execution or exact retirement. Mere engine presence/absence does not
+clear it. An admission write or a still-running trusted waiter cannot mark a
+persistent workload startup complete.
 
-Derive one mapped effective seccomp policy from the existing pinned seed and the
-accepted tuple. Preserve provenance and default-deny behavior. Explicitly deny
-namespace creation/join, namespace-bearing clone flags, mount APIs and handle
-escapes, even when a capability-conditioned seed rule would permit them.
-Include both legacy and new mount/handle APIs. Preserve ordinary fork/vfork and
-thread creation; clone argument position depends on ABI. Deny clone3 with ENOSYS
-when the supported libc requires fallback, and prove the fallback works. Do not
-weaken denials merely because the setup phase needs different authority: setup
-and final application filters must compose monotonically.
+The required foreground native master's exit ends that container instance. A
+finite app command, test or hook completes only its own entry. Worker fork/exec
+and replacement stay inside already accepted authority and are not new host
+admission. Do not reintroduce an ordinary stronger observed-status supervisor on
+the mapped path. Retain status/cancellation/error propagation and never shrink R
+or release dormant IDs as execution cleanup.
 
-The seed currently enables `open_by_handle_at` with DAC_READ_SEARCH and broadens
-namespace/mount calls with SYS_ADMIN. Thus its name/hash is provenance, not a
-sufficient effective policy. The portable D catalog accepts names that E may
-refuse to grant. No automatic capability bundles or qualification by name alone.
+### Fresh replacement and persistent handoff
 
-Image code, interpreter/loader and runtime dependencies stay immutable by default.
-Reuse protected-path compilation and reject writable mount shadows, symlink
-replacement and writable dependency search paths. F owns final mount/storage
-construction and any explicit code-mutation input. E defines the checked proof
-input at its existing sandbox-plan boundary: exact generation/image, protected
-code closure and mount/network observations bound to the owned container. Missing,
-stale or mismatched proof denies release. E tests that interface with injected
-positive and negative observations; F later supplies the production proof.
-Until then, product release stays closed. No new blueprint spelling
-for mutation is introduced here. Explicit future opt-in cannot make the trusted
-Reploy startup code writable. Binary-exclusive privileges remain deferred as
-approved; immutable code does not prevent a privileged native master from using
-its accepted authority or executing other permitted immutable code.
+A host-admitted replacement first proves the old exact instance is stopped and
+retired under its existing ownership. It then reloads current generation, mapping
+revision, host principal/delegation and entry policy, reconstructs E4.1.1's final
+entry plan, and starts a new operation
+through the same owned-waiter gate. A retry never resends an old frame or reuses
+an old accepted plan. Service restart is a caller of this operation; engine
+restart stays disabled. G owns public service-manager integration and revocation.
 
-## Native lifetime, replacement and live exec
+Persisted lifecycle state distinguishes starting/up/stopping/down using the
+existing validated schema. Up requires the existing trusted startup-completion
+observation for the exact instance, not a frame write or application marker.
+A detached handoff additionally requires qualified stream detachment and a fresh
+matching live-instance observation; loss of the foreground owner before such a
+handoff follows bounded stop/cleanup. No unqualified detach is exposed as success.
+After a proved detached handoff, kernel/container master lifetime remains the
+instance boundary and no continuously connected host broker is required.
 
-The required foreground native master defines the instance lifetime. Its exit
-ends that container; do not restart only the failed required process in place.
-A native master can manage its workers within its accepted authority. Completion
-of a finite command/hook/test has that entry's normal meaning, not a workload
-master failure. Reuse the existing queue, leases, stream cancellation and cleanup
-ownership. Keep any ordinary observed-status supervisor out of the mapped native
-path if it would retain stronger credentials or act as a privilege broker.
+E supplies the private lifetime/replacement operation, typed observation
+requirements and fixture tests for confirmed/uncertain handoff. F/G supply their
+production effect/service integration before detached public support. Missing
+proof keeps the path closed; do not build a new persistent Reploy authority to
+fill an observation gap. Future I secret delivery is once per admitted instance,
+not per worker or repeated release attempt. No secret feature is implemented in E.
 
-Disable autonomous engine restart for mapped instances. Host user-service or
-controller replacement must enter the full fresh admission path with current
-host authority, generation and map revision. Native worker recreation is not a
-new instance. Future I secret delivery remains once per admitted instance, not
-once per worker or repeated release attempt; E provides the instance boundary.
+## 3. Occupied-container entry boundary
 
-Live exec into an occupied container has a different proof obligation. Do not
-start a stronger temporary root/setup process there. Any entry verifier must
-have no more than the requested accepted authority before it becomes observable
-to existing untrusted processes, and cannot carry private authority descriptors.
-The stock compatible API's User/capability settings do not by themselves prove
-this ordering. Source inspection of crun 1.14.1 shows namespace joining before
-the exec entrypoint's final capability setup; it does not establish safe entry.
+There is no qualified mapped occupied-container exec tuple in this plan. Add a
+typed private request classification for fresh instance, occupied exec and
+host-native execution. Preserve entry semantics: an operation that requires an
+occupied namespace returns an explicit unsupported-entry error before creating an
+exec object, attaching or starting a helper. Do not substitute a fresh container.
+This slice owns the small private entry-mode enum and refusal helper; E4.1.1
+reuses that classification. The helper takes the existing validated owner state
+and a trusted entry intent; it does not accept a public qualification flag.
+Caller-provided capability names, UID strings or expected-state identifiers cannot
+authorize a stronger temporary process there.
 
-E3.2 delivers deterministic refusal for unqualified live exec before creating an
-exec object and a bounded proof harness. Safe live-exec enablement is not included
-in that slice's estimate. If investigation establishes a viable transition,
-first review its exact evidence and separately estimate an E3.2 decimal amendment
-before implementation. Enablement requires adversarial observation of the full
-transition, including existing same-UID processes, ptrace/proc access, descriptors
-and policy. No `exec --privileged`, private socket,
-raw engine call or fresh-container substitution that changes command semantics
-is a fallback. This refusal is allowed by the approved contract and does not
-relax fresh-container entry requirements.
+Keep a bounded test harness capable of checking any future proposed transition
+against existing same-UID processes, ptrace/proc access, capabilities and private
+file/directory/socket/pidfd/high descriptors. The current slice establishes
+pre-effect refusal and the harness; it implements no live-exec enablement. A
+future successful mechanism requires separately reviewed evidence and an approved
+E3.2 decimal amendment. There is no privileged/raw-exec fallback.
 
-## Entry coverage and qualification matrix
+## 4. One final entry-plan constructor
 
-The common planner must cover initial workload start, application commands,
-runtime tests, shell, controlled sessions, hooks, host-driven restart/replacement
-and runtime exec. Existing public guards remain in place through E. Test private
-seams plus no-effect public guard coverage; do not label those tests public support.
-A staged/install/service route that lacks a required proof must refuse before
-side effects. Cross-entry generation changes must invalidate the same plan.
+Build a private immutable mapped-entry plan from current locked blueprint, D
+policy/image evidence, requested controlled entry and argument/environment plan.
+Use existing command/executable resolution; do not invent another role registry.
+The closed entry kind identifies workload start, application command, runtime
+test, shell, controlled session, lifecycle hook or host replacement. Entry mode
+separately identifies fresh instance, occupied exec or prohibited host-native use.
 
-For each supported tuple record image ID/code closure, role/credentials, exact
-or bounded geometry, accepted caps, policy identity, host/kernel/architecture,
-Podman/OCI runtime and API behavior. Qualification is verified evidence bound to
-those inputs, not a version allowlist or a new authority service. Unrecognized
-combinations reject. Repeat fresh-instance tests at least three times per profile
-before activation and retain negative controls, cleanup and host observations.
+The constructor is pure: its caller supplies validated build/state snapshots
+from the existing held-lock readers. It verifies their consistency but does not
+authenticate a public caller or replace fresh E1.2 admission checks.
 
-Required tests include:
+The plan binds installation/operation, generation and image, map revision,
+selected role and executable, all UID/GID/groups, final/setup capability sets,
+active maps, runtime/kernel/network policies, protected code and requested stream
+mode. Canonical cloning prevents later caller mutation. `Binding.Plan` is computed
+from those private facts including exact normalized launch arguments; it is not
+accepted from a public caller. Runtime-required accounts come from explicit
+locked evidence and cannot enlarge configured/accepted mappings.
 
-- Positive: declared exact IDs, bounded undeclared in-range transition, ordinary
-  fork/thread creation, required native child identity changes/chroot, clean
-  streams and native worker restart within accepted authority.
-- Authority: all UID/GID fields, supplementary groups, post-exec P/E/B/I/A/NNP,
-  unmapped IDs, omitted capabilities, same-UID roles, set-ID/file-cap exec attempts,
-  securebits changes, ambient/inheritable recovery and capability-boundary probes.
-- Kernel/code: namespace clone/unshare/setns, clone3 fallback, mount/new mount and
-  handle calls, inherited-fd chroot escapes, writable code/dependency/mount shadows.
-- Admission: complete-map surplus/missing/wrong-host rows, runtime GID omission,
-  stale PID/start identity, peer/namespace/image substitution, host principal or
-  delegation changes between observation and release, stale generation/revision.
-- Recovery: uncertain create/start/release, interrupted lock, timeout/EOF, failed
-  ownership verification, master exit, failed cleanup, service replacement and
-  retained dormant IDs. Wrongly owned objects must never be deleted.
-- Entry parity: every controlled entry reaches the same final checks or refuses
-  before effects. Include shell/session/test/hook and occupied-container exec.
+The constructor rejects stale generation/image/policy, unresolved role/executable,
+unsupported credential/capability tuple, private-env/observed-exit/TTY mode,
+host-native mapped execution and occupied exec. Reuse E1.1's closure planner and
+E1.2's writer; the final plan itself performs no mutation and grants no authority.
 
-## Investigation evidence and limits
+Every controlled entry's mapped branch calls this constructor and its applicable
+owned-instance runner or returns the same pre-effect unsupported result. Keep
+public `unmappedRuntimeDocumentV1`/equivalent guards in place. A passing private
+fixture cannot remove them. For a two-deployment controlled session, both owners
+are checked; the session transport remains unqualified where it needs TTY or a
+startup authority combination not covered by the current proof. Hook/test/app
+completion must not be classified as required-master failure. G performs later
+public orchestration wiring through this same boundary, not a raw engine path.
 
-Planning evidence lives outside the checkout at
-`/home/omry/.local/state/awd/reploy-E-planning-20261028-ovsb17p5`.
-`proof-summary.json` records exact hashes and limitations; original receipts and
-controllers remain under `probes/`. These paths are evidence locators for this
-machine, not portable approvals.
+## 5. Slice inventory and dependency order
 
-On 2026-10-28, eight fresh raw user-namespace cases passed: exact/bounded profiles
-with empty, Postfix (`0xc4`), Dovecot (`0x400c1`) and omitted-identity (`0x40`)
-ceilings. Six private Podman startup cases passed: both profiles with empty,
-Postfix and Dovecot ceilings. The trusted waiter ran alone; complete kernel maps
-were checked before release, then the static probe directly execed itself and
-checked credential/capability state and permitted/forbidden ID transitions.
-All owned containers/images were removed, the isolated inventory was restored
-and the private API service stopped. The normal Podman store was not used.
+Existing E1.1, E1.2, E1.3, E2.1 and E2.2 are prerequisites, not unfinished slices.
+Preserve their original IDs, source, review evidence and completed campaign entries.
+The proposed replacements are E2.3 → E2.3.1/E2.3.2,
+E3.1 → E3.1.1/E3.1.2, and E4.1 → E4.1.1/E4.1.2. E3.2 and E4.2 retain their IDs.
+Parents remain historical owners until this exact proposal is approved and adopted
+through supported campaign re-plan tooling. Do not reserve children or mutate
+existing delivery counters/budgets during design. This table is the one ordered
+unfinished implementation inventory. IDs retain responsibility identity; delivery follows
+this dependency order rather than numeric sorting. The refusal and pure planner
+move ahead of lifetime integration so those slices consume an existing contract
+instead of inventing temporary planning logic. No parent is declared complete
+before all its children and required later integration pass.
 
-Host: WSL2 Linux 6.18.54.1 x86_64, Podman 4.9.3, crun 1.14.1, non-root UID/GID
-1000. Private numeric/delegation checks do not certify production files-only
-principal inventory. The fixture used the engine's default seccomp policy,
-not Reploy's production effective policy or inline-profile transport. It did
-not run Postfix/Dovecot, the Go startup helper, occupied-container exec, code or
-fd adversaries, production lifecycle, F networking/storage, or release repeats.
-These successful mechanisms narrow implementation uncertainty; they do not
-satisfy those remaining gates or qualify WSL as a supported production host.
+| Slice | Concrete responsibility and owned paths | Prerequisites | Completion check |
+| --- | --- | --- | --- |
+| E2.3.1: Compile mapped syscall policy | Pure pinned-seed transform, ABI clone/clone3 rules, canonical capability inputs and derived identity. Own private mapped-policy compiler beside `dockerdeploy/podman_seccomp.go`; ordinary seed/materialization unchanged. | E2.1, E2.2 | All forbidden names are absent from every allow regardless of seed capability conditions; canonical identity changes with any relevant input; ordinary path unchanged; native positives, compat/unknown rejection and fork/thread cases covered. |
+| E2.3.2: Apply and verify the mapped policy | Mandatory typed mapped create wrapper; exact final/setup caps, inline profile, no auto-removal/restart and pre-release observation contract. Own mapped create/waiter/sandbox integration and focused fixtures; final entry-plan construction stays in E4.1.1. | E2.3.1 | Wrong/missing profile, tuple, ABI, removal/restart observation or owner proof refuses before frame; no ordinary-parser relaxation; exact passed create policy and current observation bind to the same instance. |
+| E3.2: Refuse unqualified occupied exec | Typed entry-mode boundary and retained adversarial safe-entry harness. Own mapped exec classifier and affected controlled entry guards; no enablement. | E2.3.2 | No engine exec-create, helper or attach for every unqualified mapped occupied request; entry semantics preserved; no stronger or raw fallback. |
+| E4.1.1: Construct the final entry plan | One pure closed entry-plan constructor from current locked D/generation/role facts, maps, policies and stream mode. Own private dockerdeploy planner and exact identity tests. | E3.2, E2.3.2 | Complete exact canonical plan or deterministic rejection; no caller mutation, implicit grants or I/O; stale inputs and unsupported modes refuse. |
+| E3.1.1: Own mapped instance completion | Connect held-lock native release to existing live-run/lifecycle ownership, master exit, cancellation and exact cleanup. Own mapped branch near `live_run_container.go`, using existing native journal/lease methods. | E1.3, E2.2, E4.1.1 | Release stays fenced; unlock only after recorded ownership; finite entries vs master exit distinguished; all cleanup failures retain exact recoverable ownership and R/P history. |
+| E3.1.2: Admit a fresh replacement | Fresh host replacement and persistent lifecycle/handoff contract using existing records. Own mapped branch near `current_workload_lifecycle.go`; no public service/unit changes. | E3.1.1 | Old instance retired before new admission; current authority/generation reloaded; engine restart refused; ambiguous acknowledgement or detach stays uncertain; missing F/G handoff evidence refuses. |
+| E4.1.2: Connect every controlled entry | Private/guarded mapped branches for workload/app/test/shell/session/hook/replacement use the shared constructor/runner. Own existing entry adapters and their parity fixtures. | E4.1.1, E3.1.2 | Every listed entry reaches the shared boundary or rejects before effects; both session owners checked; public guards and ordinary behavior preserved; no host-native shortcut. |
+| E4.2: Qualify and report E conformance | Cross-entry/profile authority/kernel/lifetime checks and evidence-producing harness. Own E test fixtures and qualification reports; no new production behavior, F provider or G activation. | E4.1.2 | Integrated private journey covers both map profiles, production startup authority, exact effective policy and failure/recovery; unavailable real-runtime cases remain explicit blockers, never support claims; actual source/compiler/tuple bound to receipts. |
 
-Additional readiness evidence lives at
-`/home/omry/.local/state/awd/reploy-E-readiness-20261028`.
-`proof-summary.json` binds sources, static binaries and the final receipt
-`probes/attempt-20261028T102248Z/result.json`, SHA256
-`d926570014867a8323bd05c634120565940bc6a8cb5214ed94fe88551fb249e1`.
-The final-tail disassembly SHA256 is
-`f8d3b6641e3ccff807c2742e74e7d9f481c30d96d815200f6cadc0d14e7a950f`.
+## 6. Estimates and counting convention
 
-All 34 bounded cases passed on Go 1.26.8 linux/amd64, WSL kernel 6.18.54.1:
-24 positive cases (three fresh runs per exact/bounded profile for empty root,
-empty UID/GID 200, Postfix and Dovecot ceilings) and ten negative controls.
-The controller installed and read back complete kernel maps before release.
-Each positive began with non-CLOEXEC private file, directory, socket, pidfd and
-high-numbered canaries, and a concurrent old-table descriptor creator. After
-non-leader exec, every observed thread had the exact final UID/GID, groups,
-P/E/B/I/A and NNP; no canary survived and application stdin remained intact.
-Negative controls independently detected omitted closure, omitted bounding-set
-drop, shared-table closure, invalid close flags and failed exec. All children
-were reaped. The earlier successful matrix is retained; its binary had unreachable
-slice-bounds panic branches. Prevalidating raw pointers removed those branches,
-and the complete matrix was repeated against the final binary.
+The unit is a changed physical text line: additions plus removals against each
+accepted parent, including changed blank/comment lines. Production/configuration
+counts shipped runtime/build/packaging changes. Test-code counts tests, test-only
+helpers, textual fixtures and test configuration. Count each line once. Exclude
+Markdown design/review material, Changie prose, generated/vendor/lockfile churn
+and binary payloads; disclose material non-LOC work separately. Shared compiler,
+runner, planner and fixtures each have one owner above. No working-hour or token
+forecast is asserted. Target 500 production LOC per PR; hard maximum 750.
 
-This raw-user-namespace experiment ran synthetic trusted code, not the production
-Go helper, native mail programs, production seccomp or framed release transport.
-It does not qualify nonzero UID with nonempty capabilities, Go 1.25.x used in CI,
-other architectures, actual immutable-code closure, occupied-container exec or
-F production admission. Those remain explicit implementation/activation gates.
+| Unfinished leaf | Production/configuration LOC | Test-code LOC |
+| --- | ---: | ---: |
+| E2.3.1 | 200–350 | 450–700 |
+| E2.3.2 | 300–450 | 650–1000 |
+| E3.1.1 | 250–400 | 550–850 |
+| E3.1.2 | 250–400 | 500–800 |
+| E3.2 | 75–150 | 300–500 |
+| E4.1.1 | 250–400 | 450–700 |
+| E4.1.2 | 250–400 | 600–900 |
+| E4.2 | 0 | 650–1050 |
+| **Remaining E total** | **1575–2550** | **4150–6500** |
 
-Primary technical context:
-[Linux capabilities and exec](https://man7.org/linux/man-pages/man7/capabilities.7.html),
-[Linux exec thread semantics](https://man7.org/linux/man-pages/man2/execve.2.html),
-[Linux close_range](https://man7.org/linux/man-pages/man2/close_range.2.html),
-[Go LockOSThread](https://pkg.go.dev/runtime#LockOSThread),
-[OCI 1.2.1 process configuration](https://github.com/opencontainers/runtime-spec/blob/v1.2.1/config.md),
-[OCI Linux configuration](https://github.com/opencontainers/runtime-spec/blob/v1.2.1/config-linux.md),
-[crun 1.14.1 exec implementation](https://github.com/containers/crun/blob/1.14.1/src/libcrun/container.c).
-The retained crun source hash is
-`a113bf6db56aad6200b368538136572e7d8873a4fcc5d12bd27da77c0b64a827`.
+These are source-based planning ranges, not measured results or padding targets.
+E3.2 is a small pre-effect boundary; E4.2 is test-only and receives no production
+padding. Missing production behavior discovered there returns to its owning
+slice for reviewed correction.
 
-## Proposed delivery slices
+Actual runtime/ABI qualification, disposable host access, CI/remote review waits,
+evidence collection and later F/G integration are material work outside a simple
+LOC forecast. Reuse exact applicable mechanism evidence. If implementation
+requires new authority, a stronger resident process or work beyond a coherent
+slice's bound, stop and re-plan the affected scope before proceeding.
 
-Implement sequentially in one checkout. Each slice reuses this group LLD and
-approved architecture; it does not trigger a new full design by default.
-Production estimates count added plus removed non-test implementation lines;
-test estimates count added plus removed test/fixture lines. They exclude this
-LLD, generated files, review state and changelog fragments. They are planning
-ranges, not measured results or time commitments. Target 500 production LOC per
-PR, hard maximum 750; split before work if the current estimate exceeds the hard
-limit, and reassess before crossing the target. Keep acceptance-coherent changes.
+## 7. Requirement coverage and release gates
 
-| Slice | Production LOC | Test LOC | Scope and acceptance | Prerequisites |
-| --- | ---: | ---: | --- | --- |
-| E1.1 | 250–400 | 500–800 | Pure execution identity/map closure; explicit C/R/P input/output and active vs never-admitted/dormant rules, runtime-account evidence, boundary/overflow rejection. Own mapping compiler/acceptance planner, no engine effects. | D4, C1 |
-| E1.2 | 350–500 | 650–950 | Versioned native admission state and locked transition; explicit accepted-subset provenance, native-execute journal projection, legacy supervisor rejection and uncertain reservations. Own deploy mapping state/operations. | E1.1 |
-| E1.3 | 350–500 | 600–900 | Owned create/wait, complete kernel maps and process/peer fences, single release protocol and cleanup failures. Own mapped Podman create and trusted waiter plumbing. | E1.2, C2; release still requires F proof |
-| E2.1 | 300–450 | 550–850 | Empty/nonempty final capability paths and all-thread exec transition, exact credentials and securebits. Own production startup transition; qualify the exact compiler/binary against retained Go mechanism evidence. | E1.1; startup mechanism receipt |
-| E2.2 | 200–350 | 450–700 | Descriptor closure and protected executable/dependency plan; canary-fd and substitution tests. Own startup fd handling and runtime-policy integration. | E2.1; E owns proof seam, F later supplies production observations |
-| E2.3 | 300–450 | 650–950 | Derived effective kernel policy for accepted tuples; capability-conditional rules, ABI clone/fork/threads and mount/handle negatives. Own mapped seccomp policy; ordinary path unchanged. | E2.1 |
-| E3.1 | 300–450 | 550–850 | Native-master lifetime, owned lease/queue cleanup and fresh host replacement; disable engine-autonomous restart. Own existing lifecycle integration. | E1.3, E2.2, E2.3 |
-| E3.2 | 150–300 | 350–600 | Typed occupied-container exec boundary; deterministic pre-effect refusal for unproved tuples, safe-entry proof harness. No enablement implementation in this estimate. | E3.1 |
-| E4.1 | 200–350 | 650–950 | Shared final-authority checks across every controlled entry; privilege-regain and failure-path adversarial payloads. Own entry integration; keep public guards. | E3.2 |
-| E4.2 | 100–250 | 600–950 | Cross-entry/profile qualification harness and evidence receipts, repeated-instance tests, integration-gate diagnostics and delivery closeout. Own conformance tests and docs. | E4.1; actual F/G readiness reported separately |
-| **Total** | **2500–4000** | **5550–8500** | Ten proposed implementation PRs, conditional on proof results. | Design approval/stamp/PR cycle before implementation |
+| Obligation | Owning unfinished leaf and observable check |
+| --- | --- |
+| Capability-conditioned effective filter and clone ABI/fallback | E2.3.1/.2: seed-condition negatives and actual selected-runtime fork/thread/identity/chroot positives; namespace/mount/handle negatives. |
+| Default immutable code and protected loader/dependency boundary | Existing E2.2 proof interface, retained by E2.3.2/E4.2; missing/substituted F code/mount/network proof blocks release. F owns production derivation/storage. |
+| Native-master lifetime and fresh host replacement | E3.1.1/.2: master exit ends instance, finite entries finish normally, no engine restart/replayed release, exact cleanup and restart fencing. |
+| Safe occupied namespace and private descriptors | E3.2 refusal before any exec effect, plus existing E2.2 fd transition and E4.2 adversarial checks; future enablement needs separate amendment. |
+| Same authority on every controlled entry | E4.1.1/.2 and E4.2: complete entry matrix, both session owners, no host-native bypass, exact role/caps/maps/generation and private-descriptor checks. |
+| Actual qualification vs injected mechanism fixtures | E4.2: bind each case to code/compiler/architecture/profile/engine/OCI policy; repeat fresh-instance positives at least three times per profile; retain controls and failures. |
+| Ownership retention and later secrets/services | E3.1.1/.2 preserve native journal, R/P/dormant history, instance boundary and conservative recovery; G/I retain public services and once-per-instance secret delivery. |
+| Public execution and unrelated consumers | E4.1.2 retains guards; F/G/generic-launch stay separate; OmegaFlow is not a dependency and Docker results do not qualify mapped Podman. |
 
-The old E estimate was 1400–2550 production and 2800–4550 test LOC. It did not
-itemize the state/process-model change, setup versus application policy, thread/fd
-proofs, or entry/lifecycle parity now visible in the source. The new estimate
-counts that existing E scope; it adds no service or public feature. Compared with
-D's measured 1606 production and 3331 test changed lines, E is approximately
-1.6–2.5 times the production work and 1.7–2.6 times the test work. Do not interpret
-these ratios as elapsed-time or token forecasts.
+E's integrated internal journey is locked D plan → pure closure → native intent →
+exact owned waiter → effective-policy and trusted F observation gate → one-shot
+release → native authority/streams → exit/cancel → owned cleanup and retained
+state. Test interrupted and uncertain outcomes at every arrow. Include omitted
+runtime accounts, extra/wrong maps, stale PID/image/revision/host authority,
+private/high/concurrently opened fds, set-ID/file-cap/ambient/inheritable/securebits
+regain, ordinary fork/thread/chroot/identity transitions, namespace/mount/handle
+escapes, wrong-owner cleanup and missing proof. A negative passes only when it
+also checks that application execution did not occur where required.
 
-E can finish its internal behavior and missing-proof refusal before F exists.
-No E slice depends on F implementation; the F references above identify later
-integration/activation gates. E1.3 and E2.2 own the proof seam and negative gate
-tests. Their injected positives are not production admission evidence.
+Internal implementation can complete with the F provider and public activation
+unavailable, provided required refusal and exact trusted-interface tests pass.
+The separate real-runtime qualification matrix must report each supported,
+unsupported or untested tuple honestly; tests using injected evidence cannot be
+renamed production qualification. No release or mapped support claim follows
+from this design, a clean document stamp or the completion of E alone.
 
-Before each slice, resolve its planning-critical mechanism and refresh estimates.
-If safe nonempty-capability exec requires a new resident authority process, or
-safe live exec requires a broader trust model, stop and present that change.
-Do not grow another mechanism to keep an optimistic slice estimate. A failed
-live-exec proof can land the explicit refusal and retained gate under E3.2;
-it cannot be reported as supported live exec.
+## Supporting evidence and continuation
 
-## Review and continuation
+The [prior E design](supporting/MULTI_IDENTITY_E_DESIGN/pre-replan-E-design.txt)
+retains completed-slice specifications, historical investigation and earlier
+estimates. [Engineering context](supporting/MULTI_IDENTITY_E_DESIGN/engineering-investigation.md)
+records current source reuse, the bounded syscall mechanism and its limits.
+[Sizing basis](supporting/MULTI_IDENTITY_E_DESIGN/sizing-basis.md) and review/approval
+records live beside it, outside this clean LLD.
 
-Review the complete proposal against the four explicit dependencies and current
-source seams. Resolve findings and repeat until clean or a specific material
-decision remains. Local deep review is not remote design review, maintainer
-approval, a design PR cycle or runtime qualification. Record their actual status
-separately rather than treating a document stamp as permission to execute.
-
-Before implementation, adopt the decimal map in the owning campaign through the
-supported delivery tooling; refresh affected design stamps, publish the reviewed
-design and finish the design PR cycle. Reuse prior approvals for settled public
-syntax, profiles, native process model and immutable-code default. Present only
-actual unresolved public syntax or material authority/default/scope changes.
-For each implementation PR, derive every current `ci.yml` job for the exact head,
-require all to succeed, run the supported review/PR cycle, use Sapling and add a
-Changie fragment for user-facing changes. Do not merge or release automatically.
-Stop E delivery after closeout and propose F. This readiness amendment completes
-its design review, stamp, publication and PR cycle, records readiness in the paused
-campaign, and stops before E1.1 implementation. It does not resume that campaign.
+Before implementation, obtain exact current review and maintainer approval of
+this remaining inventory, refresh affected stamps through supported helpers,
+checkpoint/publish the design and complete its PR cycle with every current
+ci.yml job passing for the exact head. Use supported campaign reconciliation to
+adopt the exact separately approved legacy replacement snapshot through
+`swe_delivery_state.py apply-transition` with `transition_kind=campaign-replan`.
+Preserve the completed queue/mappings, existing work reservations, cumulative
+counters/budgets and historical assessments; let supported tooling reconcile
+new children rather than silently resetting or double-counting work. Do not use
+standardized-owner `replan-slices` to migrate this legacy campaign or rewrite
+approved ancestors. Then, only on delivery authorization,
+resume the existing E campaign at its actual retained stage. Stop after E4.2 and
+report actual approved PRs, production/test LOC, timing, observed token data if
+available, remaining gates and the proposed F sprint. No automatic merge/release.
