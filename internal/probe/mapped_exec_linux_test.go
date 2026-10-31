@@ -599,6 +599,9 @@ func TestMappedDescriptorRaceHelperV1(t *testing.T) {
 			panic(err)
 		}
 		close(ready)
+		if args[0] == "descriptor-shared-close" {
+			mappedSharedCloseObserverV1(&damaged)
+		}
 		for {
 			if _, _, errno := syscall.RawSyscall(unix.SYS_FCNTL, 4096, unix.F_GETFD, 0); errno == unix.EBADF {
 				atomic.StoreUint32(&damaged, 1)
@@ -643,6 +646,22 @@ func TestMappedDescriptorRaceHelperV1(t *testing.T) {
 		}
 	}
 	os.Exit(Main(args[2:], os.Stdin, os.Stdout, os.Stderr))
+}
+
+// The deliberately wrong shared closer damages runtime descriptors too. Its
+// observer must not depend on Go scheduling or descriptor operations afterward.
+// Other modes retain the real concurrent opener above.
+//
+//go:nosplit
+//go:norace
+func mappedSharedCloseObserverV1(damaged *uint32) {
+	for {
+		if _, _, errno := syscall.RawSyscall(unix.SYS_FCNTL, 4096, unix.F_GETFD, 0); errno == unix.EBADF {
+			atomic.StoreUint32(damaged, 1)
+			for {
+			}
+		}
+	}
 }
 
 // Deliberately wrong test-only closer. A peer detects the shared table's lost
