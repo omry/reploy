@@ -52,6 +52,9 @@ type currentWorkloadLifecycleBackendV1 struct {
 }
 
 func RunCurrentWorkloadLifecycleV1(ctx context.Context, input CurrentWorkloadLifecycleInputV1) error {
+	if _, err := unmappedRuntimeDocumentForEntryV1(input.Current.State, mappedLifecycleHookV1); err != nil {
+		return err
+	}
 	return runCurrentWorkloadLifecycleV1(ctx, input, currentWorkloadLifecycleBackendV1{
 		acquire: deploy.AcquireOperationLock,
 		planStart: func(plan CurrentRuntimePlanV1, current CurrentBuild) (LifecyclePlan, error) {

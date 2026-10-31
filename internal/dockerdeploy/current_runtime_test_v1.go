@@ -88,7 +88,7 @@ func runCurrentRuntimeTestV1(ctx context.Context, input CurrentRuntimeTestInputV
 	if !found {
 		return fmt.Errorf("runtime state is missing; run `reploy stage` or `reploy install`")
 	}
-	document, err := unmappedRuntimeDocumentV1(state)
+	document, err := unmappedRuntimeDocumentForEntryV1(state, mappedRuntimeTestV1)
 	if err != nil {
 		return fmt.Errorf("runtime blueprint: %w", err)
 	}

@@ -160,6 +160,9 @@ func runCurrentControlledSessionV1(
 	if err != nil {
 		return result, fmt.Errorf("controlled-session workload runtime: %w", err)
 	}
+	if err := requireUnmappedSessionOwnersV1(controller.current.State, workload.current.State); err != nil {
+		return result, err
+	}
 	for _, runtime := range []struct {
 		role string
 		dir  string
@@ -426,7 +429,7 @@ func loadCurrentControlledSessionRuntimeV1(
 	if !found {
 		return currentControlledSessionRuntimeV1{}, fmt.Errorf("runtime state is missing; run `reploy stage` or `reploy install`")
 	}
-	document, err := unmappedRuntimeDocumentV1(state)
+	document, err := unmappedRuntimeDocumentForEntryV1(state, mappedControlledSessionV1)
 	if err != nil {
 		return currentControlledSessionRuntimeV1{}, fmt.Errorf("runtime blueprint: %w", err)
 	}

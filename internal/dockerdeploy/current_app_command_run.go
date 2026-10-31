@@ -118,7 +118,11 @@ func runCurrentAppCommandV1(ctx context.Context, input CurrentAppCommandRunInput
 	if input.DeployedOnly && state.Deployment == nil {
 		return fmt.Errorf("deployed-only app commands require an installed deployment")
 	}
-	document, err := unmappedRuntimeDocumentV1(state)
+	kind := mappedApplicationCommandV1
+	if input.DeployedOnly {
+		kind = mappedDeployedCommandV1
+	}
+	document, err := unmappedRuntimeDocumentForEntryV1(state, kind)
 	if err != nil {
 		return fmt.Errorf("runtime blueprint: %w", err)
 	}
