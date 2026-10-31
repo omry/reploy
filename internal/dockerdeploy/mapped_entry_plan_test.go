@@ -402,8 +402,11 @@ func TestMappedEntryPlanV1CapabilityTupleComesFromLockedRole(t *testing.T) {
 			t.Fatalf("wrong root tuple: %+v", f)
 		}
 		kernel := mustCompileEntryKernelV1(t, f)
-		if kernel.setupCapabilities != kernel.finalCapabilities|1<<6|1<<8|1<<12 {
+		if kernel.setupCapabilities != kernel.finalCapabilities|1<<0|1<<6|1<<8|1<<12 {
 			t.Fatalf("wrong exact setup union: %x", kernel.setupCapabilities)
+		}
+		if !slices.Contains(f.Startup, podmanPrepareTemporaryHome) {
+			t.Fatal("Podman temporary-home setup is not bound into the plan")
 		}
 		if _, err := mappedStartupCommandV1(f.Startup, kernel); err != nil {
 			t.Fatal(err)
