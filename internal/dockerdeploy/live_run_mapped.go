@@ -51,7 +51,11 @@ type mappedLiveRunBackendV1 struct {
 // Close must interrupt Read. Borrowed readers are refused before engine effects.
 // It is private plumbing: no public mapped guard or F qualification is supplied.
 func runMappedLiveInstanceV1(admission context.Context, directory string, ops deploy.IdentityMappingOperationsV1, runID string, plan mappedEntryPlanV1, options RunOptions) error {
-	return runMappedLiveInstanceWithBackendV1(admission, directory, ops, runID, plan, options, mappedLiveRunBackendV1{
+	return runMappedLiveInstanceWithBackendV1(admission, directory, ops, runID, plan, options, mappedLiveHostBackendV1())
+}
+
+func mappedLiveHostBackendV1() mappedLiveRunBackendV1 {
+	return mappedLiveRunBackendV1{
 		acquire: deploy.AcquireOperationLock,
 		start: func(ctx context.Context, ops deploy.IdentityMappingOperationsV1, state deploy.StateV1, active identitymapping.Geometry, operation string, spec CommandSpec, policy mappedSeccompPolicyV1, binding mappedlaunch.Binding, options RunOptions) (*ownedMappedWaiterV1, error) {
 			p, err := prepareMappedPodmanCreateV1(ctx, ops, state, active, operation, spec, policy)
@@ -63,7 +67,7 @@ func runMappedLiveInstanceV1(admission context.Context, directory string, ops de
 		recover: func(ops deploy.IdentityMappingOperationsV1, ctx context.Context, state deploy.StateV1, operation string) (deploy.StateV1, error) {
 			return ops.Recover(ctx, state, operation, false)
 		},
-	})
+	}
 }
 
 func runMappedLiveInstanceWithBackendV1(admission context.Context, directory string, ops deploy.IdentityMappingOperationsV1, runID string, plan mappedEntryPlanV1, options RunOptions, backend mappedLiveRunBackendV1) (failure error) {
