@@ -204,7 +204,9 @@ func constructMappedEntryPlanV1(input mappedEntryInputV1) (mappedEntryPlanV1, er
 		final |= uint64(1) << bit
 	}
 	sandbox := newApplicationSandboxPlanWithNetworkV1(RuntimeUserPlan{UID: uint32(uid), GID: uint32(gid), SupplementaryGIDs: groups}, c.Lock.RuntimePolicy.Network)
-	setup := final
+	// The supported Podman renderer prepares the fixed private home before
+	// dropping setup authority. Bind that existing step before hashing the plan.
+	setup := final | uint64(1) // CHOWN, used only by temporary-home setup.
 	for _, name := range applicationSetupCapabilitiesV1(sandbox) {
 		setup |= uint64(1) << slices.Index(mappedCapabilityNamesV1, name)
 	}
@@ -217,7 +219,7 @@ func constructMappedEntryPlanV1(input mappedEntryInputV1) (mappedEntryPlanV1, er
 		ports[i], _ = strconv.Atoi(port)
 	}
 	startup := sandboxApplicationArgvV1(DockerExecutionPlan{Sandbox: sandbox}, command.Argv, true, ports)
-	startup = slices.Insert(startup, 1, fmt.Sprintf("--mapped-capabilities=%016x", final))
+	startup = slices.Insert(startup, 1, fmt.Sprintf("--mapped-capabilities=%016x", final), podmanPrepareTemporaryHome)
 	if _, err := mappedStartupCommandV1(startup, kernel); err != nil {
 		return fail(err)
 	}
