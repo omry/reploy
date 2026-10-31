@@ -385,7 +385,7 @@ it.
 
 The provider copies that complete input into the disposable resolver's
 read-only mount, then uses the selected interpreter and pinned
-`uv==0.11.26` frontend with `--no-sources` to ask the declared backend for
+`uv==0.13.4` frontend with `--no-sources` to ask the declared backend for
 exactly one sdist. The resolver retains its read-only root filesystem, private
 tmpfs scratch, clean environment, default build network, and absence of host
 credentials and the Docker socket. Failure to produce an sdist is an error;

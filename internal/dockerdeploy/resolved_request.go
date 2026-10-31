@@ -353,7 +353,7 @@ func exactSelectedSourceCandidatesV1(
 	}
 	for _, source := range selected {
 		candidate, found := byKey[source.Component+"\x00"+source.LogicalPackage]
-		if !found || !reflect.DeepEqual(candidate, source) {
+		if !found || !pythonprovider.SourceUsesCurrentBuilderV1(source) || !reflect.DeepEqual(candidate, source) {
 			return false
 		}
 	}

@@ -373,6 +373,10 @@ func newPreparedPythonGraphReuseFixture(t *testing.T) preparedPythonGraphReuseFi
 }
 
 func newPreparedPythonGraphReuseFixtureWithManifest(t *testing.T, sourceManifest canonical.Digest) preparedPythonGraphReuseFixture {
+	return newPreparedPythonGraphReuseFixtureWithBuilder(t, sourceManifest, "", pythonprovider.SourceBuilderRequirementV1)
+}
+
+func newPreparedPythonGraphReuseFixtureWithBuilder(t *testing.T, sourceManifest canonical.Digest, buildType string, requirement string) preparedPythonGraphReuseFixture {
 	t.Helper()
 	descriptor := testProbeImageDescriptor(t, "linux/amd64")
 	request := preparedPythonResolveRequest(t, descriptor)
@@ -398,6 +402,15 @@ func newPreparedPythonGraphReuseFixtureWithManifest(t *testing.T, sourceManifest
 			"application/application/python", "demo-server", "1.0", sourceManifest, sourceArtifact, localDigest,
 		),
 	}
+	if buildType != "" {
+		settings, err := pythonprovider.CanonicalSourceBuildSettingsV2(buildType, reuseTestDigest("7"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.SourceCandidates[0].BuilderProfile = pythonprovider.SourceBuilderProfileV2
+		request.SourceCandidates[0].BuildSettings = settings
+	}
+	request.SourceCandidates[0].BuildSettings.Value["builder_requirement"] = requirement
 	interpreter := request.EarlierCatalog[0].Evidence
 	interpreter.RequirementID = "interpreter"
 	interpreter.Terminal.RequirementID = "interpreter"
@@ -686,4 +699,53 @@ func reuseTestFileDigest(t *testing.T, filename string) canonical.Digest {
 
 func reuseTestDigest(char string) canonical.Digest {
 	return canonical.Digest("sha256:" + strings.Repeat(char, 64))
+}
+
+func TestUVUpgradeLoadsHistoricalLocksWithoutReusingSourceArtifacts(t *testing.T) {
+	for _, buildType := range []string{"", pythonprovider.SourceBuildTypePEP517, pythonprovider.SourceBuildTypeLegacy} {
+		name := buildType
+		if name == "" {
+			name = "default"
+		}
+		t.Run(name, func(t *testing.T) {
+			// Publish a complete old-pin bundle and lock, including their original
+			// digests, to exercise persisted-state validation before reuse decisions.
+			fixture := newPreparedPythonGraphReuseFixtureWithBuilder(t, reuseTestDigest("1"), buildType, "uv==0.11.26")
+			sources := fixture.request.SourceCandidates
+			locked, err := buildLockSelectedSourcesV1(fixture.lock)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if exactSelectedSourceCandidatesV1(sources, locked) {
+				t.Fatal("old builder allowed whole-build reuse")
+			}
+			for _, current := range []*deploy.BuildLockV1{nil, &fixture.lock} {
+				reuse, err := LoadPreparedPythonGraphReuse(
+					fixture.store, fixture.request.Plan, fixture.request.Platform, sources, fixture.sourceWheels, current,
+				)
+				if err != nil {
+					t.Fatalf("load historical source candidates: %v", err)
+				}
+				if _, found := reuse.CachedResolutions[fixture.request.NodeID]; found {
+					t.Fatal("old builder allowed cached node reuse")
+				}
+				wheels := reuse.NodeConfigs[fixture.request.NodeID].ReusableWheels
+				if containsWheelDigest(wheels, fixture.localWheelDigest) {
+					t.Fatal("old source wheel remained reusable")
+				}
+				if current != nil && !containsWheelDigest(wheels, fixture.downloadedWheelDigest) {
+					t.Fatal("unrelated downloaded wheel was discarded")
+				}
+			}
+			freshSources, freshWheels, err := filterPythonSourcesForBuildEnvironment(
+				sources, fixture.sourceWheels, sources[0].BuildEnvironmentDigest,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(freshSources) != 0 || len(freshWheels) != 0 {
+				t.Fatal("fresh resolution retained old source artifacts with an unchanged environment")
+			}
+		})
+	}
 }
