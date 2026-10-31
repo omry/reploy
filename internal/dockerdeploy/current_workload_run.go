@@ -127,7 +127,7 @@ func runCurrentWorkloadV1(ctx context.Context, input CurrentWorkloadRunInputV1, 
 	if !found {
 		return fmt.Errorf("runtime state is missing; run `reploy stage` or `reploy install`")
 	}
-	if _, err := unmappedRuntimeDocumentV1(state); err != nil {
+	if _, err := unmappedRuntimeDocumentForEntryV1(state, mappedWorkloadEntryKindV1(input.Action)); err != nil {
 		return err
 	}
 	recoverStop := func(cause error) error {
@@ -182,7 +182,7 @@ func runCurrentWorkloadV1(ctx context.Context, input CurrentWorkloadRunInputV1, 
 	if state.Current == nil {
 		return recoverStop(fmt.Errorf("%s", currentBuildRecoveryMessageV1(state, "runtime build is missing")))
 	}
-	document, err := unmappedRuntimeDocumentV1(state)
+	document, err := unmappedRuntimeDocumentForEntryV1(state, mappedWorkloadEntryKindV1(input.Action))
 	if err != nil {
 		return recoverStop(fmt.Errorf("runtime blueprint: %w", err))
 	}

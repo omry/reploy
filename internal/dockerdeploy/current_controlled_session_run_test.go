@@ -421,13 +421,14 @@ func TestRunCurrentControlledSessionV1RejectsConfiguredPrivateEnvironmentBeforeP
 				t.Fatalf("create private environment = %t, %v", created, err)
 			}
 			planned := false
+			current, _ := runtimeCurrentBuildFixture(t)
 			_, err := runCurrentControlledSessionV1(t.Context(), CurrentControlledSessionRunInputV1{
 				ControllerDeploymentDir: controllerDir,
 				WorkloadDeploymentDir:   workloadDir,
 			}, currentControlledSessionRunBackendV1{
 				acquire: deploy.AcquireOperationLock,
 				loadRuntime: func(context.Context, *deploy.OperationLock, string, StagedProviderBuildRuntimeV1) (currentControlledSessionRuntimeV1, error) {
-					return currentControlledSessionRuntimeV1{}, nil
+					return currentControlledSessionRuntimeV1{current: current}, nil
 				},
 				privateEnv:        preparePrivateWorkloadEnvironmentV1,
 				prepareController: preparedControlledSessionControllerForTestV1,
