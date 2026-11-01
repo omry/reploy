@@ -270,9 +270,13 @@ overlapping host-ID exception.
 ## Lifetime, replacement and runtime exec
 
 The foreground stock master is the required workload entry. Its exit ends that
-container instance. The existing host owner may recreate it only through fresh
-admission; no engine restart policy bypasses that check. Revocation stops the
-whole container, including package-managed descendants, and fences replacement.
+process instance and its package-managed descendants. A qualified engine policy
+may restart the same unchanged admitted container using its original approval.
+The existing host owner may create a replacement only through fresh admission.
+Every process start still applies the trusted final credential/capability and
+sandbox transition. Revocation stops the whole container and fences both
+engine retry and host-owned replacement before success; retained data and
+mapping reservations remain protected.
 
 The application may fork, exec, change among accepted identities, and replace
 its own workers within its already admitted workload authority. Those internal

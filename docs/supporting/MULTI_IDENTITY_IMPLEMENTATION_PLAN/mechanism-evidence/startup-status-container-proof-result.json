@@ -1,0 +1,146 @@
+{
+  "scope": "Raw private rootless Podman fixture: status FIFO/subordinate access/unlink/host process observation and non-TTY stdin release. Not compatible API, production Reploy, full credential transition, supported ABI/profile or public-path qualification.",
+  "private_root": "/tmp/reploy-fg-container-status-lrqv1svq",
+  "cases": [
+    {
+      "mode": "success",
+      "container": "e0af6a2653cf36b69872f36baba8ea4d46254641ffeab01ffb0ee1a68c37db8f",
+      "before": {
+        "pid": 2559634,
+        "start": "12270207",
+        "state": "S",
+        "exe_device": 2128,
+        "exe_inode": 10194075,
+        "uid_map": "         0     100000          1\n",
+        "gid_map": "         0     100000          1\n"
+      },
+      "after": {
+        "pid": 2559634,
+        "start": "12270207",
+        "state": "R",
+        "exe_device": 2128,
+        "exe_inode": 10194075,
+        "uid_map": "         0     100000          1\n",
+        "gid_map": "         0     100000          1\n"
+      },
+      "bound_header": true,
+      "inhibited_no_ack": true,
+      "unlinked_before_release": true,
+      "errno_bytes": "",
+      "accepted_start": true,
+      "application_control": {
+        "private_descriptor_leaks": [],
+        "same_executable_exec": true,
+        "status_path_absent": true
+      },
+      "command_exit_code": 0,
+      "stderr": ""
+    },
+    {
+      "mode": "exec-failure",
+      "container": "4e40806fb87b829ccbcb05fd534123cd74fec346adb61a3de4dcc9a038296940",
+      "before": {
+        "pid": 2559728,
+        "start": "12270832",
+        "state": "S",
+        "exe_device": 2128,
+        "exe_inode": 10194094,
+        "uid_map": "         0     100000          1\n",
+        "gid_map": "         0     100000          1\n"
+      },
+      "after": null,
+      "bound_header": true,
+      "inhibited_no_ack": true,
+      "unlinked_before_release": true,
+      "errno_bytes": "02000000",
+      "accepted_start": false,
+      "command_exit_code": 125,
+      "stderr": ""
+    },
+    {
+      "mode": "before-exec-failure",
+      "container": "f5d038f5541d55a72a9619adc48266c84c1c92fa39f8d269da2b1bb06e98b2c7",
+      "before": {
+        "pid": 2559821,
+        "start": "12271274",
+        "state": "S",
+        "exe_device": 2128,
+        "exe_inode": 10194130,
+        "uid_map": "         0     100000          1\n",
+        "gid_map": "         0     100000          1\n"
+      },
+      "after": null,
+      "bound_header": true,
+      "inhibited_no_ack": true,
+      "unlinked_before_release": true,
+      "errno_bytes": "",
+      "accepted_start": false,
+      "command_exit_code": 121,
+      "stderr": ""
+    },
+    {
+      "mode": "cancel-before-release",
+      "container": "92c335fd89f735c9c3756c820e77a4c527c372bfaadb10888653ddf54defe3d8",
+      "before": {
+        "pid": 2559910,
+        "start": "12271773",
+        "state": "S",
+        "exe_device": 2128,
+        "exe_inode": 10194159,
+        "uid_map": "         0     100000          1\n",
+        "gid_map": "         0     100000          1\n"
+      },
+      "after": null,
+      "bound_header": true,
+      "inhibited_no_ack": true,
+      "unlinked_before_release": true,
+      "errno_bytes": "",
+      "accepted_start": false,
+      "command_exit_code": 137,
+      "stderr": ""
+    }
+  ],
+  "cleanup": [
+    {
+      "container": "e0af6a2653cf36b69872f36baba8ea4d46254641ffeab01ffb0ee1a68c37db8f",
+      "removed": true
+    },
+    {
+      "container": "4e40806fb87b829ccbcb05fd534123cd74fec346adb61a3de4dcc9a038296940",
+      "removed": true
+    },
+    {
+      "container": "f5d038f5541d55a72a9619adc48266c84c1c92fa39f8d269da2b1bb06e98b2c7",
+      "removed": true
+    },
+    {
+      "container": "92c335fd89f735c9c3756c820e77a4c527c372bfaadb10888653ddf54defe3d8",
+      "removed": true
+    },
+    {
+      "image": "sha256:abafb2370498b896aada38e4fc14e89e73a9e6d9d9babcdd6b24f542ea0b5ce6",
+      "removed": true
+    }
+  ],
+  "engine": {
+    "version": {
+      "APIVersion": "4.9.3",
+      "Version": "4.9.3",
+      "GoVersion": "go1.22.2",
+      "GitCommit": "",
+      "BuiltTime": "Thu Jan  1 07:30:00 1970",
+      "Built": 0,
+      "OsArch": "linux/amd64",
+      "Os": "linux"
+    },
+    "kernel": "6.18.54.1-microsoft-standard-WSL2",
+    "rootless": true
+  },
+  "passed": true,
+  "private_root_removed": true,
+  "elapsed_seconds": 34.85026243899483,
+  "source_sha256": {
+    "run_startup_status_container_probe.py": "b653aa9616c132cd3f7df0f6b942598e0c75269a6b3f068cf658c5c483939f65",
+    "startup_status_probe.go": "86930283fb539e193603502247087a256f96a1b8d0182180a38d607d23899be1"
+  }
+}

@@ -1,0 +1,69 @@
+{
+  "scope": "Linux private status FIFO + raw nonleader exec/CLOEXEC mechanism only; no production tail change, credential/capability qualification, engine transport or public startup claim",
+  "cases": [
+    {
+      "mode": "success",
+      "bound_header": true,
+      "unlinked_before_release": true,
+      "inhibited_no_ack": true,
+      "status_eof": true,
+      "errno_bytes": "",
+      "live_after_eof": true,
+      "kernel_image_after_eof": true,
+      "accepted_start": true,
+      "application_control": {
+        "private_descriptor_leaks": [],
+        "same_executable_exec": true,
+        "status_path_absent": true
+      },
+      "exit_code": 0,
+      "stderr": ""
+    },
+    {
+      "mode": "exec-failure",
+      "bound_header": true,
+      "unlinked_before_release": true,
+      "inhibited_no_ack": true,
+      "status_eof": true,
+      "errno_bytes": "02000000",
+      "live_after_eof": false,
+      "kernel_image_after_eof": false,
+      "accepted_start": false,
+      "exit_code": 125,
+      "stderr": ""
+    },
+    {
+      "mode": "before-exec-failure",
+      "bound_header": true,
+      "unlinked_before_release": true,
+      "inhibited_no_ack": true,
+      "status_eof": true,
+      "errno_bytes": "",
+      "live_after_eof": false,
+      "kernel_image_after_eof": false,
+      "accepted_start": false,
+      "exit_code": 121,
+      "stderr": ""
+    },
+    {
+      "mode": "cancel-before-release",
+      "bound_header": true,
+      "unlinked_before_release": true,
+      "inhibited_no_ack": true,
+      "status_eof": true,
+      "errno_bytes": "",
+      "live_after_eof": false,
+      "kernel_image_after_eof": false,
+      "accepted_start": false,
+      "exit_code": -9,
+      "stderr": ""
+    }
+  ],
+  "passed": true,
+  "private_root_removed": true,
+  "elapsed_seconds": 0.7984645029937383,
+  "source_sha256": {
+    "run_startup_status_probe.py": "ce2c5faaad89944043a81a4fb18a1e9ac275878d37096f765310cd1542a63edc",
+    "startup_status_probe.go": "675362c01b059ba3113b9239499225e3a9107ad81fc105b44a554c7ec87e21e9"
+  }
+}

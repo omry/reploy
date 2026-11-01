@@ -1,0 +1,213 @@
+{
+  "source_head": "87899abecced4c5f8b3513ecee66793ecdd2df37",
+  "scope": "Bounded design engineering proofs; not production provider qualification, completed F/G slices or generic-launch. Dummy input only; no credential sources.",
+  "files": [
+    {
+      "path": "image-projection-proof-attempt01-result.json",
+      "sha256": "0f5f94f9e079b9d229a5ee2d0686522ccd2899558ff8a66cb67f043aa41c24da"
+    },
+    {
+      "path": "image-projection-proof-result.json",
+      "sha256": "4b913944150d9a676903670f1aa2c89f60f82d00c8ff967e0a469420e5b0334d"
+    },
+    {
+      "path": "image-projection-proof.jsonl",
+      "sha256": "761e3383ec45c9c8553eb73c28c49ea4ab9a04f50a95cd1a84957cfef6d93308"
+    },
+    {
+      "path": "image_projection_overlay_test.go.txt",
+      "sha256": "e84d17bd5089db21c7729d9bd8ce47d14488f5579c1f81b1026f3382fad50836"
+    },
+    {
+      "path": "image_projection_overlay_test_attempt01.go.txt",
+      "sha256": "023691daa8e52a2fbaea25a553a1be196fc2bb3c84d7af47e6fdeb4d19655a91"
+    },
+    {
+      "path": "network-proof-attempt01-result.json",
+      "sha256": "886c814dba24d3d4b3cb760f034566226c58f5eb3dc8621d64f279690573a682"
+    },
+    {
+      "path": "network-proof-attempt02-result.json",
+      "sha256": "4f18c6c11cae83721a2aeefbbf590cd7e8d95027297d634e9269e27ee7a95416"
+    },
+    {
+      "path": "network-proof-result.json",
+      "sha256": "019b576fe85eae62647ed451034ee95d07ff0a0b6fd61c2723c5ef3fadbfd8a5"
+    },
+    {
+      "path": "network_overlay_test.go.txt",
+      "sha256": "1e180891ab6a036323ed6ac7efdb3cbf58f3bf88d12d9bc9e58426754887b57f"
+    },
+    {
+      "path": "network_overlay_test_attempt01.go.txt",
+      "sha256": "60f63c1496aded513986e03fb27cd92e33c38be0d967163fc029dd9f6597d756"
+    },
+    {
+      "path": "network_overlay_test_attempt02.go.txt",
+      "sha256": "e5fdcd35efe38327b7f45da470beddf711fcbe4bee3ad5aa208d2fe085844089"
+    },
+    {
+      "path": "private-input-proof-result.json",
+      "sha256": "46ada1c63fcc61f2c639644cec896926ca2d93b5a863bc80dd2b7ee4d8a9f291"
+    },
+    {
+      "path": "private-input-proof.jsonl",
+      "sha256": "4523eb90b33e63cada8031ce194170f55b0fe2ed419c065b3f8d970ce7d0c50c"
+    },
+    {
+      "path": "private_input_overlay_test.go.txt",
+      "sha256": "68068bec17491ecd654a0f1a3094b7000830f09deac9ebf5c9b8c5b6797db0b0"
+    },
+    {
+      "path": "run_network_probe.py.txt",
+      "sha256": "2611310d5d3509d525e26373f01137b7cf19db5f571258843f363a9a31e6cef3"
+    },
+    {
+      "path": "run_network_probe_attempt01.py.txt",
+      "sha256": "40cbab241fece9fae2b4d2e2c256528b1c09764e1b5e889ed86c9122761a9f60"
+    },
+    {
+      "path": "run_network_probe_attempt02.py.txt",
+      "sha256": "49a8e8e4691d1b54fb79a347d86f5f9fc591918735b7f0ca9b6e746cc1929481"
+    },
+    {
+      "path": "run_startup_status_container_probe.py.txt",
+      "sha256": "b653aa9616c132cd3f7df0f6b942598e0c75269a6b3f068cf658c5c483939f65"
+    },
+    {
+      "path": "run_startup_status_probe.py.txt",
+      "sha256": "4414c52c4bb52ee906cb40761f49d73ff7cb82bce1a7f1365bca3304f69cca01"
+    },
+    {
+      "path": "run_startup_status_probe_attempt01.py.txt",
+      "sha256": "f7613cf24c2e687a858f67f727d09ce6341c3525f810d5c28da6a0e5cfd63ff1"
+    },
+    {
+      "path": "run_startup_status_probe_attempt02.py.txt",
+      "sha256": "ce2c5faaad89944043a81a4fb18a1e9ac275878d37096f765310cd1542a63edc"
+    },
+    {
+      "path": "run_startup_status_reservedfd_container_probe.py.txt",
+      "sha256": "73c0eb9f1549551405fbd033c4e48d8e433f52fece81cf57cbfceb2e7e3f89bc"
+    },
+    {
+      "path": "run_startup_status_reservedfd_probe.py.txt",
+      "sha256": "f7fe0e0214905d9376c54ba80b8e1bd346b3bcf0b92298f444152747fe8b3853"
+    },
+    {
+      "path": "run_startup_status_reservedfd_probe_attempt01.py.txt",
+      "sha256": "de9e5bb1386d1bc4b9ab5947a4469c73278e06fd93d4d427ae169f240b8ea8b5"
+    },
+    {
+      "path": "run_startup_status_reservedfd_probe_attempt02.py.txt",
+      "sha256": "bb714b059cde46c16f609b96dce3a673f268b189618814667227653f3cd5e302"
+    },
+    {
+      "path": "run_storage_probe_attempt01.py.txt",
+      "sha256": "ab620a85cc6eae15f1defb49e274118ede537662d0055cf0d2215cc16a0801ae"
+    },
+    {
+      "path": "startup-status-container-cleanup-followup.json",
+      "sha256": "3318ea1dc1cd8435cfae1100c480f420f539832a304ed2d8824293505e9bbc8d"
+    },
+    {
+      "path": "startup-status-container-proof-result.json",
+      "sha256": "a061760424e23d8b718525d99a255a5e740517cf08d6c4b961c29e746e2ec07b"
+    },
+    {
+      "path": "startup-status-proof-attempt01-result.json",
+      "sha256": "284cd26a9ea3a29cc45fd9d93613854ad74c983c19889545935c253b2f68f335"
+    },
+    {
+      "path": "startup-status-proof-attempt02-result.json",
+      "sha256": "ab6f60357111a3a62e204d767adbfc46a03ee5739cea4e870ca05fca5da042b2"
+    },
+    {
+      "path": "startup-status-proof-attempt03-result.json",
+      "sha256": "5a201ef63596a6d17e1c5210553a342209901dfd09a0b4dc87b0147ad50fb474"
+    },
+    {
+      "path": "startup-status-proof-result.json",
+      "sha256": "fee17491636df7013733df6a39b0c2539c7c0d6ce231a9c1ef0b4b3f20bfe824"
+    },
+    {
+      "path": "startup-status-reserved-fd-container-cleanup-followup-attempt01.json",
+      "sha256": "c23d65df8c5b679ada82491391dab03aeb149922162cd191ab48eb80fb77ec43"
+    },
+    {
+      "path": "startup-status-reserved-fd-container-cleanup-followup.json",
+      "sha256": "07ce07dfc1f425c1953933310cec41d6748d7c94904e8b2db253b0ba71eed103"
+    },
+    {
+      "path": "startup-status-reserved-fd-container-proof-result.json",
+      "sha256": "551a8f1f27f8aae2eddf5021888224c84fa378a5ccbc6404a411db544afa3044"
+    },
+    {
+      "path": "startup-status-reserved-fd-proof-attempt01-result.json",
+      "sha256": "60ca567439429286ce071ce9436d6c9841ca31ace30ce96a2654ab7e25be2711"
+    },
+    {
+      "path": "startup-status-reserved-fd-proof-attempt02-result.json",
+      "sha256": "ae3b84cc1445e79100255b4abca8061b05b5672536539ff5862a39332e582e52"
+    },
+    {
+      "path": "startup-status-reserved-fd-proof-result.json",
+      "sha256": "36ba98010b1f4982708fb85f0fd2c9bcdae99029f5e720d859751a4f0713c0ae"
+    },
+    {
+      "path": "startup-status-reserved-fd-tail.txt",
+      "sha256": "ddf9a21c836b93fdcc1c9dbc58c5f24145a386488488b88a33fa8c822bd4ae44"
+    },
+    {
+      "path": "startup-status-tail.txt",
+      "sha256": "669adba70a202f9585934aa1828e34f99204da196a27d57e04ed8dfa6eadaf9d"
+    },
+    {
+      "path": "startup_status_probe.go.txt",
+      "sha256": "86930283fb539e193603502247087a256f96a1b8d0182180a38d607d23899be1"
+    },
+    {
+      "path": "startup_status_probe_attempt01.go.txt",
+      "sha256": "eb0c9983289d52516334cf4bb8907b7aa876185bf95babff504c04d0ad9ad112"
+    },
+    {
+      "path": "startup_status_probe_attempt02.go.txt",
+      "sha256": "675362c01b059ba3113b9239499225e3a9107ad81fc105b44a554c7ec87e21e9"
+    },
+    {
+      "path": "startup_status_probe_attempt03.go.txt",
+      "sha256": "96dd04223b9bc1874c86878bd75bce228e6950688ea1d3d268fbf62a011f7657"
+    },
+    {
+      "path": "startup_status_reservedfd_probe.go.txt",
+      "sha256": "c9e9debe56aaccc49d26acd1b696de588d816ff46588ff5776945145f6f9556c"
+    },
+    {
+      "path": "startup_status_reservedfd_probe_attempt01.go.txt",
+      "sha256": "a0d5a37e999b5de5b3bd6f2b51782ac3c20c989d7950dac4c8cd70d05bca29e5"
+    },
+    {
+      "path": "startup_status_reservedfd_probe_attempt02.go.txt",
+      "sha256": "a0d5a37e999b5de5b3bd6f2b51782ac3c20c989d7950dac4c8cd70d05bca29e5"
+    },
+    {
+      "path": "storage-cleanup-followup.json",
+      "sha256": "83c88d934d33052e601c1c7e60b9b4a8e9bd4f8e57e1475ee7b9880fb9956ebc"
+    },
+    {
+      "path": "storage-proof-result.json",
+      "sha256": "86bc3ebe196f81d7cf3aee8b6cb130bbb26c5761907d0fb614dc4aad88d14296"
+    },
+    {
+      "path": "storage_probe.go.txt",
+      "sha256": "7a9c67c92af3bce49eae667f97cf927c06e2ea857cb7b23f095ddecbfdb3022d"
+    }
+  ],
+  "storage": "Four fixture observations, including successful shadow/ancestor attacks as negative controls. Original cleanup receipt retained; follow-up proves exact private root removal.",
+  "private_input": "Seven preamble cases plus real existing parser/reader, mapped waiter/descriptor/exec-tail checks. Pipe/process composition only; not native desktop/engine attach qualification.",
+  "network": "Final inside-container and bounded-host setup variants pass with separate private peer positive/deny/allow controls and actual kernel table observation. First two failed fixture attempts retained; final private containers/image/store removed.",
+  "engine": "Podman4.9.3/crun1.14.1 on WSL2, raw private exact UID0 fixture; not the supported production mapped cohort or both-profile acceptance.",
+  "source_format": "Source archives keep an added .txt suffix so documentation does not create Go packages or executable test suites. Restore original names only in a fresh replay directory.",
+  "image_projection": "22 layered immutable-image metadata cases pass using the actual D archive binding. Root aliases, hardlinks and type replacement included; the earlier 17-case receipt remains. This is not the bounded production parser, build-lock integration or actual engine mount observation.",
+  "startup_status": "Selected reserved-fd refinement: five host and five raw isolated rootless Podman cases pass with source fd4/fd64, raw-only six-call-site compiled tail and no private descriptor leaks. Source-fd3 branch and full production qualification remain gates. Original failed fixture and incomplete cleanup receipts remain; exact cleanup follow-up proves no private root/process remains. Historical whole-range CLOEXEC proofs are not the selected kernel requirement."
+}

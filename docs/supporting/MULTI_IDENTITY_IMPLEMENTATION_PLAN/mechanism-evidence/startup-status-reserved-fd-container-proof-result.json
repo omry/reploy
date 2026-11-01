@@ -1,0 +1,184 @@
+{
+  "scope": "Raw private rootless Podman fixture: status FIFO/subordinate access/unlink/host process observation and non-TTY stdin release. Not compatible API, production Reploy, full credential transition, supported ABI/profile or public-path qualification.",
+  "private_root": "/tmp/reploy-fg-container-status-zjnvjx6j",
+  "cases": [
+    {
+      "mode": "success",
+      "container": "6e54efb1589dada32d3a5ba58a0f97d77f51d2d3487089afcd2b831455cdfa43",
+      "before": {
+        "pid": 16004,
+        "start": "38515",
+        "state": "S",
+        "exe_device": 2112,
+        "exe_inode": 1344773,
+        "uid_map": "         0     100000          1\n",
+        "gid_map": "         0     100000          1\n"
+      },
+      "after": {
+        "pid": 16004,
+        "start": "38515",
+        "state": "R",
+        "exe_device": 2112,
+        "exe_inode": 1344773,
+        "uid_map": "         0     100000          1\n",
+        "gid_map": "         0     100000          1\n"
+      },
+      "bound_header": true,
+      "inhibited_no_ack": true,
+      "unlinked_before_release": true,
+      "errno_bytes": "",
+      "accepted_start": true,
+      "application_control": {
+        "private_descriptor_leaks": [],
+        "same_executable_exec": true,
+        "status_path_absent": true
+      },
+      "command_exit_code": 0,
+      "stderr": "source_status_fd=64\n"
+    },
+    {
+      "mode": "success-natural-fd",
+      "container": "711e35ba1b7ff00887e41530fc844b5ccd9a9020b25ce5f7648a8e17ee9c6654",
+      "before": {
+        "pid": 16082,
+        "start": "38796",
+        "state": "S",
+        "exe_device": 2112,
+        "exe_inode": 1344793,
+        "uid_map": "         0     100000          1\n",
+        "gid_map": "         0     100000          1\n"
+      },
+      "after": {
+        "pid": 16082,
+        "start": "38796",
+        "state": "R",
+        "exe_device": 2112,
+        "exe_inode": 1344793,
+        "uid_map": "         0     100000          1\n",
+        "gid_map": "         0     100000          1\n"
+      },
+      "bound_header": true,
+      "inhibited_no_ack": true,
+      "unlinked_before_release": true,
+      "errno_bytes": "",
+      "accepted_start": true,
+      "application_control": {
+        "private_descriptor_leaks": [],
+        "same_executable_exec": true,
+        "status_path_absent": true
+      },
+      "command_exit_code": 0,
+      "stderr": "source_status_fd=4\n"
+    },
+    {
+      "mode": "exec-failure",
+      "container": "9ce7e2d2e69aaa108f86c471db2ef0e19e7766b8e4d8193dc32b15eb98750d82",
+      "before": {
+        "pid": 16161,
+        "start": "39031",
+        "state": "S",
+        "exe_device": 2112,
+        "exe_inode": 1344858,
+        "uid_map": "         0     100000          1\n",
+        "gid_map": "         0     100000          1\n"
+      },
+      "after": null,
+      "bound_header": true,
+      "inhibited_no_ack": true,
+      "unlinked_before_release": true,
+      "errno_bytes": "02000000",
+      "accepted_start": false,
+      "command_exit_code": 125,
+      "stderr": "source_status_fd=64\n"
+    },
+    {
+      "mode": "before-exec-failure",
+      "container": "94c49b47afe05f92302c9e054b357b39274175a1a561da577a30a7cc2cad98bd",
+      "before": {
+        "pid": 16248,
+        "start": "39262",
+        "state": "S",
+        "exe_device": 2112,
+        "exe_inode": 1344946,
+        "uid_map": "         0     100000          1\n",
+        "gid_map": "         0     100000          1\n"
+      },
+      "after": null,
+      "bound_header": true,
+      "inhibited_no_ack": true,
+      "unlinked_before_release": true,
+      "errno_bytes": "",
+      "accepted_start": false,
+      "command_exit_code": 121,
+      "stderr": "source_status_fd=64\n"
+    },
+    {
+      "mode": "cancel-before-release",
+      "container": "fa05d061ef2da1d593bd7e09206c3d703d939abf8c1a59323cb6b1d2aab4ec5d",
+      "before": {
+        "pid": 16334,
+        "start": "39461",
+        "state": "S",
+        "exe_device": 2112,
+        "exe_inode": 1345000,
+        "uid_map": "         0     100000          1\n",
+        "gid_map": "         0     100000          1\n"
+      },
+      "after": null,
+      "bound_header": true,
+      "inhibited_no_ack": true,
+      "unlinked_before_release": true,
+      "errno_bytes": "",
+      "accepted_start": false,
+      "command_exit_code": 137,
+      "stderr": "source_status_fd=64\n"
+    }
+  ],
+  "cleanup": [
+    {
+      "container": "6e54efb1589dada32d3a5ba58a0f97d77f51d2d3487089afcd2b831455cdfa43",
+      "removed": true
+    },
+    {
+      "container": "711e35ba1b7ff00887e41530fc844b5ccd9a9020b25ce5f7648a8e17ee9c6654",
+      "removed": true
+    },
+    {
+      "container": "9ce7e2d2e69aaa108f86c471db2ef0e19e7766b8e4d8193dc32b15eb98750d82",
+      "removed": true
+    },
+    {
+      "container": "94c49b47afe05f92302c9e054b357b39274175a1a561da577a30a7cc2cad98bd",
+      "removed": true
+    },
+    {
+      "container": "fa05d061ef2da1d593bd7e09206c3d703d939abf8c1a59323cb6b1d2aab4ec5d",
+      "removed": true
+    },
+    {
+      "image": "sha256:a9425b2a6431d0450223c0cfbee1241a9104ac8ad18729cb42370e8bb5a11c59",
+      "removed": true
+    }
+  ],
+  "engine": {
+    "version": {
+      "APIVersion": "4.9.3",
+      "Version": "4.9.3",
+      "GoVersion": "go1.22.2",
+      "GitCommit": "",
+      "BuiltTime": "Thu Jan  1 08:00:00 1970",
+      "Built": 0,
+      "OsArch": "linux/amd64",
+      "Os": "linux"
+    },
+    "kernel": "6.18.54.1-microsoft-standard-WSL2",
+    "rootless": true
+  },
+  "passed": true,
+  "cleanup_error": "RuntimeError('unexpected private fixture process: 15887')",
+  "elapsed_seconds": 20.073180793000006,
+  "source_sha256": {
+    "run_startup_status_reservedfd_container_probe.py": "73c0eb9f1549551405fbd033c4e48d8e433f52fece81cf57cbfceb2e7e3f89bc",
+    "startup_status_reservedfd_probe.go": "c9e9debe56aaccc49d26acd1b696de588d816ff46588ff5776945145f6f9556c"
+  }
+}

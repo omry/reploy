@@ -1,0 +1,48 @@
+TEXT main.execTail(SB) /home/omry/dev/reploy/temp/reviews/fg-finalization-20261101/startup_status_probe.go
+  startup_status_probe.go:53	0x4c4a00		55			PUSHQ BP			
+  startup_status_probe.go:53	0x4c4a01		4889e5			MOVQ SP, BP			
+  startup_status_probe.go:53	0x4c4a04		4883ec58		SUBQ $0x58, SP			
+  startup_status_probe.go:55	0x4c4a08		4889442468		MOVQ AX, 0x68(SP)		
+  startup_status_probe.go:55	0x4c4a0d		48895c2470		MOVQ BX, 0x70(SP)		
+  startup_status_probe.go:55	0x4c4a12		48894c2478		MOVQ CX, 0x78(SP)		
+  startup_status_probe.go:55	0x4c4a17		4889bc2480000000	MOVQ DI, 0x80(SP)		
+  startup_status_probe.go:55	0x4c4a1f		4889b42488000000	MOVQ SI, 0x88(SP)		
+  startup_status_probe.go:54	0x4c4a27		b8b4010000		MOVL $0x1b4, AX			
+  startup_status_probe.go:54	0x4c4a2c		bb03000000		MOVL $0x3, BX			
+  startup_status_probe.go:54	0x4c4a31		b9ffffffff		MOVL $-0x1, CX			
+  startup_status_probe.go:54	0x4c4a36		bf06000000		MOVL $0x6, DI			
+  startup_status_probe.go:54	0x4c4a3b		31f6			XORL SI, SI			
+  startup_status_probe.go:54	0x4c4a3d		4989f0			MOVQ SI, R8			
+  startup_status_probe.go:54	0x4c4a40		4989f1			MOVQ SI, R9			
+  startup_status_probe.go:54	0x4c4a43		e81884fdff		CALL syscall.RawSyscall6(SB)	
+  startup_status_probe.go:55	0x4c4a48		4885c9			TESTQ CX, CX			
+  startup_status_probe.go:55	0x4c4a4b		7532			JNE 0x4c4a7f			
+  startup_status_probe.go:55	0x4c4a4d		488b542468		MOVQ 0x68(SP), DX		
+  startup_status_probe.go:55	0x4c4a52		4889542450		MOVQ DX, 0x50(SP)		
+  startup_status_probe.go:55	0x4c4a57		488b542470		MOVQ 0x70(SP), DX		
+  startup_status_probe.go:55	0x4c4a5c		4889542448		MOVQ DX, 0x48(SP)		
+  startup_status_probe.go:55	0x4c4a61		488b7c2478		MOVQ 0x78(SP), DI		
+  startup_status_probe.go:55	0x4c4a66		48897c2440		MOVQ DI, 0x40(SP)		
+  startup_status_probe.go:55	0x4c4a6b		488b5c2450		MOVQ 0x50(SP), BX		
+  startup_status_probe.go:55	0x4c4a70		488b4c2448		MOVQ 0x48(SP), CX		
+  startup_status_probe.go:55	0x4c4a75		b83b000000		MOVL $0x3b, AX			
+  startup_status_probe.go:55	0x4c4a7a		e8c183fdff		CALL syscall.RawSyscall(SB)	
+  startup_status_probe.go:57	0x4c4a7f		488b942488000000	MOVQ 0x88(SP), DX		
+  startup_status_probe.go:57	0x4c4a87		890a			MOVL CX, 0(DX)			
+  startup_status_probe.go:58	0x4c4a89		eb08			JMP 0x4c4a93			
+  startup_status_probe.go:59	0x4c4a8b		488b942488000000	MOVQ 0x88(SP), DX		
+  startup_status_probe.go:59	0x4c4a93		4889542438		MOVQ DX, 0x38(SP)		
+  startup_status_probe.go:59	0x4c4a98		4889d1			MOVQ DX, CX			
+  startup_status_probe.go:59	0x4c4a9b		b801000000		MOVL $0x1, AX			
+  startup_status_probe.go:59	0x4c4aa0		488b9c2480000000	MOVQ 0x80(SP), BX		
+  startup_status_probe.go:59	0x4c4aa8		bf04000000		MOVL $0x4, DI			
+  startup_status_probe.go:59	0x4c4aad		e88e83fdff		CALL syscall.RawSyscall(SB)	
+  startup_status_probe.go:60	0x4c4ab2		4883f904		CMPQ CX, $0x4			
+  startup_status_probe.go:60	0x4c4ab6		74d3			JE 0x4c4a8b			
+  startup_status_probe.go:62	0x4c4ab8		b8e7000000		MOVL $0xe7, AX			
+  startup_status_probe.go:62	0x4c4abd		bb7d000000		MOVL $0x7d, BX			
+  startup_status_probe.go:62	0x4c4ac2		31c9			XORL CX, CX			
+  startup_status_probe.go:62	0x4c4ac4		4889cf			MOVQ CX, DI			
+  startup_status_probe.go:62	0x4c4ac7		e87483fdff		CALL syscall.RawSyscall(SB)	
+  startup_status_probe.go:63	0x4c4acc		90			NOPL				
+  startup_status_probe.go:1	0x4c4acd		ebfd			JMP 0x4c4acc			

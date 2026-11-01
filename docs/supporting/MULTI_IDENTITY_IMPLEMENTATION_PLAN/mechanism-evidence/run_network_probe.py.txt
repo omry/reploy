@@ -1,0 +1,72 @@
+"""Private rootless network ownership/order proof, without application release."""
+from pathlib import Path
+import hashlib,io,json,os,secrets,shutil,subprocess,tarfile,tempfile,time
+OUT=Path(__file__).resolve().parent
+WORK=Path(tempfile.mkdtemp(prefix="reploy-fg-network-"));TOKEN=secrets.token_hex(12)
+ENV=dict(os.environ,XDG_RUNTIME_DIR=str(WORK/"xdg"),XDG_CONFIG_HOME=str(WORK/"config"),XDG_DATA_HOME=str(WORK/"data"))
+for n in ("xdg","config","data"):(WORK/n).mkdir(mode=0o700)
+PREFIX=["/usr/bin/podman","--remote=false","--root",str(WORK/"graph"),"--runroot",str(WORK/"run"),"--storage-driver","vfs","--cgroup-manager","cgroupfs","--events-backend","file"]
+RESULT={"scope":"private network namespace/setup feasibility on rootless Podman4.9.3; not product/eligible-engine or peer/endpoint qualification","attempt":TOKEN,"private_root":str(WORK),"cases":[],"cleanup":[]};NAMES=[];IMAGE=None;START=time.monotonic()
+def run(args,check=True,timeout=45,env=ENV):
+ p=subprocess.run(args,capture_output=True,text=True,timeout=timeout,env=env)
+ if check and p.returncode:raise RuntimeError(str((p.returncode,args[:3],p.stderr[-2000:])))
+ return p
+try:
+ overlay=OUT/"network-overlay.json";overlay.write_text(json.dumps({"Replace":{str(Path("internal/probe/fg_network_design_test.go").resolve()):str(OUT/"network_overlay_test.go")}}))
+ binary=WORK/"probe"
+ run(["go","test","-c","-overlay",str(overlay),"-o",str(binary),"./internal/probe"],env=dict(ENV,CGO_ENABLED="0"));binary.chmod(0o555)
+ info=json.loads(run(PREFIX+["info","--format","json"]).stdout);assert info["host"]["security"]["rootless"]
+ RESULT["engine"]={"version":info["version"],"kernel":info["host"]["kernel"],"rootless":True}
+ rootfs=WORK/"rootfs.tar"
+ with tarfile.open(rootfs,"w") as t:
+  for name in ("tmp","etc"):
+   h=tarfile.TarInfo(name);h.type=tarfile.DIRTYPE;h.mode=0o755;t.addfile(h)
+  data=binary.read_bytes();h=tarfile.TarInfo("probe");h.size=len(data);h.mode=0o555;t.addfile(h,io.BytesIO(data))
+  data=b"nameserver 192.0.2.2\n";h=tarfile.TarInfo("etc/resolv.conf");h.size=len(data);h.mode=0o644;t.addfile(h,io.BytesIO(data))
+ IMAGE=run(PREFIX+["import","--change","LABEL reploy.fg-network-proof="+TOKEN,str(rootfs),"localhost/reploy-fg-network:"+TOKEN]).stdout.strip()
+ parent=os.readlink("/proc/self/ns/net")
+ common=["--network","none","--cgroups","disabled","--uidmap","0:1:1","--gidmap","0:1:1","--cap-add","NET_ADMIN","--label","reploy.fg-network-proof="+TOKEN]
+ peer_name="reploy-fg-network-"+TOKEN+"-peer";NAMES.append(peer_name)
+ peer=run(PREFIX+["run","--detach","--name",peer_name,*common,"--env","FG_NETWORK_PEER=1",IMAGE,"/probe","-test.run=^TestFGNetworkPeer$","-test.v"]).stdout.strip()
+ peer_obj=json.loads(run(PREFIX+["inspect",peer]).stdout)[0];assert peer_obj["Config"]["Labels"]["reploy.fg-network-proof"]==TOKEN
+ peer_pid=peer_obj["State"]["Pid"];assert peer_pid>0
+ name="reploy-fg-network-"+TOKEN+"-waiter";NAMES.append(name)
+ container=run(PREFIX+["run","--detach","--name",name,*common,"--env","FG_NETWORK_WAITER=1",IMAGE,"/probe","-test.run=^TestFGNetworkWaiter$","-test.v"]).stdout.strip()
+ obj=json.loads(run(PREFIX+["inspect",container]).stdout)[0];assert obj["Config"]["Labels"]["reploy.fg-network-proof"]==TOKEN
+ pid=obj["State"]["Pid"];assert pid>0
+ ip=shutil.which("ip");nsenter=shutil.which("nsenter");assert ip and nsenter
+ def ns_ip(target,*args):
+  return run(PREFIX+["unshare",nsenter,"--net=/proc/"+str(target)+"/ns/net",ip,*args])
+ # Both veth ends exist only in our two private container namespaces.
+ ns_ip(pid,"link","add","fg-a","type","veth","peer","name","fg-b")
+ ns_ip(pid,"link","set","fg-b","netns",str(peer_pid))
+ ns_ip(pid,"addr","add","192.0.2.1/30","dev","fg-a")
+ ns_ip(pid,"link","set","fg-a","up")
+ ns_ip(peer_pid,"addr","add","192.0.2.2/30","dev","fg-b")
+ ns_ip(peer_pid,"link","set","fg-b","up")
+ p=run(PREFIX+["exec","--env","FG_NETWORK_PROOF=1","--env","FG_PARENT_NETNS="+parent,"--env","FG_NETWORK_TARGET=192.0.2.2:34567",container,"/probe","-test.run=^TestFGPreReleaseNetwork$","-test.v"],check=False)
+ RESULT["cases"].append({"mode":"trusted-setup-inside-private-container","exit_code":p.returncode,"stdout":p.stdout,"stderr":p.stderr})
+ # Trusted host setup joins only the pinned inert fixture's network namespace.
+ helper_env=dict(ENV,FG_NETWORK_PROOF="1",FG_JOIN_NETNS=f"/proc/{pid}/ns/net",FG_PARENT_NETNS=parent,FG_NETWORK_TARGET="192.0.2.2:34567")
+ p=run(PREFIX+["unshare",str(binary),"-test.run=^TestFGPreReleaseNetwork$","-test.v"],env=helper_env,check=False)
+ RESULT["cases"].append({"mode":"bounded-host-setup-in-pinned-network-namespace","exit_code":p.returncode,"stdout":p.stdout,"stderr":p.stderr})
+ RESULT["host_setup_supported"]=p.returncode==0
+except Exception as e:RESULT["error"]=str(e)
+finally:
+ for name in NAMES:
+  p=run(PREFIX+["inspect",name],check=False)
+  if p.returncode==0:
+   obj=json.loads(p.stdout)[0];assert obj["Config"]["Labels"]["reploy.fg-network-proof"]==TOKEN
+   p=run(PREFIX+["rm","--force",obj["Id"]],check=False);RESULT["cleanup"].append({"container":obj["Id"],"removed":p.returncode==0})
+ if IMAGE:
+  p=run(PREFIX+["rmi",IMAGE],check=False);RESULT["cleanup"].append({"image":IMAGE,"removed":p.returncode==0})
+ try:
+  assert json.loads(run(PREFIX+["ps","--all","--format","json"]).stdout)==[]
+  assert str(WORK).startswith("/tmp/reploy-fg-network-") and WORK.resolve()==WORK
+  run(PREFIX+["unshare","/usr/bin/rm","-rf",str(WORK)])
+  if WORK.exists():shutil.rmtree(WORK)
+  RESULT["private_root_removed"]=not WORK.exists()
+ except Exception as e:RESULT["cleanup_error"]=str(e)
+ RESULT["elapsed_seconds"]=time.monotonic()-START
+ RESULT["source_sha256"]={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (Path(__file__),OUT/"network_overlay_test.go")}
+ (OUT/"network-proof-result.json").write_text(json.dumps(RESULT,indent=2)+"\n");print(json.dumps(RESULT,indent=2))

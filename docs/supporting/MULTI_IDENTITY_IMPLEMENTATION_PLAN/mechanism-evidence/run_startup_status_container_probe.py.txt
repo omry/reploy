@@ -1,0 +1,114 @@
+"""Private rootless Podman status-FIFO feasibility. No production services/store."""
+from pathlib import Path
+import hashlib,io,json,os,secrets,select,shutil,subprocess,tarfile,tempfile,time
+
+OUT=Path(__file__).resolve().parent
+WORK=Path(tempfile.mkdtemp(prefix='reploy-fg-container-status-'))
+TOKEN=secrets.token_hex(12)
+ENV=dict(os.environ,XDG_RUNTIME_DIR=str(WORK/'xdg'),XDG_CONFIG_HOME=str(WORK/'config'),XDG_DATA_HOME=str(WORK/'data'))
+for n in ['xdg','config','data']:(WORK/n).mkdir(mode=0o700)
+PODMAN=['/usr/bin/podman','--remote=false','--root',str(WORK/'graph'),'--runroot',str(WORK/'run'),'--storage-driver','vfs','--cgroup-manager','cgroupfs','--events-backend','file']
+RESULT={'scope':'Raw private rootless Podman fixture: status FIFO/subordinate access/unlink/host process observation and non-TTY stdin release. Not compatible API, production Reploy, full credential transition, supported ABI/profile or public-path qualification.','private_root':str(WORK),'cases':[],'cleanup':[]}
+START=time.monotonic();NAMES=[];CHILDREN=[];IMAGE=None
+def run(args,check=True,timeout=45,env=ENV):
+ p=subprocess.run(args,capture_output=True,text=True,timeout=timeout,env=env)
+ if check and p.returncode:raise RuntimeError((p.returncode,args[:3],p.stderr[-1800:]))
+ return p
+def read_exact(fd,n,deadline):
+ data=b''
+ while len(data)<n:
+  if time.monotonic()>deadline:raise TimeoutError('status header')
+  select.select([fd],[],[],.05)
+  try:chunk=os.read(fd,n-len(data))
+  except BlockingIOError:continue
+  if chunk:data+=chunk
+ return data
+def snapshot(pid):
+ base=Path('/proc')/str(pid)
+ stat=(base/'stat').read_text().rsplit(') ',1)[1].split()
+ fd=os.open(base/'exe',os.O_PATH|os.O_CLOEXEC)
+ try:exe=os.fstat(fd)
+ finally:os.close(fd)
+ return {'pid':pid,'start':stat[19],'state':stat[0],'exe_device':exe.st_dev,'exe_inode':exe.st_ino,'uid_map':(base/'uid_map').read_text(),'gid_map':(base/'gid_map').read_text()}
+try:
+ binary=WORK/'probe'
+ run(['go','build','-o',str(binary),str(OUT/'startup_status_probe.go')],timeout=90,env=dict(ENV,CGO_ENABLED='0'))
+ info=json.loads(run(PODMAN+['info','--format','json']).stdout)
+ assert info['host']['security']['rootless']
+ RESULT['engine']={'version':info['version'],'kernel':info['host']['kernel'],'rootless':True}
+ image_tar=WORK/'rootfs.tar'
+ with tarfile.open(image_tar,'w') as archive:
+  for n in ['tmp','status']:
+   h=tarfile.TarInfo(n);h.type=tarfile.DIRTYPE;h.mode=0o755;archive.addfile(h)
+  content=binary.read_bytes();h=tarfile.TarInfo('probe');h.mode=0o555;h.size=len(content);archive.addfile(h,io.BytesIO(content))
+ IMAGE=run(PODMAN+['import','--change','LABEL reploy.fg-status-proof='+TOKEN,str(image_tar),'localhost/reploy-fg-status:'+TOKEN]).stdout.strip()
+ for mode in ['success','exec-failure','before-exec-failure','cancel-before-release']:
+  runtime=WORK/('runtime-'+mode);runtime.mkdir(mode=0o711)
+  fifo=runtime/'status';os.mkfifo(fifo,0o600)
+  canary=runtime/'private';canary.write_bytes(b'private-descriptor-canary');canary.chmod(0o600)
+  fd=os.open(fifo,os.O_RDONLY|os.O_NONBLOCK)
+  try:
+   run(PODMAN+['unshare','/usr/bin/chown','1:1',str(fifo),str(canary)])
+   assert fifo.stat().st_uid not in [0,os.getuid()]
+   name='reploy-fg-status-'+TOKEN+'-'+mode;NAMES.append(name);binding=secrets.token_hex(8)
+   command=PODMAN+['run','--interactive','--name',name,'--network','none','--cgroups','disabled','--uidmap','0:1:1','--gidmap','0:1:1','--cap-drop','ALL','--security-opt','no-new-privileges','--read-only','--label','reploy.fg-status-proof='+TOKEN,'--volume',str(runtime)+':/status:rw',IMAGE,'/probe',mode,'/status/status',binding,'/status/private','fixture']
+   child=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=ENV);CHILDREN.append(child)
+   deadline=time.monotonic()+15
+   assert read_exact(fd,24,deadline)==b'RPLYEX01'+binding.encode()
+   assert select.select([child.stdout],[],[],5)[0] and child.stdout.readline()==b'ARMED\n'
+   obj=json.loads(run(PODMAN+['inspect',name]).stdout)[0]
+   assert obj['Config']['Labels']['reploy.fg-status-proof']==TOKEN
+   pid=obj['State']['Pid'];assert pid>0
+   before=snapshot(pid);assert fifo.stat().st_uid==int(before['uid_map'].split()[1])
+   try:os.read(fd,16);raise AssertionError('inhibited waiter acknowledged')
+   except BlockingIOError:pass
+   fifo.unlink();canary.unlink()
+   if mode=='cancel-before-release':run(PODMAN+['kill','--signal','KILL',obj['Id']])
+   else:child.stdin.write(b'G');child.stdin.flush()
+   body=b'';eof=False
+   while time.monotonic()<deadline:
+    select.select([fd],[],[],.05)
+    try:chunk=os.read(fd,16)
+    except BlockingIOError:continue
+    if not chunk:eof=True;break
+    body+=chunk;assert len(body)<=4
+   assert eof
+   try:after=snapshot(pid)
+   except (FileNotFoundError,ProcessLookupError):after=None
+   current=json.loads(run(PODMAN+['inspect',obj['Id']]).stdout)[0]
+   accepted=not body and after is not None and after['start']==before['start'] and current['State']['Running'] and current['State']['Pid']==pid
+   result={'mode':mode,'container':obj['Id'],'before':before,'after':after,'bound_header':True,'inhibited_no_ack':True,'unlinked_before_release':True,'errno_bytes':body.hex(),'accepted_start':accepted}
+   if mode=='success':
+    assert accepted
+    assert select.select([child.stdout],[],[],5)[0]
+    app=json.loads(child.stdout.readline());assert app['status_path_absent'] and app['private_descriptor_leaks']==[];result['application_control']=app
+    child.stdin.write(b'Q');child.stdin.flush()
+   else:
+    assert not accepted
+    if mode=='exec-failure':assert len(body)==4
+   child.wait(timeout=10);result['command_exit_code']=child.returncode
+   result['stderr']=child.stderr.read().decode();RESULT['cases'].append(result)
+  finally:os.close(fd)
+ RESULT['passed']=len(RESULT['cases'])==4
+except Exception as e:RESULT['error']=repr(e)
+finally:
+ for name in NAMES:
+  p=run(PODMAN+['inspect',name],check=False)
+  if p.returncode==0:
+   obj=json.loads(p.stdout)[0];assert obj['Config']['Labels']['reploy.fg-status-proof']==TOKEN
+   p=run(PODMAN+['rm','--force',obj['Id']],check=False);RESULT['cleanup'].append({'container':obj['Id'],'removed':p.returncode==0})
+ for child in CHILDREN:
+  if child.poll() is None:child.kill();child.wait(timeout=5)
+ if IMAGE:
+  p=run(PODMAN+['rmi',IMAGE],check=False);RESULT['cleanup'].append({'image':IMAGE,'removed':p.returncode==0})
+ try:
+  assert json.loads(run(PODMAN+['ps','--all','--format','json']).stdout)==[]
+  assert WORK.resolve()==WORK and str(WORK).startswith('/tmp/reploy-fg-container-status-')
+  run(PODMAN+['unshare','/usr/bin/rm','-rf',str(WORK)])
+  if WORK.exists():shutil.rmtree(WORK)
+  RESULT['private_root_removed']=not WORK.exists()
+ except Exception as e:RESULT['cleanup_error']=repr(e)
+ RESULT['elapsed_seconds']=time.monotonic()-START
+ RESULT['source_sha256']={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in [Path(__file__),OUT/'startup_status_probe.go']}
+ (OUT/'startup-status-container-proof-result.json').write_text(json.dumps(RESULT,indent=2)+'\n');print(json.dumps(RESULT,indent=2))
+raise SystemExit(0 if RESULT.get('passed') and RESULT.get('private_root_removed') and all(x['removed'] for x in RESULT['cleanup']) else 1)

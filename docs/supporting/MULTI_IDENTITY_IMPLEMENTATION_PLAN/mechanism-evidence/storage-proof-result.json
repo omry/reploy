@@ -1,0 +1,110 @@
+{
+  "scope": "private rootless mount feasibility; not Reploy admission, eligible-engine or full code-closure qualification",
+  "private_root": "/tmp/reploy-fg-storage-jvpdx_0n",
+  "attempt": "5bf0be3202ddeafdd803f589",
+  "cases": [
+    {
+      "mode": "readonly",
+      "exit_code": 0,
+      "stderr": "",
+      "observation": {
+        "checks": {
+          "image_code_write_denied": true,
+          "root_write_denied": true
+        },
+        "details": {},
+        "mode": "readonly",
+        "passed": true,
+        "uid": 0,
+        "uid_map": "0          1          1"
+      }
+    },
+    {
+      "mode": "shadow-control",
+      "exit_code": 0,
+      "stderr": "",
+      "observation": {
+        "checks": {
+          "declared_mount_masks_image_code": true,
+          "readonly_root_does_not_protect_rw_mount": true
+        },
+        "details": {},
+        "mode": "shadow-control",
+        "passed": true,
+        "uid": 0,
+        "uid_map": "0          1          1"
+      }
+    },
+    {
+      "mode": "writable-protected",
+      "exit_code": 0,
+      "stderr": "",
+      "observation": {
+        "checks": {
+          "explicit_root_write_works": true,
+          "trusted_binary_rename_denied": true,
+          "trusted_binary_unlink_denied": true,
+          "trusted_binary_write_denied": true
+        },
+        "details": {},
+        "mode": "writable-protected",
+        "passed": true,
+        "uid": 0,
+        "uid_map": "0          1          1"
+      }
+    },
+    {
+      "mode": "ancestor-control",
+      "exit_code": 0,
+      "stderr": "",
+      "observation": {
+        "checks": {
+          "ancestor_attack_observed": true
+        },
+        "details": {
+          "ancestor_rename": "succeeded",
+          "trusted_path_replaced": "true"
+        },
+        "mode": "ancestor-control",
+        "passed": true,
+        "uid": 0,
+        "uid_map": "0          1          1"
+      }
+    }
+  ],
+  "cleanup": [
+    {
+      "image": "sha256:d49e3e0517773be2d502d241db5d2411c65144d60a30dde4c86f4c7bf6c93cb0",
+      "removed": true
+    }
+  ],
+  "passed": true,
+  "engine": {
+    "version": {
+      "APIVersion": "4.9.3",
+      "Version": "4.9.3",
+      "GoVersion": "go1.22.2",
+      "GitCommit": "",
+      "BuiltTime": "Thu Jan  1 07:30:00 1970",
+      "Built": 0,
+      "OsArch": "linux/amd64",
+      "Os": "linux"
+    },
+    "rootless": true,
+    "kernel": "6.18.54.1-microsoft-standard-WSL2",
+    "runtime": {
+      "name": "crun",
+      "package": "crun_1.14.1-1_amd64",
+      "path": "/usr/bin/crun",
+      "version": "crun version 1.14.1\ncommit: de537a7965bfbe9992e2cfae0baeb56a08128171\nrundir: /tmp/reploy-fg-storage-jvpdx_0n/xdg/crun\nspec: 1.0.0\n+SYSTEMD +SELINUX +APPARMOR +CAP +SECCOMP +EBPF +WASM:wasmedge +YAJL"
+    }
+  },
+  "fixture_host_uid": 100000,
+  "private_inventory_empty": true,
+  "private_root_removed": false,
+  "elapsed_seconds": 19.836866600002395,
+  "source_sha256": {
+    "run_storage_probe.py": "ab620a85cc6eae15f1defb49e274118ede537662d0055cf0d2215cc16a0801ae",
+    "storage_probe.go": "7a9c67c92af3bce49eae667f97cf927c06e2ea857cb7b23f095ddecbfdb3022d"
+  }
+}
