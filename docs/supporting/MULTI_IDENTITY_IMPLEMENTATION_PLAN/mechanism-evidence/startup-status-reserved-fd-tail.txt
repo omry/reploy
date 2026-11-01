@@ -1,0 +1,77 @@
+TEXT main.execTail(SB) /home/omry/dev/reploy/temp/reviews/fg-finalization-20261101/startup_status_reservedfd_probe.go
+  startup_status_reservedfd_probe.go:59	0x4c51c0		55			PUSHQ BP			
+  startup_status_reservedfd_probe.go:59	0x4c51c1		4889e5			MOVQ SP, BP			
+  startup_status_reservedfd_probe.go:59	0x4c51c4		4883ec60		SUBQ $0x60, SP			
+  startup_status_reservedfd_probe.go:61	0x4c51c8		4889442470		MOVQ AX, 0x70(SP)		
+  startup_status_reservedfd_probe.go:61	0x4c51cd		48895c2478		MOVQ BX, 0x78(SP)		
+  startup_status_reservedfd_probe.go:61	0x4c51d2		48898c2480000000	MOVQ CX, 0x80(SP)		
+  startup_status_reservedfd_probe.go:61	0x4c51da		4889bc2488000000	MOVQ DI, 0x88(SP)		
+  startup_status_reservedfd_probe.go:61	0x4c51e2		4889b42490000000	MOVQ SI, 0x90(SP)		
+  startup_status_reservedfd_probe.go:60	0x4c51ea		488d5f01		LEAQ 0x1(DI), BX		
+  startup_status_reservedfd_probe.go:60	0x4c51ee		b8b4010000		MOVL $0x1b4, AX			
+  startup_status_reservedfd_probe.go:60	0x4c51f3		b9ffffffff		MOVL $-0x1, CX			
+  startup_status_reservedfd_probe.go:60	0x4c51f8		bf02000000		MOVL $0x2, DI			
+  startup_status_reservedfd_probe.go:60	0x4c51fd		31f6			XORL SI, SI			
+  startup_status_reservedfd_probe.go:60	0x4c51ff		4989f0			MOVQ SI, R8			
+  startup_status_reservedfd_probe.go:60	0x4c5202		4989f1			MOVQ SI, R9			
+  startup_status_reservedfd_probe.go:60	0x4c5205		e8567cfdff		CALL syscall.RawSyscall6(SB)	
+  startup_status_reservedfd_probe.go:61	0x4c520a		4885c9			TESTQ CX, CX			
+  startup_status_reservedfd_probe.go:61	0x4c520d		753b			JNE 0x4c524a			
+  startup_status_reservedfd_probe.go:61	0x4c520f		488b9c2488000000	MOVQ 0x88(SP), BX		
+  startup_status_reservedfd_probe.go:61	0x4c5217		4883fb03		CMPQ BX, $0x3			
+  startup_status_reservedfd_probe.go:61	0x4c521b		7435			JE 0x4c5252			
+  startup_status_reservedfd_probe.go:62	0x4c521d		b824010000		MOVL $0x124, AX			
+  startup_status_reservedfd_probe.go:62	0x4c5222		b903000000		MOVL $0x3, CX			
+  startup_status_reservedfd_probe.go:62	0x4c5227		bf00000800		MOVL $0x80000, DI		
+  startup_status_reservedfd_probe.go:62	0x4c522c		e80f7cfdff		CALL syscall.RawSyscall(SB)	
+  startup_status_reservedfd_probe.go:63	0x4c5231		4885c9			TESTQ CX, CX			
+  startup_status_reservedfd_probe.go:63	0x4c5234		488bbc2488000000	MOVQ 0x88(SP), DI		
+  startup_status_reservedfd_probe.go:63	0x4c523c		ba03000000		MOVL $0x3, DX			
+  startup_status_reservedfd_probe.go:63	0x4c5241		480f44fa		CMOVE DX, DI			
+  startup_status_reservedfd_probe.go:65	0x4c5245		4889fb			MOVQ DI, BX			
+  startup_status_reservedfd_probe.go:63	0x4c5248		eb08			JMP 0x4c5252			
+  startup_status_reservedfd_probe.go:65	0x4c524a		488b9c2488000000	MOVQ 0x88(SP), BX		
+  startup_status_reservedfd_probe.go:65	0x4c5252		48895c2438		MOVQ BX, 0x38(SP)		
+  startup_status_reservedfd_probe.go:65	0x4c5257		4885c9			TESTQ CX, CX			
+  startup_status_reservedfd_probe.go:65	0x4c525a		7524			JNE 0x4c5280			
+  startup_status_reservedfd_probe.go:65	0x4c525c		b8b4010000		MOVL $0x1b4, AX			
+  startup_status_reservedfd_probe.go:65	0x4c5261		bb04000000		MOVL $0x4, BX			
+  startup_status_reservedfd_probe.go:65	0x4c5266		b9ffffffff		MOVL $-0x1, CX			
+  startup_status_reservedfd_probe.go:65	0x4c526b		31ff			XORL DI, DI			
+  startup_status_reservedfd_probe.go:65	0x4c526d		4889fe			MOVQ DI, SI			
+  startup_status_reservedfd_probe.go:65	0x4c5270		4989f0			MOVQ SI, R8			
+  startup_status_reservedfd_probe.go:65	0x4c5273		4989f1			MOVQ SI, R9			
+  startup_status_reservedfd_probe.go:65	0x4c5276		e8e57bfdff		CALL syscall.RawSyscall6(SB)	
+  startup_status_reservedfd_probe.go:70	0x4c527b		488b5c2438		MOVQ 0x38(SP), BX		
+  startup_status_reservedfd_probe.go:66	0x4c5280		4885c9			TESTQ CX, CX			
+  startup_status_reservedfd_probe.go:66	0x4c5283		753a			JNE 0x4c52bf			
+  startup_status_reservedfd_probe.go:66	0x4c5285		488b542470		MOVQ 0x70(SP), DX		
+  startup_status_reservedfd_probe.go:66	0x4c528a		4889542458		MOVQ DX, 0x58(SP)		
+  startup_status_reservedfd_probe.go:66	0x4c528f		488b542478		MOVQ 0x78(SP), DX		
+  startup_status_reservedfd_probe.go:66	0x4c5294		4889542450		MOVQ DX, 0x50(SP)		
+  startup_status_reservedfd_probe.go:66	0x4c5299		488bbc2480000000	MOVQ 0x80(SP), DI		
+  startup_status_reservedfd_probe.go:66	0x4c52a1		48897c2448		MOVQ DI, 0x48(SP)		
+  startup_status_reservedfd_probe.go:66	0x4c52a6		488b5c2458		MOVQ 0x58(SP), BX		
+  startup_status_reservedfd_probe.go:66	0x4c52ab		488b4c2450		MOVQ 0x50(SP), CX		
+  startup_status_reservedfd_probe.go:66	0x4c52b0		b83b000000		MOVL $0x3b, AX			
+  startup_status_reservedfd_probe.go:66	0x4c52b5		e8867bfdff		CALL syscall.RawSyscall(SB)	
+  startup_status_reservedfd_probe.go:70	0x4c52ba		488b5c2438		MOVQ 0x38(SP), BX		
+  startup_status_reservedfd_probe.go:68	0x4c52bf		488b942490000000	MOVQ 0x90(SP), DX		
+  startup_status_reservedfd_probe.go:68	0x4c52c7		890a			MOVL CX, 0(DX)			
+  startup_status_reservedfd_probe.go:69	0x4c52c9		eb0d			JMP 0x4c52d8			
+  startup_status_reservedfd_probe.go:70	0x4c52cb		488b942490000000	MOVQ 0x90(SP), DX		
+  startup_status_reservedfd_probe.go:70	0x4c52d3		488b5c2438		MOVQ 0x38(SP), BX		
+  startup_status_reservedfd_probe.go:70	0x4c52d8		4889542440		MOVQ DX, 0x40(SP)		
+  startup_status_reservedfd_probe.go:70	0x4c52dd		4889d1			MOVQ DX, CX			
+  startup_status_reservedfd_probe.go:70	0x4c52e0		b801000000		MOVL $0x1, AX			
+  startup_status_reservedfd_probe.go:70	0x4c52e5		bf04000000		MOVL $0x4, DI			
+  startup_status_reservedfd_probe.go:70	0x4c52ea		e8517bfdff		CALL syscall.RawSyscall(SB)	
+  startup_status_reservedfd_probe.go:71	0x4c52ef		4883f904		CMPQ CX, $0x4			
+  startup_status_reservedfd_probe.go:71	0x4c52f3		74d6			JE 0x4c52cb			
+  startup_status_reservedfd_probe.go:73	0x4c52f5		b8e7000000		MOVL $0xe7, AX			
+  startup_status_reservedfd_probe.go:73	0x4c52fa		bb7d000000		MOVL $0x7d, BX			
+  startup_status_reservedfd_probe.go:73	0x4c52ff		31c9			XORL CX, CX			
+  startup_status_reservedfd_probe.go:73	0x4c5301		4889cf			MOVQ CX, DI			
+  startup_status_reservedfd_probe.go:73	0x4c5304		e8377bfdff		CALL syscall.RawSyscall(SB)	
+  startup_status_reservedfd_probe.go:74	0x4c5309		90			NOPL				
+  startup_status_reservedfd_probe.go:1	0x4c530a		ebfd			JMP 0x4c5309			

@@ -1,0 +1,87 @@
+// Disposable Linux design proof. No production startup or credential code changes.
+package main
+
+import (
+ "encoding/json"
+ "fmt"
+ "os"
+ "runtime"
+ "strconv"
+ "syscall"
+ "unsafe"
+
+ "golang.org/x/sys/unix"
+)
+
+func main() {
+ if len(os.Args)>1 && os.Args[1]=="app" { application(); return }
+ if len(os.Args)!=6 { panic("fixture arguments") }
+ mode,fifo,token,canary:=os.Args[1],os.Args[2],os.Args[3],os.Args[4]
+ status,err:=unix.Open(fifo,unix.O_WRONLY|unix.O_NONBLOCK|unix.O_CLOEXEC,0);must(err)
+ if status<3 {panic("status overlaps standard stream")}
+ if mode!="success-natural-fd" { high,e:=unix.FcntlInt(uintptr(status),unix.F_DUPFD_CLOEXEC,64);must(e);must(unix.Close(status));status=high }
+ fmt.Fprintf(os.Stderr,"source_status_fd=%d\n",status)
+ descriptorFlags,e:=unix.FcntlInt(uintptr(status),unix.F_GETFD,0);must(e)
+ fileFlags,e:=unix.FcntlInt(uintptr(status),unix.F_GETFL,0);must(e)
+ if descriptorFlags&unix.FD_CLOEXEC==0 || fileFlags&unix.O_NONBLOCK==0 {panic("status descriptor flags") }
+ private,err:=os.Open(canary);must(err)
+ must(unix.Dup3(int(private.Fd()),211,0))
+ var pipeStat,fileStat unix.Stat_t
+ must(unix.Fstat(status,&pipeStat));must(unix.Fstat(211,&fileStat))
+ if n,e:=unix.Write(status,[]byte("RPLYEX01"+token));e!=nil || n!=24 {panic("status header write")}
+ fmt.Println("ARMED")
+ var release [1]byte
+ if _,err=os.Stdin.Read(release[:]);err!=nil || release[0]!='G' {os.Exit(121)}
+ if mode=="before-exec-failure" { os.Exit(121) }
+ executable,err:=os.Executable();must(err)
+ args:=[]string{executable,"app",fifo,strconv.FormatUint(uint64(pipeStat.Dev),10),strconv.FormatUint(pipeStat.Ino,10),strconv.FormatUint(uint64(fileStat.Dev),10),strconv.FormatUint(fileStat.Ino,10)}
+ if mode=="exec-failure" { executable="/reploy-fg-proof-no-such-program" }
+ filename,err:=syscall.BytePtrFromString(executable);must(err)
+ argv,err:=syscall.SlicePtrFromStrings(args);must(err)
+ env,err:=syscall.SlicePtrFromStrings(os.Environ());must(err)
+ failureBuffer:=new([4]byte)
+ runtime.LockOSThread()
+ // Like E's actual transition, exec from a nonleader thread destroys the
+ // still-trusted leader and its original descriptor table too.
+ if unix.Gettid()==os.Getpid() {
+  go func(){runtime.LockOSThread(); execTail(filename,unsafe.Pointer(&argv[0]),unsafe.Pointer(&env[0]),uintptr(status),failureBuffer);runtime.KeepAlive(status);runtime.KeepAlive(private);runtime.KeepAlive(argv);runtime.KeepAlive(env)}()
+  select{}
+ }
+ execTail(filename,unsafe.Pointer(&argv[0]),unsafe.Pointer(&env[0]),uintptr(status),failureBuffer)
+ runtime.KeepAlive(argv);runtime.KeepAlive(env);runtime.KeepAlive(private);runtime.KeepAlive(status)
+ panic("tail returned")
+}
+
+func must(err error){if err!=nil {panic(err)}}
+
+//go:nosplit
+//go:norace
+func execTail(filename *byte,argv,env unsafe.Pointer,status uintptr,message *[4]byte) {
+ _,_,failure:=syscall.RawSyscall6(unix.SYS_CLOSE_RANGE,status+1,uintptr(^uint32(0)),unix.CLOSE_RANGE_UNSHARE,0,0,0)
+ if failure==0 && status!=3 {
+  _,_,failure=syscall.RawSyscall(unix.SYS_DUP3,status,3,unix.O_CLOEXEC)
+  if failure==0 {status=3}
+ }
+ if failure==0 {_,_,failure=syscall.RawSyscall6(unix.SYS_CLOSE_RANGE,4,uintptr(^uint32(0)),0,0,0,0)}
+ if failure==0 { _,_,failure=syscall.RawSyscall(unix.SYS_EXECVE,uintptr(unsafe.Pointer(filename)),uintptr(argv),uintptr(env)) }
+ // A bounded fixed errno record, written only by this trusted raw tail.
+ message[0],message[1],message[2],message[3]=byte(failure),byte(failure>>8),byte(failure>>16),byte(failure>>24)
+ for {
+  _,_,e:=syscall.RawSyscall(unix.SYS_WRITE,status,uintptr(unsafe.Pointer(message)),4)
+  if e==syscall.EINTR {continue};break
+ }
+ syscall.RawSyscall(unix.SYS_EXIT_GROUP,125,0,0)
+ for{}
+}
+
+func application(){
+ values:=make([]uint64,4)
+ for i:=range values {v,e:=strconv.ParseUint(os.Args[i+3],10,64);must(e);values[i]=v}
+ leaked:=[]int{}
+ for fd:=0;fd<1024;fd++ {var s unix.Stat_t;if unix.Fstat(fd,&s)==nil && (uint64(s.Dev)==values[0]&&s.Ino==values[1] || uint64(s.Dev)==values[2]&&s.Ino==values[3]) {leaked=append(leaked,fd)}}
+ _,err:=os.OpenFile(os.Args[2],os.O_WRONLY|syscall.O_NONBLOCK,0)
+ absent:=os.IsNotExist(err)
+ json.NewEncoder(os.Stdout).Encode(map[string]any{"private_descriptor_leaks":leaked,"status_path_absent":absent,"same_executable_exec":true})
+ var finish [1]byte
+ _,err=os.Stdin.Read(finish[:]);if err!=nil || !absent || len(leaked)!=0 {os.Exit(122)}
+}

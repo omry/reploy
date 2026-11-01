@@ -1,0 +1,120 @@
+// Disposable design prototype. No production archive/evidence code is changed.
+package dockerdeploy
+
+import (
+ "archive/tar"
+ "bytes"
+ "fmt"
+ "io"
+ "path"
+ "strings"
+ "testing"
+
+ "github.com/omry/reploy/internal/canonical"
+ "github.com/omry/reploy/internal/deploy"
+)
+
+type fgImageNode struct { kind byte; link string }
+type fgImageIndex map[string]fgImageNode
+
+func (nodes fgImageIndex) remove(prefix string, childrenOnly bool) {
+ for name:=range nodes { if (!childrenOnly && name==prefix)||prefix=="."&&name!="."||strings.HasPrefix(name,prefix+"/") { delete(nodes,name) } }
+}
+
+func fgProject(layers [][]byte, expected canonical.Digest) (fgImageIndex,error) {
+ ids:=[]canonical.Digest{}
+ for _,layer:=range layers { ids=append(ids,canonical.Digest(fmtHealthDigest(layer))) }
+ actual,err:=deploy.RootFSSubject(ids)
+ if err!=nil || actual!=expected { return nil,fmt.Errorf("unbound image layers") }
+ nodes:=fgImageIndex{".":{kind:tar.TypeDir}}
+ for _,layer:=range layers {
+  type entry struct { name string; node fgImageNode }
+  entries:=[]entry{};deleted:=[]string{};opaque:=[]string{};seen:=map[string]bool{}
+  reader:=tar.NewReader(bytes.NewReader(layer))
+  for {
+   h,err:=reader.Next();if err==io.EOF { break };if err!=nil { return nil,err }
+   name,err:=imageIdentityLayerPathV1(h.Name,h.Typeflag)
+   if err!=nil || seen[name] || isSparseImageHealthHeader(h) { return nil,fmt.Errorf("ambiguous image entry") };seen[name]=true
+   base:=path.Base(name)
+   if base==".wh..wh..opq" { opaque=append(opaque,path.Dir(name));continue }
+   if strings.HasPrefix(base,".wh.") { if len(base)==4{return nil,fmt.Errorf("invalid whiteout")};deleted=append(deleted,path.Join(path.Dir(name),base[4:]));continue }
+   entries=append(entries,entry{name,fgImageNode{h.Typeflag,h.Linkname}})
+  }
+  // OCI whiteouts remove lower entries, never same-layer additions.
+  for _,name:=range deleted { nodes.remove(name,false) }
+  for _,name:=range opaque { nodes.remove(name,true) }
+  for _,e:=range entries {
+   // Do not guess how an engine handles layer writes through non-directory
+   // ancestors. Query-time image aliases are resolved separately below.
+   for parent:=path.Dir(e.name);parent!=".";parent=path.Dir(parent) {
+    if n,ok:=nodes[parent];ok && n.kind!=tar.TypeDir {return nil,fmt.Errorf("ambiguous layer ancestor")}
+   }
+   previous,exists:=nodes[e.name]
+   if exists && (previous.kind!=tar.TypeDir || e.node.kind!=tar.TypeDir) { nodes.remove(e.name,false) }
+   nodes[e.name]=e.node
+   for parent:=path.Dir(e.name);parent!=".";parent=path.Dir(parent) { if _,ok:=nodes[parent];!ok {nodes[parent]=fgImageNode{kind:tar.TypeDir}} }
+   if len(nodes)>1<<20 {return nil,fmt.Errorf("image metadata budget")}
+  }
+ }
+ return nodes,nil
+}
+
+func (nodes fgImageIndex) empty(target string) (bool,string,error) {
+ if !path.IsAbs(target)||path.Clean(target)!=target||target=="/" {return false,"",fmt.Errorf("invalid data destination")}
+ resolved:=target
+ for hop:=0;hop<32;hop++ {
+  parts:=strings.Split(strings.TrimPrefix(resolved,"/"),"/");changed:=false
+  for i:=range parts {
+   prefix:=strings.Join(parts[:i+1],"/");node,exists:=nodes[prefix]
+   if !exists {continue}
+   if node.kind==tar.TypeSymlink {
+    destination:=node.link
+    if !path.IsAbs(destination) {destination=path.Join("/",path.Dir(prefix),destination)}
+    resolved=path.Join(destination,path.Join(parts[i+1:]...));changed=true;break
+   }
+   if node.kind!=tar.TypeDir {return false,resolved,fmt.Errorf("mount destination is not a directory")}
+  }
+  if changed {continue}
+  prefix:=strings.TrimPrefix(resolved,"/")
+  for name,node:=range nodes {if strings.HasPrefix(name,prefix+"/") && node.kind!=tar.TypeDir {return false,resolved,nil}}
+  return true,resolved,nil
+ }
+ return false,resolved,fmt.Errorf("image link cycle/depth")
+}
+
+func TestFGImageDestinationProjection(t *testing.T) {
+ dir:=func(p string)healthArchiveMember{return healthArchiveMember{name:p,kind:tar.TypeDir}}
+ file:=func(p string)healthArchiveMember{return healthArchiveMember{name:p,content:[]byte("image-data-or-code")}}
+ link:=func(p,to string)healthArchiveMember{return healthArchiveMember{name:p,kind:tar.TypeSymlink,linkname:to}}
+ cases:=[]struct{name,target string;layers [][]healthArchiveMember;empty,invalid bool}{
+  {"absent","/var/lib/mail",nil,true,false},
+  {"empty","/var/lib/mail",[][]healthArchiveMember{{dir("var/lib/mail")}},true,false},
+  {"directories-only","/var/lib/mail",[][]healthArchiveMember{{dir("var/lib/mail/queue")}},true,false},
+  {"data-is-protected-too","/var/lib/mail",[][]healthArchiveMember{{file("var/lib/mail/default.conf")}},false,false},
+  {"zero-size-file","/var/lib/mail",[][]healthArchiveMember{{{name:"var/lib/mail/empty"}}},false,false},
+  {"prefix-is-not-overlap","/var/lib/mail",[][]healthArchiveMember{{file("var/lib/mailbox/code")}},true,false},
+  {"whiteout-removes-lower","/var/lib/mail",[][]healthArchiveMember{{file("var/lib/mail/default.conf")},{{name:"var/lib/mail/.wh.default.conf"}}},true,false},
+  {"whiteout-keeps-same-layer","/var/lib/mail",[][]healthArchiveMember{{file("var/lib/mail/default.conf"),{name:"var/lib/mail/.wh.default.conf"}}},false,false},
+  {"opaque-removes-lower","/var/lib/mail",[][]healthArchiveMember{{file("var/lib/mail/queue/code")},{{name:"var/lib/mail/.wh..wh..opq"}}},true,false},
+  {"opaque-keeps-same-layer","/var/lib/mail",[][]healthArchiveMember{{file("var/lib/mail/old")},{file("var/lib/mail/new"),{name:"var/lib/mail/.wh..wh..opq"}}},false,false},
+  {"absolute-image-alias","/data",[][]healthArchiveMember{{file("var/lib/mail/code"),link("data","/var/lib/mail")}},false,false},
+  {"relative-image-alias","/var/run/mail",[][]healthArchiveMember{{dir("run/mail"),link("var/run","../run")}},true,false},
+  {"alias-to-populated-tree","/var/run/mail",[][]healthArchiveMember{{file("run/mail/code"),link("var/run","../run")}},false,false},
+  {"alias-cycle","/a",[][]healthArchiveMember{{link("a","b"),link("b","a")}},false,true},
+  {"file-destination","/data",[][]healthArchiveMember{{file("data")}},false,true},
+  {"layer-traverses-link","/data",[][]healthArchiveMember{{link("alias","data")},{file("alias/code")}},false,true},
+  {"intrinsic-root-not-data","/",nil,false,true},
+ }
+ for _,tc:=range cases {t.Run(tc.name,func(t *testing.T){
+  layers:=[][]byte{healthArchive(t,identitySourceMembersV1()...)}
+  for _,members:=range tc.layers {layers=append(layers,healthArchive(t,members...))}
+  image,archive:=identitySourceArchiveV1(t,layers,nil)
+  policy,platform:=identitySourcePolicyV1(t)
+  if _,err:=readDockerImageIdentityArchiveV1(t.Context(),bytes.NewReader(archive),policy,image,platform);err!=nil{t.Fatal(err)}
+  index,err:=fgProject(layers,image.RootFSSubject)
+  var empty bool;var resolved string
+  if err==nil {empty,resolved,err=index.empty(tc.target)}
+  if (err!=nil)!=tc.invalid || err==nil&&empty!=tc.empty {t.Fatalf("empty=%t resolved=%q err=%v",empty,resolved,err)}
+  if _,err:=fgProject(layers,canonical.Digest("sha256:"+strings.Repeat("a",64)));err==nil {t.Fatal("unbound layers accepted")}
+ })}
+}

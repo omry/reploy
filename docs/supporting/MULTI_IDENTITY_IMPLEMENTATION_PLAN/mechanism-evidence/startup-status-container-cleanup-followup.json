@@ -1,0 +1,18 @@
+{
+  "private_root": "/tmp/reploy-fg-container-status-lrqv1svq",
+  "original_receipt_retained": true,
+  "removed": [
+    {
+      "pid": 2559521,
+      "start": "12269683",
+      "verified_private_environment": true,
+      "command": "catatonit -P",
+      "pidfd_exit_observed": true,
+      "forced": false
+    }
+  ],
+  "remaining": [],
+  "private_root_absent": true,
+  "passed": true,
+  "elapsed_seconds": 0.0046444210020126775
+}

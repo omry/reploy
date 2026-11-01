@@ -1,0 +1,245 @@
+{
+  "at": "2026-11-01T10:39:03.852354+00:00",
+  "scope": "Disposable client/wait proof only; not full Reploy or a reproduction of the reported workload.",
+  "engine": {
+    "Platform": {
+      "Name": "Docker Desktop 4.93.0 (240920)"
+    },
+    "Version": "29.8.1",
+    "ApiVersion": "1.56",
+    "MinAPIVersion": "1.40",
+    "Os": "linux",
+    "Arch": "amd64",
+    "Components": [
+      {
+        "Name": "Engine",
+        "Version": "29.8.1",
+        "Details": {
+          "ApiVersion": "1.56",
+          "Arch": "amd64",
+          "BuildTime": "Tue Sep 15 16:25:38 2026",
+          "Experimental": "false",
+          "GitCommit": "464cd50",
+          "GoVersion": "go1.26.8",
+          "KernelVersion": "6.18.54.1-microsoft-standard-WSL2",
+          "MinAPIVersion": "1.40",
+          "Module": "github.com/moby/moby/v2",
+          "ModuleVersion": "v2.0.0+unknown",
+          "Os": "linux"
+        }
+      },
+      {
+        "Name": "containerd",
+        "Version": "v2.3.5",
+        "Details": {
+          "GitCommit": "1294c24a7da8e5a793ed378161673abe94118892"
+        }
+      },
+      {
+        "Name": "runc",
+        "Version": "1.5.1",
+        "Details": {
+          "GitCommit": "v1.5.1-0-g8f2685a4"
+        }
+      },
+      {
+        "Name": "docker-init",
+        "Version": "0.19.0",
+        "Details": {
+          "GitCommit": "de40ad0"
+        }
+      }
+    ],
+    "GitCommit": "464cd50",
+    "GoVersion": "go1.26.8",
+    "KernelVersion": "6.18.54.1-microsoft-standard-WSL2",
+    "BuildTime": "2026-09-15T16:25:38.000000000+00:00"
+  },
+  "kernel": "6.18.54.1-microsoft-standard-WSL2",
+  "endpoint": "unix:///var/run/docker.sock",
+  "image": "sha256:b116e155074440ffd9e449559433feb4cd2341eb3554b1da1c638c976e56451d",
+  "label": "reploy.fg-controller-probe=621ef1a9c2bd4279819bfec5ead656a2",
+  "samples": [
+    {
+      "docker_cli_kib": {
+        "Rss": 28068,
+        "Pss": 26904,
+        "Private_Clean": 18148,
+        "Private_Dirty": 7604
+      },
+      "go_direct_kib": {
+        "Rss": 8160,
+        "Pss": 6683,
+        "Private_Clean": 0,
+        "Private_Dirty": 6660
+      }
+    },
+    {
+      "docker_cli_kib": {
+        "Rss": 28068,
+        "Pss": 26904,
+        "Private_Clean": 18148,
+        "Private_Dirty": 7604
+      },
+      "go_direct_kib": {
+        "Rss": 8160,
+        "Pss": 6683,
+        "Private_Clean": 0,
+        "Private_Dirty": 6660
+      }
+    },
+    {
+      "docker_cli_kib": {
+        "Rss": 28068,
+        "Pss": 26904,
+        "Private_Clean": 18148,
+        "Private_Dirty": 7604
+      },
+      "go_direct_kib": {
+        "Rss": 8160,
+        "Pss": 6683,
+        "Private_Clean": 0,
+        "Private_Dirty": 6660
+      }
+    },
+    {
+      "docker_cli_kib": {
+        "Rss": 28068,
+        "Pss": 26904,
+        "Private_Clean": 18148,
+        "Private_Dirty": 7604
+      },
+      "go_direct_kib": {
+        "Rss": 8160,
+        "Pss": 6683,
+        "Private_Clean": 0,
+        "Private_Dirty": 6660
+      }
+    },
+    {
+      "docker_cli_kib": {
+        "Rss": 28068,
+        "Pss": 26904,
+        "Private_Clean": 18148,
+        "Private_Dirty": 7604
+      },
+      "go_direct_kib": {
+        "Rss": 8160,
+        "Pss": 6683,
+        "Private_Clean": 0,
+        "Private_Dirty": 6660
+      }
+    },
+    {
+      "docker_cli_kib": {
+        "Rss": 28068,
+        "Pss": 26904,
+        "Private_Clean": 18148,
+        "Private_Dirty": 7604
+      },
+      "go_direct_kib": {
+        "Rss": 8160,
+        "Pss": 6683,
+        "Private_Clean": 0,
+        "Private_Dirty": 6660
+      }
+    },
+    {
+      "docker_cli_kib": {
+        "Rss": 28068,
+        "Pss": 26904,
+        "Private_Clean": 18148,
+        "Private_Dirty": 7604
+      },
+      "go_direct_kib": {
+        "Rss": 8160,
+        "Pss": 6683,
+        "Private_Clean": 0,
+        "Private_Dirty": 6660
+      }
+    },
+    {
+      "docker_cli_kib": {
+        "Rss": 28068,
+        "Pss": 26904,
+        "Private_Clean": 18148,
+        "Private_Dirty": 7604
+      },
+      "go_direct_kib": {
+        "Rss": 8160,
+        "Pss": 6683,
+        "Private_Clean": 0,
+        "Private_Dirty": 6660
+      }
+    },
+    {
+      "docker_cli_kib": {
+        "Rss": 28068,
+        "Pss": 26904,
+        "Private_Clean": 18148,
+        "Private_Dirty": 7604
+      },
+      "go_direct_kib": {
+        "Rss": 8160,
+        "Pss": 6683,
+        "Private_Clean": 0,
+        "Private_Dirty": 6660
+      }
+    },
+    {
+      "docker_cli_kib": {
+        "Rss": 28068,
+        "Pss": 26904,
+        "Private_Clean": 18148,
+        "Private_Dirty": 7604
+      },
+      "go_direct_kib": {
+        "Rss": 8160,
+        "Pss": 6683,
+        "Private_Clean": 0,
+        "Private_Dirty": 6660
+      }
+    }
+  ],
+  "limitations": [
+    "Minimal standalone Go probe excludes Reploy's other runtime work.",
+    "Single idle container; no native Windows/macOS or Podman qualification.",
+    "No leak diagnosis or approved resource threshold."
+  ],
+  "container_id": "f86c166d08fa1253ab5e7b6335cc87f0688c7f85179f4f2105b02d3a9a596eb1",
+  "cancel_request_leaves_workload_running": true,
+  "wait_results": {
+    "docker_cli_exit_status": 7,
+    "direct_api": {
+      "elapsed_seconds": 8.066579979,
+      "event": "exited",
+      "status": 7
+    }
+  },
+  "median_kib": {
+    "docker_cli_kib": {
+      "Rss": 28068.0,
+      "Pss": 26904.0,
+      "Private_Clean": 18148.0,
+      "Private_Dirty": 7604.0
+    },
+    "go_direct_kib": {
+      "Rss": 8160.0,
+      "Pss": 6683.0,
+      "Private_Clean": 0.0,
+      "Private_Dirty": 6660.0
+    }
+  },
+  "ok": true,
+  "cleanup": {
+    "removed": true,
+    "no_labelled_containers_remain": true
+  },
+  "source_sha256": {
+    "wait_probe.go": "7189f2df440f546133ec16a3837d669f5d09ac7e460531b727ed14be7c28fafc",
+    "wait_probe.py": "8fe1a8dcaab1ea2ebc8c5e132d42373c9ee4c03c5a931cf995e8b7a78b21eede"
+  },
+  "source_head": "87899abecced4c5f8b3513ecee66793ecdd2df37",
+  "raw_result_sha256": "c9efc3aedbab65c202af8a3c3de6e6eac82c5ba16b6e27bd84611759732692a8",
+  "raw_result": "temp/reviews/fg-controller-evaluation-20261101/wait-probe-result.json"
+}
