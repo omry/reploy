@@ -217,6 +217,7 @@ func runCurrentAppCommandV1(ctx context.Context, input CurrentAppCommandRunInput
 		runOptions.Stderr = newDeploymentOutputWriter(runOptions.Stderr, label, color)
 	}
 	runOptions.Context = ctx
+	runOptions.gracefulCancellation = command.Native
 	published := PublishedRuntimeContainerInput{
 		Operation: operation, Store: store, Environment: document.Environment.ID,
 		DeploymentDir: dir, DockerPlan: planned.Docker, Invocation: invocation,

@@ -24,6 +24,7 @@ PY_COMPILE_FILES = (
     "tools/e2e/smoke",
     "tools/e2e/shell_pty.py",
     "tools/e2e/docker_interrupts.py",
+    "tools/e2e/native_cancellation.py",
     "packaging/python/hatch_build.py",
     "tests/e2e/python/packages/smoke-suite/src/smoke_suite/cli.py",
     "tests/e2e/python/packages/smoke-suite/src/smoke_suite/__init__.py",

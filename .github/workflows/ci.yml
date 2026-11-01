@@ -86,6 +86,19 @@ jobs:
           go test -v -count=1 -timeout 15m ./internal/dockerdeploy
           -run '^TestReployControlledSessionContractDockerIntegration$'
 
+      - name: Prove native launcher cancellation and stdin through the packaged CLI
+        run: |
+          python tools/build_reploy --target linux-amd64 --outdir "$RUNNER_TEMP/native-cancellation-bin"
+          python tools/e2e/native_cancellation.py --reploy "$RUNNER_TEMP/native-cancellation-bin/linux-amd64/reploy" --output-dir "$RUNNER_TEMP/native-cancellation-evidence"
+
+      - name: Retain native launcher cancellation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-cancellation-${{ github.sha }}
+          if-no-files-found: ignore
+          path: ${{ runner.temp }}/native-cancellation-evidence/
+
       - name: Retain external portable-tool observations
         if: always()
         uses: actions/upload-artifact@v4

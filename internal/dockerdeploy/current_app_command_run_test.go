@@ -50,6 +50,28 @@ func TestRunCurrentAppCommandV1OrdersStaleCheckOutputGateAndContainer(t *testing
 	}
 }
 
+func TestRunCurrentAppCommandV1SelectsGracefulCancellationOnlyForNativeCommands(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		dir := t.TempDir()
+		current, _ := runtimeCurrentBuildFixture(t)
+		var order []string
+		backend := currentAppCommandRunTestBackend(t, dir, current, CurrentRuntimePlanV1{}, &order)
+		backend.planCommand = func(CurrentRuntimePlanV1, []providers.RealizedOutput, []string, bool) (ResolvedEnvironmentCommand, error) {
+			return ResolvedEnvironmentCommand{Name: "export", Native: native, Argv: []string{"/opt/demo"}}, nil
+		}
+		original := backend.runAdmitted
+		backend.runAdmitted = func(ctx context.Context, dir string, operation *deploy.OperationLock, id string, execution TransientContainerExecutionV1, options RunOptions) error {
+			if options.gracefulCancellation != native {
+				t.Fatalf("native=%t graceful cancellation=%t", native, options.gracefulCancellation)
+			}
+			return original(ctx, dir, operation, id, execution, options)
+		}
+		if err := runCurrentAppCommandV1(t.Context(), CurrentAppCommandRunInputV1{DeploymentDir: dir, Arguments: []string{"export"}, RunOptions: RunOptions{Stdin: strings.NewReader("input"), Stdout: io.Discard}}, backend); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestRunCurrentAppCommandV1PreservesTerminalStreamsAndLabelsOtherOutput(t *testing.T) {
 	t.Setenv("REPLOY_COLOR", "never")
 	for _, tc := range []struct {
