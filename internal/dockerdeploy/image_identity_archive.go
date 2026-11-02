@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"sort"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
@@ -14,36 +15,47 @@ import (
 	"github.com/omry/reploy/internal/providers"
 )
 
+type preparedImageEvidenceV1 struct {
+	Identity     deploy.ImageIdentityEvidenceV1
+	Destinations *deploy.ImageDestinationEvidenceV1
+}
+
 // Use the selected generated builder only. No tag, inspect, pull or image execution.
-func exportDockerImageIdentityV1(ctx context.Context, policy *blueprint.IdentityPolicyV1, image providers.RealizedImageV1, platform blueprint.Platform) (deploy.ImageIdentityEvidenceV1, error) {
+func exportDockerPreparedImageV1(ctx context.Context, document blueprint.Document, image providers.RealizedImageV1, platform blueprint.Platform) (preparedImageEvidenceV1, error) {
+	policy := document.Environment.Runtime.IdentityPolicy
 	builder := currentGeneratedImageBuilder(ctx)
 	if builder == nil || image.Validate() != nil || policy == nil || policy.Validate() != nil || platform.Validate() != nil || platform.OS != "linux" {
-		return deploy.ImageIdentityEvidenceV1{}, invalidImageIdentityArchiveV1()
+		return preparedImageEvidenceV1{}, invalidImageIdentityArchiveV1()
 	}
-	var evidence deploy.ImageIdentityEvidenceV1
+	var evidence preparedImageEvidenceV1
 	err := streamDockerImageArchiveV1(ctx, builder.endpoint, string(image.ConfigDigest), func(ctx context.Context, input io.Reader) error {
 		var err error
-		evidence, err = readDockerImageIdentityArchiveV1(ctx, input, policy, image, platform)
+		evidence, err = readDockerPreparedImageArchiveV1(ctx, input, document, image, platform)
 		return err
 	})
 	if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
-			return deploy.ImageIdentityEvidenceV1{}, fmt.Errorf("image identity export failed (exit %d)", exit.ExitCode())
+			return preparedImageEvidenceV1{}, fmt.Errorf("image identity export failed (exit %d)", exit.ExitCode())
 		}
-		return deploy.ImageIdentityEvidenceV1{}, fmt.Errorf("image identity export failed")
+		return preparedImageEvidenceV1{}, fmt.Errorf("image identity export failed")
 	}
 	return evidence, nil
 }
 
-func readDockerImageIdentityArchiveV1(ctx context.Context, input io.Reader, policy *blueprint.IdentityPolicyV1, image providers.RealizedImageV1, platform blueprint.Platform) (deploy.ImageIdentityEvidenceV1, error) {
-	fail := func() (deploy.ImageIdentityEvidenceV1, error) {
-		return deploy.ImageIdentityEvidenceV1{}, invalidImageIdentityArchiveV1()
+func readDockerPreparedImageArchiveV1(ctx context.Context, input io.Reader, document blueprint.Document, image providers.RealizedImageV1, platform blueprint.Platform) (preparedImageEvidenceV1, error) {
+	policy := document.Environment.Runtime.IdentityPolicy
+	fail := func() (preparedImageEvidenceV1, error) {
+		return preparedImageEvidenceV1{}, invalidImageIdentityArchiveV1()
 	}
 	if image.Validate() != nil || policy == nil || policy.Validate() != nil || platform.Validate() != nil || platform.OS != "linux" {
 		return fail()
 	}
-	layers := &imageIdentityLayersV1{}
+	selection, err := deploy.ImageDestinationSelectionDigestV1(document)
+	if err != nil {
+		return fail()
+	}
+	layers := &imageIdentityLayersV1{projectionBudget: &imageDestinationBudgetV1{}}
 	archive, err := readDockerImageArchiveV1(ctx, input, string(image.ConfigDigest), layers)
 	if err != nil {
 		return fail()
@@ -86,9 +98,13 @@ func readDockerImageIdentityArchiveV1(ctx context.Context, input io.Reader, poli
 		return fail()
 	}
 	files := map[string][]byte{}
+	destinations := imageDestinationIndexV1{}
 	for index, name := range ordered {
 		layer, exists := layers.layers[name]
 		if !exists || layer.digest != diffIDs[index] {
+			return fail()
+		}
+		if err := destinations.apply(ctx, layer.entries, layers.projectionBudget); err != nil {
 			return fail()
 		}
 		for account, content := range layer.files {
@@ -99,5 +115,23 @@ func readDockerImageIdentityArchiveV1(ctx context.Context, input io.Reader, poli
 	if err != nil {
 		return fail()
 	}
-	return evidence, nil
+	projection := &deploy.ImageDestinationEvidenceV1{Schema: deploy.ImageDestinationEvidenceSchemaV1, Image: image, Platform: platform, SelectionDigest: selection, RootWritable: document.Environment.ImageRootWritable(), Destinations: []deploy.ImageDestinationV1{}}
+	names := make([]string, 0, len(document.Docker.Mounts))
+	for name := range document.Docker.Mounts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		mount := document.Docker.Mounts[name]
+		target := mount.Contract.Target
+		resolved, kind, content, err := destinations.destination(ctx, target)
+		if err != nil || (mount.Contract.Writable && kind == "non-directory") {
+			return fail()
+		}
+		projection.Destinations = append(projection.Destinations, deploy.ImageDestinationV1{Name: name, Target: target, Resolved: resolved, Kind: kind, ContainsContent: content})
+	}
+	if ctx.Err() != nil || deploy.ValidateImageDestinationEvidenceV1(projection, image, platform) != nil {
+		return fail()
+	}
+	return preparedImageEvidenceV1{Identity: evidence, Destinations: projection}, nil
 }

@@ -15,7 +15,7 @@ var errIdentityPolicyBlueprintMismatchV1 = errors.New("identity policy selected 
 func validateDocumentIdentityPolicyV1(document blueprint.Document, lock deploy.BuildLockV1) error {
 	policy := document.Environment.Runtime.IdentityPolicy
 	if policy == nil && lock.IdentityPolicy == nil {
-		return nil
+		return deploy.ValidateSelectedImageDestinationsV1(document, lock)
 	}
 	if policy == nil || lock.IdentityPolicy == nil {
 		return fmt.Errorf("identity policy requires matching immutable-image identity evidence")
@@ -41,7 +41,7 @@ func validateDocumentIdentityPolicyV1(document blueprint.Document, lock deploy.B
 	if !bytes.Equal(wanted, locked) {
 		return fmt.Errorf("identity policy differs from locked image evidence")
 	}
-	return nil
+	return deploy.ValidateSelectedImageDestinationsV1(document, lock)
 }
 
 // Authenticate the selected bytes before consulting their policy or inventory.
@@ -50,7 +50,7 @@ func validateSelectedIdentityPolicyV1(payload blueprint.ResolvedDocumentV1, lock
 	if err != nil {
 		return err
 	}
-	if document.Environment.Runtime.IdentityPolicy == nil && lock.IdentityPolicy == nil {
+	if document.Environment.Runtime.IdentityPolicy == nil && lock.IdentityPolicy == nil && lock.ImageDestinations == nil {
 		return nil
 	}
 	digest, err := blueprint.ResolvedDocumentDigestV1(payload)
