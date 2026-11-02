@@ -11,6 +11,7 @@ import (
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/runtimeidentity"
 )
 
 type DockerPlanContext struct {
@@ -88,6 +89,9 @@ type RuntimeUserPlan struct {
 }
 
 func PlanDockerExecution(document blueprint.Document, context DockerPlanContext) (DockerExecutionPlan, error) {
+	if err := document.ValidateMountDeclarations(); err != nil {
+		return DockerExecutionPlan{}, err
+	}
 	if context.DeploymentDir == "" {
 		return DockerExecutionPlan{}, fmt.Errorf("Docker plan deployment directory is required")
 	}
@@ -144,10 +148,35 @@ func PlanDockerExecution(document blueprint.Document, context DockerPlanContext)
 		return DockerExecutionPlan{}, err
 	}
 	plan.Sandbox = newApplicationSandboxPlanWithNetworkV1(runtimeUser, document.Environment.Runtime.Network)
+	plan.Sandbox.ReadOnlyRoot = !document.Environment.ImageRootWritable()
 	if err := ValidateApplicationSandboxPlanV1(plan.Sandbox); err != nil {
 		return DockerExecutionPlan{}, err
 	}
+	for _, name := range sortedEnvironmentMountNames(document.Environment.Mounts) {
+		mount := document.Environment.Mounts[name]
+		if !mount.HasMetadata() {
+			continue
+		}
+		_, err := blueprint.ResolveManagedMountObjects(mount, document.Environment.Runtime.IdentityPolicy, runtimeidentity.IdentityV1{
+			Username: runtimeUser.LocalUser, UID: runtimeIDStringV1(runtimeUser.UID), GID: runtimeIDStringV1(runtimeUser.GID), SupplementaryGIDs: []string{},
+		})
+		if err != nil {
+			return DockerExecutionPlan{}, fmt.Errorf("mount %s metadata: %w", name, err)
+		}
+		// Declarations must not be silently ignored before F1.2/F1.3 connects
+		// their confined preparation consumer to actual execution.
+		return DockerExecutionPlan{}, fmt.Errorf("mount %s requires qualified managed metadata preparation", name)
+	}
 	return plan, nil
+}
+
+func sortedEnvironmentMountNames(mounts map[string]blueprint.EnvironmentMount) []string {
+	names := make([]string, 0, len(mounts))
+	for name := range mounts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func sortedMountPlans(plans map[string]MountExecutionPlan) []MountExecutionPlan {

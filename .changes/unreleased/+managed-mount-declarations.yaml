@@ -1,0 +1,2 @@
+kind: Added
+body: Add managed mount owner, group, creation permissions, and relative directory/file declarations, plus intrinsic image-root policy, to blueprint validation and canonical generation identity. Execution remains gated until their preparation and sandbox support is qualified.
