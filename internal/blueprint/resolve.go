@@ -458,18 +458,24 @@ func resolveMounts(source Syntax, extended extendedSyntax, document *Document) e
 		if !path.IsAbs(target) || path.Clean(target) != target || strings.Contains(target, `\`) {
 			return fmt.Errorf("environment.mounts.%s.target must be a normalized absolute Linux path", name)
 		}
-		if err := validateEnvironmentMountTarget(target); err != nil {
-			return fmt.Errorf("environment.mounts.%s.target: %w", name, err)
+		if target == "/" && name != "root" {
+			return fmt.Errorf("environment.mounts.%s.target must not be the container filesystem root", name)
+		}
+		if target != "/" {
+			if err := validateEnvironmentMountTarget(target); err != nil {
+				return fmt.Errorf("environment.mounts.%s.target: %w", name, err)
+			}
 		}
 		update := UpdatePolicy(item.UpdatePolicy)
-		if update != UpdatePreserve && update != UpdateReplace && update != UpdateUnmanaged {
+		if target != "/" && update != UpdatePreserve && update != UpdateReplace && update != UpdateUnmanaged {
 			return fmt.Errorf("environment.mounts.%s.update_policy must be preserve, replace, or unmanaged", name)
 		}
 		writable, err := resolveSyntaxBool(item.Writable, "environment.mounts."+name+".writable")
 		if err != nil {
 			return err
 		}
-		document.Environment.Mounts[name] = EnvironmentMount{Target: target, Writable: writable, UpdatePolicy: update}
+		document.Environment.Mounts[name] = EnvironmentMount{Target: target, Writable: writable, UpdatePolicy: update,
+			MountMetadata: item.MountMetadata, Directories: item.Directories, Files: item.Files}
 	}
 	mountReferences := map[string]int{}
 	for _, name := range sortedKeys(extended.Mounts) {
@@ -477,6 +483,9 @@ func resolveMounts(source Syntax, extended extendedSyntax, document *Document) e
 		contractName, _ := referencedName("extends", item.Docker.Extends, environmentMountReferencePrefix)
 		mountReferences[contractName]++
 		contract := document.Environment.Mounts[contractName]
+		if contract.Target == "/" {
+			return fmt.Errorf("intrinsic root cannot have a Docker mount binding")
+		}
 		mount := DockerMount{
 			Extends:  item.Docker.Extends,
 			Mode:     MountMode(item.Docker.Mode),
@@ -490,11 +499,14 @@ func resolveMounts(source Syntax, extended extendedSyntax, document *Document) e
 		document.Docker.Mounts[name] = mount
 	}
 	for _, name := range sortedKeys(document.Environment.Mounts) {
+		if document.Environment.Mounts[name].Target == "/" {
+			continue
+		}
 		if mountReferences[name] != 1 {
 			return fmt.Errorf("environment mount %q must have exactly one Docker mount; found %d", name, mountReferences[name])
 		}
 	}
-	return nil
+	return document.ValidateMountDeclarations()
 }
 
 func validateEnvironmentMountTarget(target string) error {
@@ -656,6 +668,9 @@ func resolveCommandMountOverrides(
 		}
 		if _, found := environmentMounts[name]; !found {
 			return nil, fmt.Errorf("%s.%s references unknown environment mount %q", field, name, name)
+		}
+		if environmentMounts[name].Target == "/" {
+			return nil, fmt.Errorf("%s.%s cannot override the intrinsic root policy", field, name)
 		}
 		item := source[name]
 		if item.Writable == nil {

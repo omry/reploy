@@ -112,9 +112,12 @@ type APTPackageRequestSyntax struct {
 }
 
 type MountSyntax struct {
-	Target       string `yaml:"target"`
-	Writable     any    `yaml:"writable"`
-	UpdatePolicy string `yaml:"update_policy"`
+	Target        string `yaml:"target"`
+	Writable      any    `yaml:"writable"`
+	UpdatePolicy  string `yaml:"update_policy"`
+	MountMetadata `yaml:",inline"`
+	Directories   map[string]MountMetadata `yaml:"directories"`
+	Files         map[string]MountMetadata `yaml:"files"`
 }
 
 type ExecutableSyntax struct {
