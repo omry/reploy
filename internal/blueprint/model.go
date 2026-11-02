@@ -157,6 +157,9 @@ type EnvironmentMount struct {
 	Target       string
 	Writable     bool
 	UpdatePolicy UpdatePolicy
+	MountMetadata
+	Directories map[string]MountMetadata `json:",omitempty"`
+	Files       map[string]MountMetadata `json:",omitempty"`
 }
 
 type UpdatePolicy string
