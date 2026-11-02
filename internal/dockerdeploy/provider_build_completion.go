@@ -64,7 +64,7 @@ type providerBuildCompletionBackend struct {
 	publish          func(context.Context, *deploy.OperationLock, providerstore.Store, BuildPublicationInput) (deploy.StateV1, error)
 	publishValidated func(context.Context, *deploy.OperationLock, providerstore.Store, string, string, deploy.BuildLockV1, ValidatedBuildInputsV1) (deploy.ValidatedBuildV1, error)
 	removeFinalized  func(context.Context, BuiltImageCandidate) error
-	identityEvidence func(context.Context, *blueprint.IdentityPolicyV1, providers.RealizedImageV1, blueprint.Platform) (deploy.ImageIdentityEvidenceV1, error)
+	identityEvidence func(context.Context, blueprint.Document, providers.RealizedImageV1, blueprint.Platform) (preparedImageEvidenceV1, error)
 }
 
 // CompleteProviderBuild is the canonical completion path from a materialized
@@ -83,7 +83,7 @@ func CompleteProviderBuild(
 		publish:             PublishBuild,
 		publishValidated:    PublishValidatedBuild,
 		removeFinalized:     RemoveBuiltImageCandidate,
-		identityEvidence:    exportDockerImageIdentityV1,
+		identityEvidence:    exportDockerPreparedImageV1,
 	})
 }
 
@@ -173,12 +173,17 @@ func completeProviderBuild(
 		}
 	}()
 	var identityPolicy *deploy.IdentityPolicyLockV1
+	var imageDestinations *deploy.ImageDestinationEvidenceV1
 	if portable := input.Document.Environment.Runtime.IdentityPolicy; portable != nil {
-		evidence, err := backend.identityEvidence(ctx, portable, finalized.Image.Image, input.ResolvedRequest.Platform)
+		evidence, err := backend.identityEvidence(ctx, input.Document, finalized.Image.Image, input.ResolvedRequest.Platform)
 		if err != nil {
 			return ProviderBuildCompletionResult{}, fmt.Errorf("collect final-image identity evidence: %w", err)
 		}
-		identityPolicy = &deploy.IdentityPolicyLockV1{Schema: deploy.IdentityPolicyLockSchemaV1, Policy: *portable, Evidence: evidence}
+		identityPolicy = &deploy.IdentityPolicyLockV1{Schema: deploy.IdentityPolicyLockSchemaV1, Policy: *portable, Evidence: evidence.Identity}
+		imageDestinations = evidence.Destinations
+		if err := deploy.ValidateSelectedImageDestinationsV1(input.Document, deploy.BuildLockV1{IdentityPolicy: identityPolicy, ImageDestinations: imageDestinations, FinalImage: finalized.Image.Image, Platform: input.ResolvedRequest.Platform}); err != nil {
+			return ProviderBuildCompletionResult{}, err
+		}
 		if err := deploy.ValidateIdentityPolicyLockV1(identityPolicy, finalized.Image.Image, input.ResolvedRequest.Platform); err != nil {
 			return ProviderBuildCompletionResult{}, err
 		}
@@ -195,7 +200,8 @@ func completeProviderBuild(
 		RuntimePolicy:        policy,
 		RuntimeLayer:         finalized.RuntimeLayer,
 		ValidationRecord:     finalized.Validation.Final.Reference, FinalImage: finalized.Image.Image,
-		IdentityPolicy: identityPolicy,
+		IdentityPolicy:    identityPolicy,
+		ImageDestinations: imageDestinations,
 	})
 	endAssemble(err)
 	if err != nil {

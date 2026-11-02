@@ -35,6 +35,7 @@ type BuildLockV1 struct {
 	ValidationRecord      providerstore.StoreObjectRef  `json:"validation_record"`
 	FinalImage            providers.RealizedImageV1     `json:"final_image"`
 	IdentityPolicy        *IdentityPolicyLockV1         `json:"identity_policy,omitempty"`
+	ImageDestinations     *ImageDestinationEvidenceV1   `json:"image_destinations,omitempty"`
 }
 
 type ProviderGraphLockV1 struct {
@@ -188,7 +189,13 @@ func ValidateBuildLockV1(lock BuildLockV1, validateProfileOwner providers.Requir
 	if err := lock.FinalImage.Validate(); err != nil {
 		return fmt.Errorf("build lock final image: %w", err)
 	}
-	return ValidateIdentityPolicyLockV1(lock.IdentityPolicy, lock.FinalImage, lock.Platform)
+	if err := ValidateIdentityPolicyLockV1(lock.IdentityPolicy, lock.FinalImage, lock.Platform); err != nil {
+		return err
+	}
+	if lock.ImageDestinations != nil && lock.IdentityPolicy == nil {
+		return fmt.Errorf("image destination evidence requires identity policy")
+	}
+	return ValidateImageDestinationEvidenceV1(lock.ImageDestinations, lock.FinalImage, lock.Platform)
 }
 
 func validateBuildLockPortableToolPlan(lock BuildLockV1) error {

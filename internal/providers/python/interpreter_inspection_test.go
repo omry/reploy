@@ -242,6 +242,9 @@ def generated(arch,release,module):
     _manylinux._get_glibc_version=lambda:release
     if module is None: sys.modules.pop("_manylinux",None)
     else: sys.modules["_manylinux"]=module
+    cached_module=getattr(_manylinux,"_get_manylinux_module",None)
+    if cached_module is not None and hasattr(cached_module,"cache_clear"):
+        cached_module.cache_clear()
     parameters=inspect.signature(_manylinux.platform_tags).parameters
     if len(parameters)==1: return set(_manylinux.platform_tags([arch]))
     return set(_manylinux.platform_tags("linux_"+arch,arch))

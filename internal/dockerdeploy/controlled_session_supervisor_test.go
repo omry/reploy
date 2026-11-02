@@ -1213,12 +1213,13 @@ func TestRunControlledSessionV1CapsShutdownAtOutputDeadline(t *testing.T) {
 func TestRunControlledSessionV1AppliesControllerRequests(t *testing.T) {
 	plan := controlledSessionControllerIntegrationPlanV1(t, "test-image", []string{"/controller"})
 	requests := make(chan controlledsession.RequestV1, 8)
-	requests <- controlledsession.RequestV1{Kind: controlledsession.RequestInputV1, Bytes: []byte{0, 1, 0xff}}
-	requests <- controlledsession.RequestV1{Kind: controlledsession.RequestResizeV1, Columns: 132, Rows: 43}
-	requests <- controlledsession.RequestV1{Kind: controlledsession.RequestTerminateV1}
 	transport := &fakeControlledSessionTransportV1{requests: requests}
 	transport.onEvent = func(event controlledsession.EventV1) {
 		switch event.Kind {
+		case controlledsession.EventReadyV1:
+			requests <- controlledsession.RequestV1{Kind: controlledsession.RequestInputV1, Bytes: []byte{0, 1, 0xff}}
+			requests <- controlledsession.RequestV1{Kind: controlledsession.RequestResizeV1, Columns: 132, Rows: 43}
+			requests <- controlledsession.RequestV1{Kind: controlledsession.RequestTerminateV1}
 		case controlledsession.EventWorkloadOutputsFinalizedV1:
 			requests <- controlledsession.RequestV1{Kind: controlledsession.RequestCompleteV1}
 		case controlledsession.EventTerminatedV1:

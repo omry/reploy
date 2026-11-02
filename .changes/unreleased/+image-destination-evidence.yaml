@@ -1,0 +1,2 @@
+kind: Added
+body: Bind mapped-image mount destination evidence to immutable build generations, with bounded layered-image projection and exact mount-policy reuse checks. Public mapped execution remains gated until host observation and launch qualification complete.

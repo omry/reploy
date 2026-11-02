@@ -60,6 +60,7 @@ func mappedEntryPlanFixtureV1(t *testing.T, profile string) mappedEntryInputV1 {
 		t.Fatal(err)
 	}
 	c.Lock.IdentityPolicy = &deploy.IdentityPolicyLockV1{Schema: deploy.IdentityPolicyLockSchemaV1, Policy: *d.Environment.Runtime.IdentityPolicy, Evidence: accounts}
+	c.Lock.ImageDestinations = emptyImageDestinationEvidenceV1(t, d, c.Lock.FinalImage, c.Lock.Platform)
 	runtime := original.DockerPlan
 	runtime.Phase = blueprint.PhaseStaged
 	runtime.Workload = &WorkloadExecutionPlan{Command: "serve", Endpoints: map[string]EndpointExecutionPlan{}}
@@ -362,6 +363,7 @@ func rebindMappedEntryFixtureV1(t *testing.T, i *mappedEntryInputV1, change func
 		t.Fatal(err)
 	}
 	i.Current.Lock.IdentityPolicy = &deploy.IdentityPolicyLockV1{Schema: deploy.IdentityPolicyLockSchemaV1, Policy: *d.Environment.Runtime.IdentityPolicy, Evidence: accounts}
+	i.Current.Lock.ImageDestinations = emptyImageDestinationEvidenceV1(t, d, i.Current.Lock.FinalImage, i.Current.Lock.Platform)
 	plans, err := RuntimePlansV1(d, i.Runtime)
 	if err != nil {
 		t.Fatal(err)
