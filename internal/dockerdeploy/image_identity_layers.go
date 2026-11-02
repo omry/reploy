@@ -22,13 +22,15 @@ const imageIdentityFileLimitV1 = 1 << 20
 var imageIdentityAccountPathsV1 = [...]string{"etc/passwd", "etc/group", "etc/nsswitch.conf"}
 
 type imageIdentityLayerV1 struct {
-	digest canonical.Digest
-	files  map[string][]byte
+	digest  canonical.Digest
+	files   map[string][]byte
+	entries []imageDestinationNodeV1
 }
 
 type imageIdentityLayersV1 struct {
-	layers       map[string]imageIdentityLayerV1
-	contentBytes int64
+	layers           map[string]imageIdentityLayerV1
+	contentBytes     int64
+	projectionBudget *imageDestinationBudgetV1
 }
 
 func invalidImageIdentityArchiveV1() error {
@@ -92,12 +94,16 @@ func (layers *imageIdentityLayersV1) add(ctx context.Context, name string, input
 	metadata := &io.LimitedReader{R: limited}
 	reader := tar.NewReader(metadata)
 	names, files := map[string]bool{}, map[string][]byte{}
+	var entries []imageDestinationNodeV1
 	nameBytes := 0
 	headerBytes, padding := int64(imageIdentityHeaderLimitV1*512), int64(0)
 	for {
 		// Next hides PAX/GNU headers. Bound the read itself and charge their
 		// payload blocks too, excluding the previous regular file's padding.
 		metadata.N = headerBytes + padding + 1024
+		if budget := layers.projectionBudget; budget != nil {
+			metadata.N = min(metadata.N, int64(imageDestinationMetadataLimitV1-budget.bytes)+padding+1024)
+		}
 		before := tracked.count
 		header, err := reader.Next()
 		consumed := tracked.count - before - padding
@@ -121,6 +127,16 @@ func (layers *imageIdentityLayersV1) add(ctx context.Context, name string, input
 			return invalidImageIdentityArchiveV1()
 		}
 		names[member] = true
+		if budget := layers.projectionBudget; budget != nil {
+			if err := budget.charge(0, int(consumed-512)); err != nil {
+				return err
+			}
+			entry, err := budget.entry(header, member)
+			if err != nil {
+				return err
+			}
+			entries = append(entries, entry)
+		}
 		selected := false
 		for _, account := range imageIdentityAccountPathsV1 {
 			selected = selected || member == account
@@ -150,6 +166,6 @@ func (layers *imageIdentityLayersV1) add(ctx context.Context, name string, input
 	if layers.layers == nil {
 		layers.layers = map[string]imageIdentityLayerV1{}
 	}
-	layers.layers[name] = imageIdentityLayerV1{digest: canonical.Digest(fmt.Sprintf("sha256:%x", hash.Sum(nil))), files: files}
+	layers.layers[name] = imageIdentityLayerV1{digest: canonical.Digest(fmt.Sprintf("sha256:%x", hash.Sum(nil))), files: files, entries: entries}
 	return nil
 }

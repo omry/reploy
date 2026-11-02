@@ -27,6 +27,7 @@ type BuildLockAssemblyInput struct {
 	ValidationRecord     providerstore.StoreObjectRef
 	FinalImage           providers.RealizedImageV1
 	IdentityPolicy       *deploy.IdentityPolicyLockV1
+	ImageDestinations    *deploy.ImageDestinationEvidenceV1
 }
 
 // AssembleBuildLock publishes the graph's canonical bundle manifests and
@@ -170,7 +171,8 @@ func AssembleBuildLock(
 		PortableRuntimeLayer: input.PortableRuntimeLayer,
 		RuntimePolicy:        input.RuntimePolicy, RuntimeLayer: input.RuntimeLayer,
 		ValidationRecord: input.ValidationRecord, FinalImage: input.FinalImage,
-		IdentityPolicy: input.IdentityPolicy,
+		IdentityPolicy:    input.IdentityPolicy,
+		ImageDestinations: input.ImageDestinations,
 	}
 	if input.PortableRuntimeLayer != nil {
 		if portableTools == nil {
