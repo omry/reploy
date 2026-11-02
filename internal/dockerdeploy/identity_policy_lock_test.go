@@ -50,6 +50,7 @@ func bindBuildIdentityFixtureV1(t *testing.T, current *CurrentBuild, document bl
 		Schema: deploy.IdentityPolicyLockSchemaV1, Policy: *policy,
 		Evidence: buildIdentityEvidenceV1(t, policy, current.Lock.FinalImage, current.Lock.Platform),
 	}
+	current.Lock.ImageDestinations = emptyImageDestinationEvidenceV1(t, document, current.Lock.FinalImage, current.Lock.Platform)
 	refreshCurrentBuildReuseGeneration(t, current)
 }
 
@@ -68,19 +69,21 @@ func TestIdentityPolicyLockV1CompletionCollectsExactFinalImageBeforePublication(
 				order := []string{}
 				var session any
 				var locked *deploy.IdentityPolicyLockV1
+				var projected *deploy.ImageDestinationEvidenceV1
 				backend := providerBuildCompletionBackend{
 					validateAndFinalize: func(ctx context.Context, _ providerstore.Store, _ []FullImageValidationInput, _ FullImageValidationInput, _ providers.RequirementProfileOwnerValidator, _ FullImageValidationRunner, _ deploy.ApplicationStartupVerifierV1, _ deploy.ApplicationLocalAccountV1, _ RunOptions) (FinalizedBuildValidationResult, error) {
 						order = append(order, "finalize")
 						session = ctx.Value(generatedBuilderSessionKey{})
 						return FinalizedBuildValidationResult{Image: InspectedImageCandidate{Image: finalImage}, Candidate: candidate}, nil
 					},
-					identityEvidence: func(ctx context.Context, policy *blueprint.IdentityPolicyV1, image providers.RealizedImageV1, platform blueprint.Platform) (deploy.ImageIdentityEvidenceV1, error) {
+					identityEvidence: func(ctx context.Context, document blueprint.Document, image providers.RealizedImageV1, platform blueprint.Platform) (preparedImageEvidenceV1, error) {
+						policy := document.Environment.Runtime.IdentityPolicy
 						order = append(order, "evidence")
 						if session == nil || session != ctx.Value(generatedBuilderSessionKey{}) || image != finalImage || platform != input.ResolvedRequest.Platform || !reflect.DeepEqual(policy, input.Document.Environment.Runtime.IdentityPolicy) {
 							t.Fatal("evidence did not use the exact final image, policy, platform and engine session")
 						}
 						if outcome == "export failure" {
-							return deploy.ImageIdentityEvidenceV1{}, errors.New("export failed")
+							return preparedImageEvidenceV1{}, errors.New("export failed")
 						}
 						if outcome == "upstream evidence" {
 							image = input.Validation.Final.Image.Image
@@ -88,26 +91,30 @@ func TestIdentityPolicyLockV1CompletionCollectsExactFinalImageBeforePublication(
 						if outcome == "cancel" {
 							cancel()
 						}
-						return buildIdentityEvidenceV1(t, policy, image, platform), nil
+						return preparedImageEvidenceV1{Identity: buildIdentityEvidenceV1(t, policy, image, platform), Destinations: emptyImageDestinationEvidenceV1(t, document, image, platform)}, nil
 					},
 					assemble: func(_ context.Context, _ providerstore.Store, got BuildLockAssemblyInput) (deploy.BuildLockV1, error) {
 						order = append(order, "assemble")
 						locked = got.IdentityPolicy
+						projected = got.ImageDestinations
+						if projected == nil || projected.Image != finalImage {
+							t.Fatal("assembly lost final-image destination evidence")
+						}
 						if locked == nil || locked.Evidence.Image != finalImage || got.FinalImage != finalImage {
 							t.Fatal("assembly lost final-image evidence")
 						}
-						return deploy.BuildLockV1{IdentityPolicy: locked}, nil
+						return deploy.BuildLockV1{IdentityPolicy: locked, ImageDestinations: projected}, nil
 					},
 					publish: func(_ context.Context, _ *deploy.OperationLock, _ providerstore.Store, got BuildPublicationInput) (deploy.StateV1, error) {
 						order = append(order, "publish")
-						if got.Lock.IdentityPolicy != locked {
+						if got.Lock.IdentityPolicy != locked || got.Lock.ImageDestinations != projected {
 							t.Fatal("publication lost evidence")
 						}
 						return deploy.StateV1{}, nil
 					},
 					publishValidated: func(_ context.Context, _ *deploy.OperationLock, _ providerstore.Store, _, _ string, got deploy.BuildLockV1, _ ValidatedBuildInputsV1) (deploy.ValidatedBuildV1, error) {
 						order = append(order, "publish")
-						if got.IdentityPolicy != locked {
+						if got.IdentityPolicy != locked || got.ImageDestinations != projected {
 							t.Fatal("validated publication lost evidence")
 						}
 						return deploy.ValidatedBuildV1{}, nil
@@ -207,6 +214,7 @@ func TestIdentityPolicyLockV1ReuseAcceptsExactEvidenceAndRejectsMissingEvidence(
 		t.Fatalf("exact policy reuse: %v %v", match, err)
 	}
 	current.Lock.IdentityPolicy = nil
+	current.Lock.ImageDestinations = nil
 	refreshCurrentBuildReuseGeneration(t, &current)
 	match, err = CurrentBuildMatches(current, input)
 	if err == nil || match {
