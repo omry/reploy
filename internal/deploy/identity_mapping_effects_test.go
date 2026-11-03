@@ -11,6 +11,32 @@ import (
 	"github.com/omry/reploy/internal/identitymapping"
 )
 
+func TestMappingObserveEffectsRefusesRevokedPreparationV1(t *testing.T) {
+	path, ops, state, _ := operationFixtureV1(t, false, true)
+	active := operationGeometryV1(100000)
+	intent, err := ops.Configure(t.Context(), state, active, "revoked-setup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := ops.BeginEffects(t.Context(), intent, "revoked-setup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending.IdentityMapping.Revoked = true
+	writeMappingFixtureV1(t, path, pending)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ops.ObserveEffects(t.Context(), pending, active, "revoked-setup"); err == nil {
+		t.Fatal("revoked mapping authorized preparation")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatal("refused preparation changed the retained journal", err)
+	}
+}
+
 func TestMappingObserveEffectsBindsExactPendingAuthorityV1(t *testing.T) {
 	for _, installed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "staged", true: "installed"}[installed], func(t *testing.T) {
