@@ -8,6 +8,9 @@ import (
 )
 
 func main() {
+	if code, handled := dockerdeploy.RunManagedMountSetupChildV1(os.Args[1:], os.Stderr); handled {
+		os.Exit(code)
+	}
 	if code, handled := dockerdeploy.RunControlledSessionWatchdogChild(os.Args[1:], os.Stderr); handled {
 		os.Exit(code)
 	}

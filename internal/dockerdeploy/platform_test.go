@@ -13,6 +13,9 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if code, handled := RunManagedMountSetupChildV1(os.Args[1:], os.Stderr); handled {
+		os.Exit(code)
+	}
 	if len(os.Args) > 1 && os.Args[1] == "_control" {
 		os.Exit(runFakeEmbeddedReployControl(os.Args[2:]))
 	}

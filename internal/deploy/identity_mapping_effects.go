@@ -22,7 +22,7 @@ func (ops IdentityMappingOperationsV1) ObserveEffects(ctx context.Context, expec
 	}
 	state := status.State
 	m := state.IdentityMapping
-	if state.Current == nil || m == nil || m.PendingOperation == nil || m.PendingOperation.Phase != "effects-pending" {
+	if state.Current == nil || m == nil || m.Revoked || m.PendingOperation == nil || m.PendingOperation.Phase != "effects-pending" {
 		return StateV1{}, fmt.Errorf("mapped create requires its recorded effects-pending operation")
 	}
 	canonical, err := identitymapping.ValidateGeometry(active)
