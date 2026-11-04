@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/deploy"
@@ -33,6 +34,7 @@ type managedMountSetupManifestV1 struct {
 	Objects  []blueprint.ManagedMountObject
 	Recorded []string
 	Parent   int
+	Inspect  bool
 }
 
 func managedMountSetupHostIDV1(id uint32, rows []identitymapping.Interval) (uint32, bool) {
@@ -63,12 +65,27 @@ func managedMountSetupSocketV1(file *os.File) (*net.UnixConn, error) {
 // remain held throughout. Success transfers the returned FDs only after helper
 // retirement; any failure leaves all effects inhibited for explicit recovery.
 func prepareManagedMountSetupV1(ctx context.Context, ops deploy.IdentityMappingOperationsV1, expected deploy.StateV1, active identitymapping.Geometry, operation string, root, staging *os.File, objects []blueprint.ManagedMountObject, recorded map[string]*os.File) (result map[string]preparedManagedMountObjectV1, err error) {
-	if ctx == nil || root == nil || staging == nil {
-		return nil, fmt.Errorf("setup requires context and held storage descriptors")
+	return runManagedMountSetupV1(ctx, active, root, staging, objects, recorded, false, func(ctx context.Context) error {
+		_, err := ops.ObserveEffects(ctx, expected, active, operation)
+		return err
+	})
+}
+
+// inspectManagedMountSetupV1 verifies every declared path against its retained
+// descriptor without creating or changing an object. authorize must freshly
+// check the selected owner under its held operation lock, without recursing
+// through this observer. Returned descriptors transfer only after retirement.
+func inspectManagedMountSetupV1(ctx context.Context, active identitymapping.Geometry, root *os.File, objects []blueprint.ManagedMountObject, recorded map[string]*os.File, authorize func(context.Context) error) (map[string]preparedManagedMountObjectV1, error) {
+	return runManagedMountSetupV1(ctx, active, root, nil, objects, recorded, true, authorize)
+}
+
+func runManagedMountSetupV1(ctx context.Context, active identitymapping.Geometry, root, staging *os.File, objects []blueprint.ManagedMountObject, recorded map[string]*os.File, inspect bool, authorize func(context.Context) error) (result map[string]preparedManagedMountObjectV1, err error) {
+	if ctx == nil || root == nil || authorize == nil || !inspect && staging == nil {
+		return nil, fmt.Errorf("setup requires context, current authorization and held storage descriptors")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	if _, err = ops.ObserveEffects(ctx, expected, active, operation); err != nil {
+	if err = authorize(ctx); err != nil {
 		return nil, err
 	}
 	ordered, err := orderManagedMountObjectsV1(objects)
@@ -76,14 +93,28 @@ func prepareManagedMountSetupV1(ctx context.Context, ops deploy.IdentityMappingO
 		return nil, err
 	}
 	for _, object := range ordered {
+		if !utf8.ValidString(object.Path) {
+			return nil, fmt.Errorf("setup declaration path contains invalid UTF-8")
+		}
 		_, uid := managedMountSetupHostIDV1(object.Identity.UID, active.UIDs)
 		_, gid := managedMountSetupHostIDV1(object.Identity.GID, active.GIDs)
 		if !uid || !gid {
 			return nil, fmt.Errorf("setup declaration contains an unmapped identity")
 		}
 	}
-	manifest := managedMountSetupManifestV1{Geometry: active, Objects: ordered, Parent: os.Getpid()}
+	if inspect && len(recorded) != len(ordered) {
+		return nil, fmt.Errorf("inspection requires complete retained descriptor provenance")
+	}
+	for _, object := range ordered {
+		if inspect && recorded[object.Path] == nil {
+			return nil, fmt.Errorf("inspection lacks retained object %q", object.Path)
+		}
+	}
+	manifest := managedMountSetupManifestV1{Geometry: active, Objects: ordered, Parent: os.Getpid(), Inspect: inspect}
 	for name, file := range recorded {
+		if !utf8.ValidString(name) {
+			return nil, fmt.Errorf("setup recorded path contains invalid UTF-8")
+		}
 		if file == nil {
 			return nil, fmt.Errorf("nil recorded descriptor")
 		}
@@ -182,7 +213,7 @@ func prepareManagedMountSetupV1(ctx context.Context, ops deploy.IdentityMappingO
 		}
 	}
 	// Neither the manifest nor an earlier successful check is current authority.
-	if _, err = ops.ObserveEffects(ctx, expected, active, operation); err != nil {
+	if err = authorize(ctx); err != nil {
 		return nil, err
 	}
 	if _, err = channel.Write([]byte{2}); err != nil {
@@ -305,7 +336,12 @@ func runManagedMountSetupChildV1() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	prepared, err := prepareManagedMountObjectsV1(ctx, 5, 6, manifest.Objects, recorded)
+	var prepared map[string]preparedManagedMountObjectV1
+	if manifest.Inspect {
+		prepared, err = inspectManagedMountObjectsV1(ctx, 5, manifest.Objects, recorded)
+	} else {
+		prepared, err = prepareManagedMountObjectsV1(ctx, 5, 6, manifest.Objects, recorded)
+	}
 	if err != nil {
 		return err
 	}
@@ -325,4 +361,46 @@ func runManagedMountSetupChildV1() error {
 		}
 	}
 	return nil
+}
+
+// Inspection reuses the confined lookup and exact recorded-object verifier.
+// Its only filesystem operations open paths and read descriptor metadata.
+func inspectManagedMountObjectsV1(ctx context.Context, root int, objects []blueprint.ManagedMountObject, recorded map[string]int) (result map[string]preparedManagedMountObjectV1, err error) {
+	ordered, err := orderManagedMountObjectsV1(objects)
+	if err != nil {
+		return nil, err
+	}
+	identity, err := managedMountObjectIdentityForFDV1(root)
+	if err != nil || identity.Mode&unix.S_IFMT != unix.S_IFDIR || len(recorded) != len(ordered) {
+		return nil, fmt.Errorf("inspection requires a held root and complete recorded objects: %v", err)
+	}
+	observed := make(map[string]preparedManagedMountObjectV1, len(ordered))
+	defer func() {
+		if err != nil {
+			for _, object := range observed {
+				unix.Close(object.FD)
+			}
+			result = nil
+		}
+	}()
+	for _, declaration := range ordered {
+		if err = ctx.Err(); err != nil {
+			return nil, err
+		}
+		expected, present := recorded[declaration.Path]
+		if !present {
+			return nil, fmt.Errorf("inspection lacks retained object %q", declaration.Path)
+		}
+		fd, openErr := openManagedMountObjectV1(root, declaration.Path, unix.O_PATH)
+		if openErr != nil {
+			return nil, openErr
+		}
+		actual, checkErr := verifyManagedMountObjectV1(fd, identity.Mount, declaration, expected)
+		if checkErr != nil {
+			unix.Close(fd)
+			return nil, checkErr
+		}
+		observed[declaration.Path] = preparedManagedMountObjectV1{FD: fd, Identity: actual}
+	}
+	return observed, ctx.Err()
 }

@@ -453,3 +453,327 @@ func TestManagedMountSetupBarrierV1(t *testing.T) {
 	assertManagedMountSetupRetiredV1(t)
 	t.Log("barrier", mode, "refused and retired:", err)
 }
+
+func managedMountInspectFixtureV1(t *testing.T) (string, []blueprint.ManagedMountObject, map[string]int) {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "private"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "private/data"), []byte("retained data\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	objects := managedMountSetupDeclarationsV1()
+	recorded := map[string]int{}
+	for i := range objects {
+		objects[i].Identity.UID, objects[i].Identity.GID = uint32(os.Geteuid()), uint32(os.Getegid())
+		fd, err := unix.Open(filepath.Join(root, objects[i].Path), unix.O_PATH|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		recorded[objects[i].Path] = fd
+		t.Cleanup(func() { unix.Close(fd) })
+	}
+	return root, objects, recorded
+}
+
+func TestManagedMountInspectCurrentPathsV1(t *testing.T) {
+	for _, mode := range []string{"exact", "replaced", "missing", "symlink", "type", "hardlink", "wrong-metadata", "missing-provenance", "invalid-descriptor", "canceled"} {
+		t.Run(mode, func(t *testing.T) {
+			root, objects, recorded := managedMountInspectFixtureV1(t)
+			data := filepath.Join(root, "private/data")
+			protected := filepath.Join(t.TempDir(), "protected")
+			if err := os.WriteFile(protected, []byte("foreign target\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "replaced" || mode == "missing" || mode == "symlink" || mode == "type" || mode == "hardlink" {
+				if err := os.Rename(data, data+".retained"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch mode {
+			case "replaced":
+				if err := os.WriteFile(data, []byte("replacement data\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink":
+				if err := os.Symlink(protected, data); err != nil {
+					t.Fatal(err)
+				}
+			case "type":
+				if err := os.Mkdir(data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "hardlink":
+				if err := os.Link(protected, data); err != nil {
+					t.Fatal(err)
+				}
+			case "wrong-metadata":
+				if err := os.Chmod(data, 0o640); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := map[string]managedMountObjectIdentityV1{}
+			for name, fd := range recorded {
+				var err error
+				before[name], err = managedMountObjectIdentityForFDV1(fd)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			proof := make(map[string]int, len(recorded))
+			for name, fd := range recorded {
+				proof[name] = fd
+			}
+			if mode == "missing-provenance" {
+				delete(proof, "private/data")
+			} else if mode == "invalid-descriptor" {
+				proof["private/data"] = -1
+			}
+			ctx := t.Context()
+			if mode == "canceled" {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			pathsBefore := map[string]unix.Stat_t{}
+			pathsMissing := map[string]bool{}
+			for _, name := range []string{root, filepath.Join(root, "private"), data, protected} {
+				var stat unix.Stat_t
+				if err := unix.Lstat(name, &stat); err == unix.ENOENT {
+					pathsMissing[name] = true
+				} else if err != nil {
+					t.Fatal(err)
+				} else {
+					pathsBefore[name] = stat
+				}
+			}
+			fdsBefore, err := os.ReadDir("/proc/self/fd")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := inspectManagedMountObjectsV1(ctx, recorded["."], objects, proof)
+			if mode == "exact" {
+				if err != nil || len(got) != len(objects) {
+					t.Fatal("exact retained paths refused", err)
+				}
+				for name, object := range got {
+					if object.Identity != before[name] {
+						t.Error("inspection changed object identity", name)
+					}
+					if _, err := unix.Write(object.FD, []byte("must not write")); err == nil {
+						t.Error("inspection returned a writable descriptor")
+					}
+					unix.Close(object.FD)
+				}
+			} else if err == nil || got != nil {
+				t.Fatal("unproved current path admitted", mode, err)
+			}
+			fdsAfter, err := os.ReadDir("/proc/self/fd")
+			if err != nil || len(fdsBefore) != len(fdsAfter) {
+				t.Fatal("inspection leaked a descriptor", len(fdsBefore), len(fdsAfter), err)
+			}
+			for name, fd := range recorded {
+				after, err := managedMountObjectIdentityForFDV1(fd)
+				if err != nil || after != before[name] {
+					t.Fatal("inspection changed retained metadata", name, err)
+				}
+			}
+			for name, before := range pathsBefore {
+				var after unix.Stat_t
+				if err := unix.Lstat(name, &after); err != nil || before.Dev != after.Dev || before.Ino != after.Ino ||
+					before.Mode != after.Mode || before.Uid != after.Uid || before.Gid != after.Gid || before.Nlink != after.Nlink ||
+					before.Size != after.Size || before.Mtim != after.Mtim || before.Ctim != after.Ctim {
+					t.Fatal("inspection mutated a declared or foreign path", name, err)
+				}
+			}
+			for name := range pathsMissing {
+				var stat unix.Stat_t
+				if err := unix.Lstat(name, &stat); err != unix.ENOENT {
+					t.Fatal("inspection created an absent path", name, err)
+				}
+			}
+			content, err := os.ReadFile(protected)
+			if err != nil || string(content) != "foreign target\n" {
+				t.Fatal("inspection changed foreign content", err)
+			}
+			if mode == "missing" {
+				if _, err := os.Lstat(data); !os.IsNotExist(err) {
+					t.Fatal("inspection created an absent object", err)
+				}
+			} else if mode == "replaced" || mode == "exact" || mode == "wrong-metadata" {
+				content, err := os.ReadFile(data)
+				want := "retained data\n"
+				if mode == "replaced" {
+					want = "replacement data\n"
+				}
+				if err != nil || string(content) != want {
+					t.Fatal("inspection changed path content", err)
+				}
+			}
+		})
+	}
+}
+
+func TestManagedMountInspectRequiresAuthorizationV1(t *testing.T) {
+	root := managedMountSetupHeldV1(t, t.TempDir())
+	objects := managedMountSetupDeclarationsV1()
+	for _, authorize := range []func(context.Context) error{nil, func(context.Context) error { return fmt.Errorf("owner changed") }} {
+		if got, err := inspectManagedMountSetupV1(t.Context(), managedMountSetupGeometryV1(), root, objects, nil, authorize); err == nil || got != nil {
+			t.Fatal("inspection accepted missing current authorization")
+		}
+	}
+	calls := 0
+	authorize := func(context.Context) error { calls++; return nil }
+	if got, err := inspectManagedMountSetupV1(t.Context(), managedMountSetupGeometryV1(), root, objects, map[string]*os.File{".": root}, authorize); err == nil || got != nil || calls != 1 {
+		t.Fatal("inspection accepted incomplete retained provenance", calls, err)
+	}
+}
+
+// The disposable guest oracle changes protected paths only after the real
+// preparation helper has retired. It independently checks the replacement and
+// foreign target before/after observation. The operator cannot traverse this tree.
+func TestManagedMountInspectNativeV1(t *testing.T) {
+	dir, mode := os.Getenv("REPLOY_TEST_MANAGED_SETUP_ROOT"), os.Getenv("REPLOY_TEST_MANAGED_INSPECT_MODE")
+	if dir == "" || mode == "" {
+		t.Skip("requires disposable subordinate-owned private-tree inspection fixture")
+	}
+	ops, state := managedMountSetupOwnerV1(t)
+	root := managedMountSetupHeldV1(t, filepath.Join(dir, "root"))
+	staging := managedMountSetupHeldV1(t, filepath.Join(dir, "staging"))
+	objects, geometry := managedMountSetupDeclarationsV1(), managedMountSetupGeometryV1()
+	prepared, err := prepareManagedMountSetupV1(t.Context(), ops, state, geometry, "private-setup", root, staging, objects, map[string]*os.File{".": root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded := map[string]*os.File{}
+	for name, object := range prepared {
+		recorded[name] = os.NewFile(uintptr(object.FD), name)
+		defer recorded[name].Close()
+	}
+	payload := []byte("native-inspection-preserved\n")
+	if _, err := unix.Pwrite(prepared["private/data"].FD, payload, 0); err != nil {
+		t.Fatal(err)
+	}
+	if fd, err := unix.Openat(int(root.Fd()), "private/data", unix.O_PATH|unix.O_CLOEXEC, 0); err == nil {
+		unix.Close(fd)
+		t.Fatal("fixture failed to deny parent traversal")
+	} else if err != unix.EACCES {
+		t.Fatal("fixture traversal failed for an unexpected reason", err)
+	}
+	if mode != "exact" && mode != "authorization" && mode != "canceled" {
+		if err := os.WriteFile(filepath.Join(dir, "inspect-ready"), []byte(mode), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(15 * time.Second)
+		for {
+			if _, err := os.Stat(filepath.Join(dir, "inspect-done")); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("disposable path oracle did not complete")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	before := map[string]managedMountObjectIdentityV1{}
+	for name, file := range recorded {
+		before[name], err = managedMountObjectIdentityForFDV1(int(file.Fd()))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls := 0
+	authorize := func(ctx context.Context) error {
+		calls++
+		if mode == "authorization" && calls == 2 {
+			return fmt.Errorf("fresh owner authority was withdrawn")
+		}
+		_, err := ops.ObserveEffects(ctx, state, geometry, "private-setup")
+		return err
+	}
+	ctx := t.Context()
+	if mode == "canceled" {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		cancel()
+	}
+	observed, err := inspectManagedMountSetupV1(ctx, geometry, root, objects, recorded, authorize)
+	if mode == "exact" {
+		if err != nil || len(observed) != len(prepared) || calls != 2 {
+			t.Fatal("protected current paths did not inspect", calls, err)
+		}
+		for name, object := range observed {
+			if object.Identity != prepared[name].Identity {
+				t.Error("inspection returned a different retained object", name)
+			}
+			flags, flagErr := unix.FcntlInt(uintptr(object.FD), unix.F_GETFD, 0)
+			if flagErr != nil || flags&unix.FD_CLOEXEC == 0 {
+				t.Error("inspection returned an inheritable descriptor", flagErr)
+			}
+			unix.Close(object.FD)
+		}
+	} else if err == nil || observed != nil {
+		t.Fatal("changed or unauthorized protected path admitted", mode, err)
+	}
+	for name, file := range recorded {
+		after, err := managedMountObjectIdentityForFDV1(int(file.Fd()))
+		if err != nil || after != before[name] {
+			t.Fatal("inspection changed retained metadata", name, err)
+		}
+	}
+	content := make([]byte, len(payload))
+	if n, err := unix.Pread(prepared["private/data"].FD, content, 0); err != nil || n != len(payload) || !reflect.DeepEqual(content, payload) {
+		t.Fatal("inspection changed retained content", n, err)
+	}
+	assertManagedMountSetupRetiredV1(t)
+	t.Log("native read-only inspection", mode, "retired; protected metadata/content unchanged; authorization checks", calls)
+}
+
+// Malformed path bytes must fail before JSON can rewrite them into a different
+// existing path, and before a namespace or setup helper can be created.
+func TestManagedMountSetupRejectsInvalidUTF8V1(t *testing.T) {
+	for _, malformed := range []string{"private/\xff", "private/\xc3", "private/\xed\xa0\x80"} {
+		for _, mode := range []string{"inspect-declaration", "prepare-declaration", "prepare-recorded"} {
+			t.Run(fmt.Sprintf("%s/%x", mode, malformed), func(t *testing.T) {
+				root := managedMountSetupHeldV1(t, t.TempDir())
+				objects := managedMountSetupDeclarationsV1()
+				recorded := map[string]*os.File{".": root, "private": root, "private/data": root}
+				if mode == "prepare-recorded" {
+					recorded[malformed] = root
+				} else {
+					objects[2].Path = malformed
+					delete(recorded, "private/data")
+					recorded[malformed] = root
+				}
+				calls := 0
+				authorize := func(ctx context.Context) error {
+					calls++
+					return ctx.Err()
+				}
+				var got map[string]preparedManagedMountObjectV1
+				var err error
+				if mode == "inspect-declaration" {
+					got, err = inspectManagedMountSetupV1(t.Context(), managedMountSetupGeometryV1(), root, objects, recorded, authorize)
+				} else {
+					// Exercise the shared preparation boundary without requiring native
+					// host mapping admission for a pre-serialization rejection.
+					got, err = runManagedMountSetupV1(t.Context(), managedMountSetupGeometryV1(), root, root, objects, recorded, false, authorize)
+				}
+				if calls != 1 {
+					t.Fatalf("helper reached fresh-release authorization: %d", calls)
+				}
+				if err == nil || !strings.Contains(err.Error(), "invalid UTF-8") || got != nil {
+					for _, object := range got {
+						unix.Close(object.FD)
+					}
+					t.Fatalf("malformed path did not refuse before helper creation: %v", err)
+				}
+				assertManagedMountSetupRetiredV1(t)
+			})
+		}
+	}
+}
