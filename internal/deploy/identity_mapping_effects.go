@@ -30,11 +30,19 @@ func (ops IdentityMappingOperationsV1) ObserveEffects(ctx context.Context, expec
 	if m.PendingOperation.Kind == "native-execute" && m.PendingOperation.Native != nil {
 		wanted = m.PendingOperation.Native.Active.numeric()
 	}
+	if m.PendingOperation.Storage != nil {
+		wanted = m.PendingOperation.Storage.Active.numeric()
+	}
 	if err != nil || !reflect.DeepEqual(canonical, wanted) {
 		return StateV1{}, fmt.Errorf("mapped create active geometry differs from its pending candidate: %v", err)
 	}
 	if err := ops.checkPending(ctx, state, operationID); err != nil {
 		return StateV1{}, err
+	}
+	if m.PendingOperation.Storage != nil {
+		if err := ops.observeManagedStorage(ctx, state); err != nil {
+			return StateV1{}, err
+		}
 	}
 	if err := ops.Operation.RequireHeld(); err != nil {
 		return StateV1{}, err

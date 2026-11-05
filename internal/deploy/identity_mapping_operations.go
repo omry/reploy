@@ -227,6 +227,12 @@ func (ops IdentityMappingOperationsV1) BeginEffects(ctx context.Context, expecte
 		if p.Native != nil {
 			active = p.Native.Active.numeric()
 		}
+		if p.Storage != nil {
+			active = p.Storage.Active.numeric()
+			if err := ops.observeManagedStorage(ctx, *state); err != nil {
+				return err
+			}
+		}
 		handles, err := ops.Evidence.Plan(ctx, cloneMappingStateV1(*state), active)
 		handles = append([]string(nil), handles...)
 		if err != nil || !reflect.DeepEqual(handles, p.OwnedObjects) {
@@ -255,6 +261,11 @@ func (ops IdentityMappingOperationsV1) Recover(ctx context.Context, expected Sta
 			if state.IdentityMapping.PendingOperation.Phase != "intent" {
 				return fmt.Errorf("effects-pending or verified candidates cannot be cancelled")
 			}
+			if state.IdentityMapping.PendingOperation.Storage != nil {
+				if err := ops.observeManagedStorage(ctx, *state); err != nil {
+					return err
+				}
+			}
 			if err := ops.Evidence.Unused(ctx, cloneMappingStateV1(*state)); err != nil {
 				return fmt.Errorf("cancellation lacks never-used proof: %w", err)
 			}
@@ -267,6 +278,9 @@ func (ops IdentityMappingOperationsV1) Recover(ctx context.Context, expected Sta
 	}
 	if expected.IdentityMapping.PendingOperation.Kind == "native-execute" {
 		return ops.recoverNative(ctx, expected)
+	}
+	if expected.IdentityMapping.PendingOperation.Storage != nil {
+		return ops.recoverManagedStorage(ctx, expected)
 	}
 	verified, err := ops.change(ctx, expected, func(state *StateV1) error {
 		if err := ops.Evidence.Verify(ctx, cloneMappingStateV1(*state)); err != nil {
@@ -298,7 +312,7 @@ func (ops IdentityMappingOperationsV1) Recover(ctx context.Context, expected Sta
 
 func (ops IdentityMappingOperationsV1) checkPending(ctx context.Context, expected StateV1, operationID string) error {
 	m := expected.IdentityMapping
-	if m == nil || m.PendingOperation == nil || (m.PendingOperation.Kind != "configure" && m.PendingOperation.Kind != "native-execute") || m.PendingOperation.OperationID != operationID ||
+	if m == nil || m.PendingOperation == nil || (m.PendingOperation.Kind != "configure" && m.PendingOperation.Kind != "native-execute" && m.PendingOperation.Kind != "managed-storage") || m.PendingOperation.OperationID != operationID ||
 		!reflect.DeepEqual(m.PendingOperation.ExpectedGeneration, expected.Current) || m.PendingOperation.Phase != "release-attempted" && !reflect.DeepEqual(m.PendingOperation.PriorAccepted, m.AdmittedGeneration) ||
 		m.PendingOperation.Phase == "intent" && m.PendingOperation.ExpectedRevision != m.Revision {
 		return fmt.Errorf("recovery requires its exact pending owner, operation and generations")
@@ -346,6 +360,9 @@ func (ops IdentityMappingOperationsV1) change(ctx context.Context, expected Stat
 		return state, nil
 	}
 	state.IdentityMapping.Revision = strconv.FormatUint(mappingDecimalV1(state.IdentityMapping.Revision)+1, 10)
+	if p := state.IdentityMapping.PendingOperation; p != nil && p.Storage != nil {
+		p.ExpectedRevision = state.IdentityMapping.Revision
+	}
 	content, err := EncodeStateV1(state)
 	if err != nil {
 		return before, err
