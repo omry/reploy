@@ -42,6 +42,7 @@ type IdentityMappingStateV1 struct {
 	AcceptedUIDs        *[]IdentityMappingIntervalV1 `json:"accepted_uids,omitempty"`
 	AcceptedGIDs        *[]IdentityMappingIntervalV1 `json:"accepted_gids,omitempty"`
 	NativeProcess       *string                      `json:"native_process,omitempty"`
+	ManagedStorage      []ManagedStorageResourceV1   `json:"managed_storage,omitempty"`
 }
 
 // IdentityMappingOperationV1 retains an inhibited candidate separately from
@@ -59,6 +60,7 @@ type IdentityMappingOperationV1 struct {
 	Phase              string                      `json:"phase"`
 	Inhibited          bool                        `json:"inhibited"`
 	Native             *NativeIdentityOperationV1  `json:"native,omitempty"`
+	Storage            *ManagedStorageOperationV1  `json:"storage,omitempty"`
 }
 
 func validateIdentityMappingStateV1(state StateV1) error {
@@ -172,6 +174,9 @@ func validateIdentityMappingStateV1(state StateV1) error {
 			return err
 		}
 	}
+	if err := validateManagedStorageStateV1(state); err != nil {
+		return err
+	}
 	return validateNativeMappingStateV1(m)
 }
 
@@ -234,5 +239,13 @@ func (g IdentityMappingGeometryV1) numeric() identitymapping.Geometry {
 		}
 	}
 	return result
+}
+
+// Geometry decodes a canonical stored map without granting admission.
+func (g IdentityMappingGeometryV1) Geometry() (identitymapping.Geometry, error) {
+	if err := requireCanonicalMappingGeometryV1(g); err != nil {
+		return identitymapping.Geometry{}, err
+	}
+	return g.numeric(), nil
 }
 func geometryPointerV1(g identitymapping.Geometry) *identitymapping.Geometry { return &g }

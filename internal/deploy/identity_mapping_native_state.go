@@ -62,6 +62,9 @@ func validateNativeMappingStateV1(m *IdentityMappingStateV1) error {
 	if p == nil {
 		return nil
 	}
+	if p.Kind == "managed-storage" && p.Storage != nil {
+		return nil // The complete storage binding was validated with StateV1.
+	}
 	if p.Kind == "configure" && p.Native == nil {
 		return nil
 	}
