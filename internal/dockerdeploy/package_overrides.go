@@ -46,7 +46,7 @@ func LoadStagedPackageOverridesV1(
 			raw.Environment.ID, document.Environment.ID,
 		)
 	}
-	if err := raw.CheckIdentityMappingDeclaration(document); err != nil {
+	if err := raw.CheckDeclarationsV1(document); err != nil {
 		return deploy.PackageOverridesV1{}, deploy.ResolvedPackageOverridesV1{}, deploy.PackageOverrideIntentV1{}, err
 	}
 	resolved, err := deploy.ResolvePackageOverridesV1(raw, absoluteDir, registry.NormalizePackageOverrideV1)

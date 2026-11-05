@@ -370,85 +370,89 @@ func TestInstalledServicePrivateStartFailuresFreezeClassificationBeforeCleanup(t
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			var output bytes.Buffer
-			fixture := newWorkloadLifecycleFixtureV1(t)
-			fixture.startError, fixture.injectError = test.composeErr, test.injectErr
-			startupCtx, timing, finish := newInstalledServiceStartupBudgetV1(t.Context(), 0, 0, 100*time.Millisecond, &output)
-			defer finish()
-			appDeadline, ok := startupCtx.Deadline()
-			if !ok {
-				t.Fatal("startup context has no deadline")
-			}
-			if !test.timeout {
-				fixture.onStop = func() {
-					for time.Now().Before(appDeadline) {
-						time.Sleep(time.Millisecond)
-					}
-					time.Sleep(5 * time.Millisecond)
+			// Keep filesystem latency outside the synthetic startup deadline.
+			// Cleanup must still cross that deadline after an ordinary failure.
+			synctest.Test(t, func(t *testing.T) {
+				var output bytes.Buffer
+				fixture := newWorkloadLifecycleFixtureV1(t)
+				fixture.startError, fixture.injectError = test.composeErr, test.injectErr
+				startupCtx, timing, finish := newInstalledServiceStartupBudgetV1(t.Context(), 0, 0, 100*time.Millisecond, &output)
+				defer finish()
+				appDeadline, ok := startupCtx.Deadline()
+				if !ok {
+					t.Fatal("startup context has no deadline")
 				}
-			}
-			var failureCleanupContext context.Context
-			var failureCleanupCancel context.CancelFunc
-			baseHook := installedServiceFailureCleanupHookV1(t.Context(), startupCtx, timing, finish, &failureCleanupContext, &failureCleanupCancel)
-			failureHook := func(cause error) context.Context {
+				if !test.timeout {
+					fixture.onStop = func() {
+						for time.Now().Before(appDeadline) {
+							time.Sleep(time.Millisecond)
+						}
+						time.Sleep(5 * time.Millisecond)
+					}
+				}
+				var failureCleanupContext context.Context
+				var failureCleanupCancel context.CancelFunc
+				baseHook := installedServiceFailureCleanupHookV1(t.Context(), startupCtx, timing, finish, &failureCleanupContext, &failureCleanupCancel)
+				failureHook := func(cause error) context.Context {
+					if test.timeout {
+						if !errors.Is(cause, context.DeadlineExceeded) {
+							t.Fatalf("timeout failure hook observed %v", cause)
+						}
+					} else {
+						want := test.composeErr
+						if want == nil {
+							want = test.injectErr
+						}
+						if !errors.Is(cause, want) {
+							t.Fatalf("ordinary failure hook observed %v, want %v", cause, want)
+						}
+					}
+					return baseHook(cause)
+				}
+				run := func(command CommandSpec, options RunOptions) error {
+					if test.timeout && len(command.Args) == 2 && command.Args[0] == "compose" && command.Args[1] == "up" {
+						if err := fixture.run(command, options); err != nil {
+							return err
+						}
+						<-options.Context.Done()
+						return options.Context.Err()
+					}
+					return fixture.run(command, options)
+				}
+				started, startErr := startAndInjectPrivateWorkloadEnvironmentWithFailureCleanupHookV1(
+					startupCtx, fixture.command, "demo", testApplicationSandboxPlanV1(1000, 1000), fixture.environment,
+					RunOptions{}, run, fixture.inject, failureHook,
+				)
+				binding, err := privateWorkloadRecordV1(fixture.command, fixture.environment.RuntimeBinding)
+				if err != nil {
+					t.Fatal(err)
+				}
+				lifecycle := &workloadLifecycleV1{
+					command: fixture.command, containerName: "demo", options: RunOptions{}, operation: func(_ context.Context, action func(*deploy.OperationLock) error) error {
+						return action(fixture.operation)
+					},
+					binding: binding, started: started, run: run,
+				}
+				finalErr := timing.finish(startupCtx, startErr, finish, func(cause error) error {
+					return cleanupInstalledServiceStartupFailureV1(t.Context(), lifecycle, nil, failureCleanupContext, failureCleanupCancel, cause)
+				})
 				if test.timeout {
-					if !errors.Is(cause, context.DeadlineExceeded) {
-						t.Fatalf("timeout failure hook observed %v", cause)
+					if !errors.Is(finalErr, context.DeadlineExceeded) || !strings.Contains(finalErr.Error(), "installed service application startup timed out") {
+						t.Fatalf("true timeout was reclassified: %v", finalErr)
 					}
-				} else {
-					want := test.composeErr
-					if want == nil {
-						want = test.injectErr
-					}
-					if !errors.Is(cause, want) {
-						t.Fatalf("ordinary failure hook observed %v, want %v", cause, want)
-					}
+					return
 				}
-				return baseHook(cause)
-			}
-			run := func(command CommandSpec, options RunOptions) error {
-				if test.timeout && len(command.Args) == 2 && command.Args[0] == "compose" && command.Args[1] == "up" {
-					if err := fixture.run(command, options); err != nil {
-						return err
-					}
-					<-options.Context.Done()
-					return options.Context.Err()
+				want := test.composeErr
+				if want == nil {
+					want = test.injectErr
 				}
-				return fixture.run(command, options)
-			}
-			started, startErr := startAndInjectPrivateWorkloadEnvironmentWithFailureCleanupHookV1(
-				startupCtx, fixture.command, "demo", testApplicationSandboxPlanV1(1000, 1000), fixture.environment,
-				RunOptions{}, run, fixture.inject, failureHook,
-			)
-			binding, err := privateWorkloadRecordV1(fixture.command, fixture.environment.RuntimeBinding)
-			if err != nil {
-				t.Fatal(err)
-			}
-			lifecycle := &workloadLifecycleV1{
-				command: fixture.command, containerName: "demo", options: RunOptions{}, operation: func(_ context.Context, action func(*deploy.OperationLock) error) error {
-					return action(fixture.operation)
-				},
-				binding: binding, started: started, run: run,
-			}
-			finalErr := timing.finish(startupCtx, startErr, finish, func(cause error) error {
-				return cleanupInstalledServiceStartupFailureV1(t.Context(), lifecycle, nil, failureCleanupContext, failureCleanupCancel, cause)
+				if !errors.Is(finalErr, want) || errors.Is(finalErr, context.DeadlineExceeded) || strings.Contains(output.String(), "installed service startup timed out") {
+					t.Fatalf("ordinary failure classification changed: error=%v output=%q", finalErr, output.String())
+				}
+				if fixture.stops != 1 {
+					t.Fatalf("ordinary failure cleanup ran %d stops", fixture.stops)
+				}
 			})
-			if test.timeout {
-				if !errors.Is(finalErr, context.DeadlineExceeded) || !strings.Contains(finalErr.Error(), "installed service application startup timed out") {
-					t.Fatalf("true timeout was reclassified: %v", finalErr)
-				}
-				return
-			}
-			want := test.composeErr
-			if want == nil {
-				want = test.injectErr
-			}
-			if !errors.Is(finalErr, want) || errors.Is(finalErr, context.DeadlineExceeded) || strings.Contains(output.String(), "installed service startup timed out") {
-				t.Fatalf("ordinary failure classification changed: error=%v output=%q", finalErr, output.String())
-			}
-			if fixture.stops != 1 {
-				t.Fatalf("ordinary failure cleanup ran %d stops", fixture.stops)
-			}
 		})
 	}
 }

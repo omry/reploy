@@ -28,6 +28,7 @@ const PackageOverrideIntentSchemaV1 = "package-override-intent-v1"
 // beside a staged deployment. It is not part of the published blueprint.
 type PackageOverridesV1 struct {
 	Environment PackageOverridesEnvironmentV1 `yaml:"environment"`
+	Docker      DockerOverridesV1             `yaml:"docker,omitempty"`
 }
 
 type PackageOverridesEnvironmentV1 struct {
@@ -59,9 +60,10 @@ func (choice PackageOverrideChoiceV1) Empty() bool {
 // lexical absolute local paths. Resolving it performs no filesystem access so
 // unused mappings remain completely unobserved.
 type ResolvedPackageOverridesV1 struct {
-	EnvironmentID string
-	Additions     map[string][]string
-	Providers     map[string]map[string]ResolvedPackageOverrideChoiceV1
+	EnvironmentID      string
+	Additions          map[string][]string
+	PublishedAddresses map[string]string
+	Providers          map[string]map[string]ResolvedPackageOverrideChoiceV1
 }
 
 type ResolvedPackageOverrideChoiceV1 struct {
@@ -75,10 +77,11 @@ type ResolvedPackageOverrideChoiceV1 struct {
 // content is bound separately by source-input, retained source-artifact,
 // build-environment, and output-artifact digests.
 type PackageOverrideIntentV1 struct {
-	Schema        string                          `json:"schema"`
-	EnvironmentID string                          `json:"environment_id"`
-	Additions     []PackageAdditionIntentV1       `json:"additions,omitempty"`
-	Choices       []PackageOverrideIntentChoiceV1 `json:"choices"`
+	Schema             string                          `json:"schema"`
+	EnvironmentID      string                          `json:"environment_id"`
+	Additions          []PackageAdditionIntentV1       `json:"additions,omitempty"`
+	Choices            []PackageOverrideIntentChoiceV1 `json:"choices"`
+	PublishedAddresses map[string]string               `json:"published_addresses,omitempty"`
 }
 
 type PackageAdditionIntentV1 struct {
@@ -118,7 +121,7 @@ func DecodePackageOverridesV1(content []byte) (PackageOverridesV1, error) {
 		}
 		return PackageOverridesV1{}, fmt.Errorf("decode package overrides: multiple YAML documents are not supported")
 	}
-	if err := validateMappingOverridePresenceV1(content, overrides.IdentityMappingOverride() != nil); err != nil {
+	if err := validateMappingOverridePresenceV1(content, overrides.IdentityMappingOverride() != nil || len(overrides.PublishedAddressesV1()) != 0); err != nil {
 		return PackageOverridesV1{}, err
 	}
 	if err := ValidatePackageOverridesV1(overrides); err != nil {
@@ -183,7 +186,10 @@ func ValidatePackageOverridesV1(overrides PackageOverridesV1) error {
 	if err := overrides.IdentityMappingOverride().Validate(); err != nil {
 		return err
 	}
-	if environment.PackageOverrides == nil && overrides.IdentityMappingOverride() == nil {
+	if err := validatePublishedAddressesV1(overrides.PublishedAddressesV1()); err != nil {
+		return err
+	}
+	if environment.PackageOverrides == nil && overrides.IdentityMappingOverride() == nil && len(overrides.PublishedAddressesV1()) == 0 {
 		return fmt.Errorf("package overrides environment.package_overrides must use a mapping")
 	}
 	for _, provider := range sortedKeys(environment.PackageAdditions) {
@@ -389,8 +395,8 @@ func ResolvePackageOverridesV1(
 		}
 	}
 	resolved := ResolvedPackageOverridesV1{
-		EnvironmentID: overrides.Environment.ID,
-		Providers:     map[string]map[string]ResolvedPackageOverrideChoiceV1{},
+		EnvironmentID: overrides.Environment.ID, PublishedAddresses: overrides.PublishedAddressesV1(),
+		Providers: map[string]map[string]ResolvedPackageOverrideChoiceV1{},
 	}
 	if len(overrides.Environment.PackageAdditions) != 0 {
 		resolved.Additions = map[string][]string{}
@@ -480,7 +486,7 @@ func ResolvePackageOverrideWorkspaceRootV1(value string) (string, error) {
 
 func (overrides ResolvedPackageOverridesV1) Intent() (PackageOverrideIntentV1, error) {
 	intent := PackageOverrideIntentV1{
-		Schema: PackageOverrideIntentSchemaV1, EnvironmentID: overrides.EnvironmentID,
+		Schema: PackageOverrideIntentSchemaV1, EnvironmentID: overrides.EnvironmentID, PublishedAddresses: overrides.PublishedAddresses,
 		Choices: []PackageOverrideIntentChoiceV1{},
 	}
 	for _, provider := range sortedKeys(overrides.Additions) {
@@ -542,6 +548,9 @@ func ValidatePackageOverrideIntentV1(intent PackageOverrideIntentV1) error {
 				return fmt.Errorf("package override intent additions must be unique and sorted by provider and requirement")
 			}
 		}
+	}
+	if err := validatePublishedAddressesV1(intent.PublishedAddresses); err != nil {
+		return err
 	}
 	if intent.Choices == nil {
 		return fmt.Errorf("package override intent choices must use an array")

@@ -3469,6 +3469,10 @@ Usage: reploy overrides [OPTIONS]
 Open the interactive editor for a staged deployment's development overrides.
 Existing overrides.yaml content is loaded automatically. Keep the base image
 from the blueprint or enter an exact image name.
+Press N to edit named endpoint publication addresses or reset to From blueprint.
+0.0.0.0 publishes on all IPv4 interfaces. Endpoint ports remain unchanged.
+Saving changes overrides.yaml only; build and use the existing install/lifecycle
+commands to apply changes. Saving does not start or restart a workload.
 Press A and enter os:PACKAGE to add an exact native package through the base
 image's supported OS provider, or enter a Python package name to override its source.
 The workspace root is optional and unset by default. Configure it inside the

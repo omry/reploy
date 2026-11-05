@@ -235,13 +235,15 @@ func isolatedPythonForTest(t *testing.T) string {
 
 func TestSelectedPipManylinuxPolicyHooksRemainAuthoritative(t *testing.T) {
 	python := isolatedPythonForTest(t)
-	program := `import inspect,json,sys,types
+	program := `import importlib,inspect,json,sys,types
 from pip._vendor.packaging import _manylinux
-_manylinux._have_compatible_abi=lambda *args:True
 def generated(arch,release,module):
-    _manylinux._get_glibc_version=lambda:release
     if module is None: sys.modules.pop("_manylinux",None)
     else: sys.modules["_manylinux"]=module
+    # Each case models a fresh interpreter, including pip's cached hook lookup.
+    importlib.reload(_manylinux)
+    _manylinux._have_compatible_abi=lambda *args:True
+    _manylinux._get_glibc_version=lambda:release
     parameters=inspect.signature(_manylinux.platform_tags).parameters
     if len(parameters)==1: return set(_manylinux.platform_tags([arch]))
     return set(_manylinux.platform_tags("linux_"+arch,arch))

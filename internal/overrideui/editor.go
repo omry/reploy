@@ -129,6 +129,8 @@ const (
 	screenExit
 	screenBase
 	screenBaseReference
+	screenEndpoints
+	screenEndpointAddress
 )
 
 type versionsLoadedMsg struct {
@@ -193,6 +195,8 @@ type model struct {
 	projectCatalogBusy   bool
 	results              []string
 	resultCursor         int
+	publishedAddresses   map[string]string
+	endpointCursor       int
 	baseImage            string
 	versionCache         map[string][]string
 	versionError         map[string]string
@@ -339,6 +343,9 @@ func newModel(config Config) (*model, error) {
 			return nil, fmt.Errorf("resolve package override editor workspace root: %w", err)
 		}
 	}
+	if err := raw.CheckDeclarationsV1(config.Document); err != nil {
+		return nil, err
+	}
 	items, err := editorItems(config.Document, overlay, raw)
 	if err != nil {
 		return nil, err
@@ -355,7 +362,7 @@ func newModel(config Config) (*model, error) {
 	validationSaveInput.Width = 68
 	m := &model{
 		ctx: config.Context, deploymentDir: deploymentDir, document: config.Document,
-		raw: raw, original: snapshot,
+		raw: raw, original: snapshot, publishedAddresses: raw.PublishedAddressesV1(),
 		save: func(ctx context.Context, original editorSnapshot, overrides deploy.PackageOverridesV1) (editorSnapshot, error) {
 			return saveSidecarAt(ctx, deploymentDir, original, overrides)
 		},
@@ -687,6 +694,10 @@ func (m *model) View() string {
 		}
 	case screenExit:
 		content = m.viewExit()
+	case screenEndpoints:
+		content = m.viewEndpoints()
+	case screenEndpointAddress:
+		content = m.viewInputDialog("Published host address: "+m.endpointName(), "Enter an IPv4 or IPv6 address without a port. 0.0.0.0 publishes on all IPv4 interfaces. Enter apply · Esc cancel")
 	case screenBase:
 		content = m.viewBaseChoice()
 	case screenBaseReference:
@@ -966,6 +977,10 @@ func (m *model) viewMain() string {
 		body.WriteString(warnStyle.Render("Unused override: " + item.Provider + " / " + item.Package))
 	}
 	body.WriteString("\n\n")
+	if len(m.endpointNames()) != 0 {
+		body.WriteString(m.endpointSummary())
+		body.WriteString("N edit endpoint addresses\n\n")
+	}
 	compact := m.width > 0 && m.width < 90
 	const providerWidth = 10
 	const packageWidth = 28
@@ -1296,6 +1311,10 @@ func (m *model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case screenExit:
 		return m.updateExit(key)
+	case screenEndpoints:
+		return m.updateEndpoints(key)
+	case screenEndpointAddress:
+		return m.updateEndpointAddress(key)
 	case screenBase:
 		return m.updateBaseChoice(key)
 	case screenBaseReference:
@@ -1446,6 +1465,11 @@ func (m *model) updateValidationOverlay(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *model) updateMain(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
+	case "n", "N":
+		if len(m.endpointNames()) != 0 {
+			m.screen = screenEndpoints
+			m.endpointCursor = 0
+		}
 	case "up":
 		m.cursor = clamp(m.cursor-1, -1, max(-1, len(m.items)-1))
 	case "down":
@@ -1919,6 +1943,13 @@ func (m *model) resetCurrentOverride() {
 
 func (m *model) buildRaw() deploy.PackageOverridesV1 {
 	raw := m.raw
+	raw.Docker = deploy.DockerOverridesV1{}
+	if len(m.publishedAddresses) != 0 {
+		raw.Docker.Workload.Endpoints = map[string]deploy.DockerEndpointOverrideV1{}
+		for name, address := range m.publishedAddresses {
+			raw.Docker.Workload.Endpoints[name] = deploy.DockerEndpointOverrideV1{Publish: deploy.DockerPublicationOverrideV1{Address: address}}
+		}
+	}
 	raw.Environment.ID = m.document.Environment.ID
 	raw.Environment.Vars = cloneVars(raw.Environment.Vars)
 	raw.Environment.Base = nil
@@ -2732,7 +2763,7 @@ func saveSidecarAt(
 			document.Environment.ID,
 		)
 	}
-	if err := overrides.CheckIdentityMappingDeclaration(document); err != nil {
+	if err := overrides.CheckDeclarationsV1(document); err != nil {
 		return editorSnapshot{}, err
 	}
 	content, err := deploy.EncodePackageOverridesV1(overrides)

@@ -404,6 +404,9 @@ Installation transfers the staged build and retained blueprint, but not the
 sidecar or its source locators; an installed deployment never reads the source
 checkout.
 
+Named endpoint host addresses can also be changed in the existing editor. See
+[Endpoint publication address overrides](ENDPOINT_ADDRESS_OVERRIDES.md).
+
 In an interactive terminal, `reploy build` starts one build transaction
 immediately. A fast completion prints the concise result without opening a
 panel. A longer build renders a compact inline progress panel beneath the

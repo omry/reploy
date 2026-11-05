@@ -50,7 +50,7 @@ func ValidatedBuildInputs(
 	deploymentDir string,
 	platform blueprint.Platform,
 ) (ValidatedBuildInputsV1, error) {
-	if err := overrides.CheckIdentityMappingDeclaration(document); err != nil {
+	if err := overrides.CheckDeclarationsV1(document); err != nil {
 		return ValidatedBuildInputsV1{}, err
 	}
 	blueprintDigest, err := blueprint.DocumentDigestV1(document)

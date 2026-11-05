@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"fmt"
+	"net"
 	"slices"
 	"sort"
 	"strconv"
@@ -205,7 +206,7 @@ func RenderDockerInputs(plan DockerExecutionPlan, controlScript string) (DockerR
 	statusEndpoints := make([]string, 0, len(endpointNames))
 	for _, name := range endpointNames {
 		endpoint := plan.Workload.Endpoints[name]
-		statusEndpoints = append(statusEndpoints, fmt.Sprintf("%s=%s://%s:%d", name, endpoint.Scheme, endpoint.PublishAddress, endpoint.PublishedPort))
+		statusEndpoints = append(statusEndpoints, fmt.Sprintf("%s=%s://%s", name, endpoint.Scheme, net.JoinHostPort(strings.Trim(endpoint.PublishAddress, "[]"), strconv.Itoa(endpoint.PublishedPort))))
 	}
 	return DockerRenderedInputs{
 		Compose: compose, Environment: environment, DryRun: dryRun,

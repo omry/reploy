@@ -1,0 +1,2 @@
+kind: Added
+body: Override named Docker endpoint publication addresses in overrides.yaml or the development overrides editor, with the same effective address in staging and installed lifecycle operations. Health checks also use the running workload’s recorded private launcher mode.

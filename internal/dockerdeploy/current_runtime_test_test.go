@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -120,5 +121,36 @@ func currentRuntimeTestBackend(t *testing.T, dir string, current CurrentBuild, p
 			}
 			return nil
 		},
+	}
+}
+
+func TestRunCurrentRuntimeTestV1UsesConfirmedLauncherMode(t *testing.T) {
+	for _, private := range []bool{false, true} {
+		t.Run(fmt.Sprint(private), func(t *testing.T) {
+			dir := t.TempDir()
+			current, _ := runtimeCurrentBuildFixture(t)
+			planned := CurrentRuntimePlanV1{Docker: DockerExecutionPlan{PrivateEnvironment: !private, Workload: &WorkloadExecutionPlan{Endpoints: map[string]EndpointExecutionPlan{"https": {PublishAddress: "0.0.0.0", ProbeHost: "127.0.0.1", PublishedPort: 18075, Readiness: &blueprint.Readiness{Path: "/ready"}}}}}}
+			order := []string{}
+			backend := currentRuntimeTestBackend(t, dir, current, planned, &order)
+			backend.readLifecycle = func(held *deploy.OperationLock) (deploy.WorkloadLifecycleV1, bool, error) {
+				if err := held.RequireHeld(); err != nil {
+					t.Fatal(err)
+				}
+				return deploy.WorkloadLifecycleV1{State: "up", ContainerID: strings.Repeat("a", 64), StartupComplete: true, TransferClaimed: private, HandoffComplete: private}, true, nil
+			}
+			original := backend.requireInputs
+			backend.requireInputs = func(held *deploy.OperationLock, dir string, got CurrentRuntimePlanV1) error {
+				if got.Docker.PrivateEnvironment != private {
+					t.Fatalf("launcher mode=%v want=%v", got.Docker.PrivateEnvironment, private)
+				}
+				if got.Docker.Workload.Endpoints["https"].PublishAddress != "0.0.0.0" {
+					t.Fatal("health changed publication address")
+				}
+				return original(held, dir, got)
+			}
+			if err := runCurrentRuntimeTestV1(t.Context(), CurrentRuntimeTestInputV1{DeploymentDir: dir, Timeout: 17 * time.Second}, backend); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

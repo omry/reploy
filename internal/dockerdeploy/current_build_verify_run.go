@@ -123,9 +123,10 @@ func verifyCurrentBuildV1(
 		return VerifyCurrentBuildResultV1{}, fmt.Errorf("current build is missing; run `reploy build`")
 	}
 	runtime, err := backend.plan(CurrentRuntimePlanInputV1{
-		DeploymentDir: dir,
-		Current:       current,
-		Runtime:       input.Runtime,
+		DeploymentDir:                    dir,
+		Current:                          current,
+		Runtime:                          input.Runtime,
+		RequireCurrentPublishedAddresses: true,
 	})
 	if err != nil {
 		return VerifyCurrentBuildResultV1{}, fmt.Errorf("plan current build verification: %w", err)

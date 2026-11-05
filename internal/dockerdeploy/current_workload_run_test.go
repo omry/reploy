@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +49,33 @@ func TestRunCurrentWorkloadV1OrdersPrecheckPublicationFinalGateAndLaunch(t *test
 	want := []string{"acquire", "store", "state", "admit up", "current", "plan", "invocation", "precheck", "publish", "lifecycle up", "acquire", "complete"}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("order = %v, want %v", order, want)
+	}
+}
+
+func TestRunCurrentWorkloadV1ChecksAddressIntentOnlyForLaunch(t *testing.T) {
+	for _, action := range []string{"up", "restart", "down"} {
+		t.Run(action, func(t *testing.T) {
+			dir := t.TempDir()
+			current, _ := runtimeCurrentBuildFixture(t)
+			planned := CurrentRuntimePlanV1{Docker: DockerExecutionPlan{Workload: &WorkloadExecutionPlan{Command: "serve"}}}
+			order := []string{}
+			backend := currentWorkloadRunTestBackend(t, dir, current, planned, &order)
+			stale := errors.New("published-address overrides changed")
+			backend.plan = func(input CurrentRuntimePlanInputV1) (CurrentRuntimePlanV1, error) {
+				if input.RequireCurrentPublishedAddresses {
+					return CurrentRuntimePlanV1{}, stale
+				}
+				return planned, nil
+			}
+			err := runCurrentWorkloadV1(t.Context(), CurrentWorkloadRunInputV1{DeploymentDir: dir, Action: action}, backend)
+			if action == "down" {
+				if err != nil || !slices.Contains(order, "lifecycle down") || slices.Contains(order, "owned stop") {
+					t.Fatalf("sidecar edit prevented hook-aware stop: err=%v order=%v", err, order)
+				}
+			} else if !errors.Is(err, stale) || slices.Contains(order, "publish") || slices.Contains(order, "lifecycle "+action) {
+				t.Fatalf("stale launch was not refused before publication: err=%v order=%v", err, order)
+			}
+		})
 	}
 }
 

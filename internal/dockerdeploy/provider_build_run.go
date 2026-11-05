@@ -361,13 +361,14 @@ func runLockedProviderBuildV1(
 	}
 
 	dockerPlan, err := PlanDockerExecution(document, DockerPlanContext{
-		DeploymentDir:     deploymentDir,
-		Phase:             blueprint.PhaseStaged,
-		GeneratedImage:    providerBuildPlanImage,
-		Host:              input.Runtime.Host,
-		UID:               input.Runtime.UID,
-		GID:               input.Runtime.GID,
-		SupplementaryGIDs: append([]uint32(nil), input.Runtime.SupplementaryGIDs...),
+		PublishedAddresses: packageOverrideIntent.PublishedAddresses,
+		DeploymentDir:      deploymentDir,
+		Phase:              blueprint.PhaseStaged,
+		GeneratedImage:     providerBuildPlanImage,
+		Host:               input.Runtime.Host,
+		UID:                input.Runtime.UID,
+		GID:                input.Runtime.GID,
+		SupplementaryGIDs:  append([]uint32(nil), input.Runtime.SupplementaryGIDs...),
 	})
 	if err != nil {
 		return LockedProviderBuildExecutionResultV1{}, fmt.Errorf("plan provider build runtime: %w", err)

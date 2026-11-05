@@ -1,0 +1,237 @@
+blueprint:
+  schema: 1
+  version: 0.1.0
+  requires_reploy: ">=0.8.0.dev2"
+  compatibility:
+    platforms: [linux/amd64, linux/arm64]
+
+environment:
+  id: arbiter
+  base:
+    image: python:3.11-slim
+  applications:
+    application:
+      packages:
+        python:
+          requirements: [arbiter-server]
+      options:
+        arbiter-suite:
+          description: Install the full Arbiter suite.
+          packages:
+            python:
+              requirements: [arbiter-suite]
+        imap:
+          description: Receive email through IMAP.
+          packages:
+            python:
+              requirements: [arbiter-imap]
+        smtp:
+          description: Send email through SMTP.
+          packages:
+            python:
+              requirements: [arbiter-smtp]
+      executables:
+        server:
+          source: python
+          binary: arbiter-server
+          argv_prefix:
+            - --config-dir
+            - /deployment/conf
+            - --config-name
+            - arbiter-server
+          argv_suffix:
+            - arbiter.server.bind.host={{ reploy.workload.endpoints.https.bind.address }}
+            - arbiter.server.bind.port={{ reploy.workload.endpoints.https.bind.port }}
+            - arbiter.server.public.scheme={{ environment.workload.endpoints.https.scheme }}
+            - arbiter.server.public.host={{ reploy.workload.endpoints.https.publish.address }}
+            - arbiter.server.public.port={{ reploy.workload.endpoints.https.publish.port }}
+            - arbiter.storage.server_data_dir=/data/server
+            - arbiter.storage.plugin_data_dir=/data/plugins
+            - arbiter.deployment_scope={{ reploy.phase }}
+  allow_concurrent: auto
+  runtime:
+    network:
+      public: allow
+      local: allow
+  terminal:
+    color_env: ARBITER_COLOR
+  install:
+    target:
+      default_path: /opt/{{ environment.id }}
+    system:
+      account:
+        user: arbiter
+        group: arbiter
+        on_missing: create
+    success:
+      lines:
+        - "server url: {{ environment.workload.endpoints.https.scheme }}://{{ reploy.workload.endpoints.https.publish.address }}:{{ reploy.workload.endpoints.https.publish.port }}"
+        - "client command: arbiter arbiter.url={{ environment.workload.endpoints.https.scheme }}://{{ reploy.workload.endpoints.https.publish.address }}:{{ reploy.workload.endpoints.https.publish.port }} info server"
+  mounts:
+    deployment:
+      target: /deployment
+      writable: false
+      update_policy: preserve
+    data:
+      target: /data
+      writable: true
+      update_policy: preserve
+  commands:
+    serve:
+      executable: application.server
+      argv: [serve]
+    config_check:
+      executable: application.server
+      trigger: [config, check]
+      native_command: true
+      deployed_command: true
+      forward_flags: [--live]
+      argv: [config, check]
+    bootstrap_server:
+      executable: application.server
+      trigger: [bootstrap, server]
+      native_command: true
+      forward_flags: [--force]
+      argv: [bootstrap, --server]
+      order: [binary, prefix, command, forwarded]
+      mounts:
+        deployment:
+          writable: true
+    bootstrap:
+      executable: application.server
+      trigger: [bootstrap]
+      native_command: true
+      forward_flags:
+        - --plugin
+        - --plugins
+        - --account
+        - --accounts
+        - --policy
+        - --policies
+        - --variant
+        - --list-variants
+        - --force
+        - --dry-mode
+      argv: [bootstrap]
+      order: [binary, prefix, command, forwarded]
+      mounts:
+        deployment:
+          writable: true
+    config_activate:
+      executable: application.server
+      trigger: [config, activate]
+      native_command: true
+      deployed_command: true
+      forward_flags: [--plugin, --plugins, --account, --accounts]
+      argv: [config, activate]
+      order: [binary, prefix, command, forwarded]
+      mounts:
+        deployment:
+          writable: true
+    config_deactivate:
+      executable: application.server
+      trigger: [config, deactivate]
+      native_command: true
+      deployed_command: true
+      forward_flags: [--plugin, --plugins, --account, --accounts]
+      argv: [config, deactivate]
+      order: [binary, prefix, command, forwarded]
+      mounts:
+        deployment:
+          writable: true
+    config_show:
+      executable: application.server
+      trigger: [config, show]
+      native_command: true
+      deployed_command: true
+      forward_flags: [--resolve, --package, --value]
+      argv: [config, show]
+      mounts:
+        deployment:
+          writable: false
+        data:
+          writable: false
+    env_bootstrap:
+      executable: application.server
+      trigger: [env, bootstrap]
+      native_command: true
+      argv: [env, bootstrap]
+      mounts:
+        deployment:
+          writable: true
+    env_check:
+      executable: application.server
+      trigger: [env, check]
+      native_command: true
+      deployed_command: true
+      argv: [env, check]
+      mounts:
+        deployment:
+          writable: false
+        data:
+          writable: false
+    version:
+      executable: application.server
+      trigger: [version]
+      native_command: true
+      deployed_command: true
+      forward_flags: [--json]
+      argv: [version]
+      order: [binary, prefix, command, forwarded]
+      mounts:
+        deployment:
+          writable: false
+        data:
+          writable: false
+    plugins_list:
+      executable: application.server
+      trigger: [plugins, list]
+      native_command: true
+      deployed_command: true
+      forward_flags: [--json]
+      argv: [plugins, list]
+      order: [binary, prefix, command, forwarded]
+      mounts:
+        deployment:
+          writable: false
+        data:
+          writable: false
+  workload:
+    command: serve
+    endpoints:
+      https:
+        scheme: https
+        port: 8075
+        readiness:
+          path: /_health_
+          tls_verify: false
+    runtime:
+      before_start:
+        - actions:
+            - environment: [config, check]
+      after_start:
+        - requires:
+            endpoints: [https]
+          actions:
+            - environment: [config, check, --live]
+
+docker:
+  mounts:
+    deployment:
+      extends: environment.mounts.deployment
+      mode: managed-bind
+      source: .
+    data:
+      extends: environment.mounts.data
+      mode: managed-bind
+      source: data
+  workload:
+    endpoints:
+      https:
+        extends: environment.workload.endpoints.https
+        bind:
+          address: 0.0.0.0
+        publish:
+          address: 127.0.0.1
+          staging: 18075
+          deployed: 8075

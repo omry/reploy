@@ -25,6 +25,7 @@ type currentRuntimeTestBackendV1 struct {
 	acquire       func(context.Context, string) (*deploy.OperationLock, error)
 	newStore      func(string) (providerstore.Store, error)
 	readState     func(*deploy.OperationLock) (deploy.StateV1, bool, error)
+	readLifecycle func(*deploy.OperationLock) (deploy.WorkloadLifecycleV1, bool, error)
 	loadCurrent   currentBuildLoader
 	plan          func(CurrentRuntimePlanInputV1) (CurrentRuntimePlanV1, error)
 	matches       func(CurrentBuild, DockerExecutionPlan) (bool, error)
@@ -41,6 +42,9 @@ func RunCurrentRuntimeTestV1(ctx context.Context, input CurrentRuntimeTestInputV
 		newStore: providerstore.NewStore,
 		readState: func(operation *deploy.OperationLock) (deploy.StateV1, bool, error) {
 			return operation.ReadStateV1()
+		},
+		readLifecycle: func(operation *deploy.OperationLock) (deploy.WorkloadLifecycleV1, bool, error) {
+			return operation.ReadWorkloadLifecycleV1()
 		},
 		loadCurrent:   ValidateCurrentBuild,
 		plan:          PlanCurrentRuntimeV1,
@@ -109,6 +113,17 @@ func runCurrentRuntimeTestV1(ctx context.Context, input CurrentRuntimeTestInputV
 	}
 	if !matched {
 		return fmt.Errorf("%s", currentBuildRecoveryMessageV1(state, "runtime build is missing or stale"))
+	}
+	if backend.readLifecycle != nil {
+		record, found, err := backend.readLifecycle(operation)
+		if err != nil {
+			return fmt.Errorf("read runtime lifecycle: %w", err)
+		}
+		if found && record.State == "up" && record.StartupComplete && record.ContainerID != "" && (!record.TransferClaimed || record.HandoffComplete) {
+			// Match the confirmed process, as status does. Mutable .env presence
+			// is input for a fresh start and cannot select its launcher mode.
+			planned.Docker.PrivateEnvironment = record.HandoffComplete
+		}
 	}
 	if err := backend.requireInputs(operation, dir, planned); err != nil {
 		return err
