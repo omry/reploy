@@ -19,6 +19,9 @@ type CurrentRuntimePlanInputV1 struct {
 	// AllowConfiguringRepair permits install/uninstall recovery to reconstruct
 	// the recorded plan while ordinary runtime operations remain blocked.
 	AllowConfiguringRepair bool
+	// RequireCurrentPublishedAddresses refuses stale staged address intent before
+	// a new launch or explicit build verification. Inspection uses the build lock.
+	RequireCurrentPublishedAddresses bool
 }
 
 type CurrentRuntimePlanV1 struct {
@@ -105,7 +108,7 @@ func planCurrentRuntimeV1(input CurrentRuntimePlanInputV1, backend currentRuntim
 			context.SupplementaryGIDs = append([]uint32(nil), owner.SupplementaryGIDs...)
 		}
 	}
-	if input.Current.State.Deployment == nil {
+	if input.Current.State.Deployment == nil && input.RequireCurrentPublishedAddresses {
 		raw, found, err := deploy.ReadPackageOverridesV1(dir)
 		if err != nil {
 			return CurrentRuntimePlanV1{}, err

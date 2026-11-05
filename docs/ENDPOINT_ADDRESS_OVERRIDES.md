@@ -48,8 +48,11 @@ its deployed ports. An installation records the address in its build lock;
 installed restarts and control commands use that recorded value. Health checks
 also retain the running workload’s recorded private launcher mode. To change or
 reset an installed address, edit the stage and reinstall. Editing or resetting a
-stage cannot silently change a running installation. Runtime checks refuse a
-staged generation whose recorded addresses no longer match the sidecar.
+stage cannot silently change a running installation. Staged status, logs, shell,
+commands, health checks, and stop use the generation's recorded address even
+after a sidecar edit. Starting or restarting a staged workload requires a build
+that matches the current address override; the CLI builds changed inputs first.
+Explicit build verification also refuses a stale address override.
 
 Package/source choices, variables, identity overrides, base image overrides,
 and blueprint compatibility metadata keep their existing meanings. Endpoint

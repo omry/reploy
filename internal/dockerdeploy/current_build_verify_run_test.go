@@ -71,7 +71,7 @@ func TestVerifyCurrentBuildV1HoldsDeploymentLockThroughAudit(t *testing.T) {
 				order = append(order, "plan")
 				if input.DeploymentDir != dir ||
 					!reflect.DeepEqual(input.Current, current) ||
-					input.Runtime.UID != 501 {
+					input.Runtime.UID != 501 || !input.RequireCurrentPublishedAddresses {
 					t.Fatalf("runtime plan input = %#v", input)
 				}
 				return planned, nil

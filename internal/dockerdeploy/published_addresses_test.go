@@ -68,9 +68,14 @@ func TestPublishedAddressesShareStagedInstalledRenderingAndStatus(t *testing.T) 
 	}
 }
 
-func TestPublishedAddressesRejectUnknownEndpointInCurrentRuntime(t *testing.T) {
+func TestPublishedAddressesCurrentRuntimeIgnoresSidecarUntilFreshLaunch(t *testing.T) {
 	current, _ := runtimeCurrentBuildFixture(t)
 	dir := t.TempDir()
+	input := CurrentRuntimePlanInputV1{DeploymentDir: dir, Current: current, Runtime: blueprintRuntimeFixtureV1()}
+	recorded, err := PlanCurrentRuntimeV1(input)
+	if err != nil {
+		t.Fatal(err)
+	}
 	raw := deploy.EmptyPackageOverridesV1("demo")
 	raw.Docker.Workload.Endpoints = map[string]deploy.DockerEndpointOverrideV1{"missing": {Publish: deploy.DockerPublicationOverrideV1{Address: "0.0.0.0"}}}
 	operation, err := deploy.AcquireOperationLock(t.Context(), dir)
@@ -83,9 +88,13 @@ func TestPublishedAddressesRejectUnknownEndpointInCurrentRuntime(t *testing.T) {
 	if err := operation.Unlock(); err != nil {
 		t.Fatal(err)
 	}
-	_, err = PlanCurrentRuntimeV1(CurrentRuntimePlanInputV1{DeploymentDir: dir, Current: current, Runtime: blueprintRuntimeFixtureV1()})
-	if err == nil {
-		t.Fatal("current runtime accepted an unknown overridden endpoint")
+	observed, err := PlanCurrentRuntimeV1(input)
+	if err != nil || !reflect.DeepEqual(observed, recorded) {
+		t.Fatalf("sidecar edit changed the recorded runtime: %v", err)
+	}
+	input.RequireCurrentPublishedAddresses = true
+	if _, err := PlanCurrentRuntimeV1(input); err == nil {
+		t.Fatal("fresh launch accepted an unknown overridden endpoint")
 	}
 }
 

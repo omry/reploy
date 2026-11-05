@@ -196,7 +196,10 @@ func runCurrentWorkloadV1(ctx context.Context, input CurrentWorkloadRunInputV1, 
 	if current.Generation.Reference != generationReference {
 		return fmt.Errorf("deployment generation changed while %s was waiting; retry the command", controlOperation)
 	}
-	planned, err := backend.plan(CurrentRuntimePlanInputV1{DeploymentDir: dir, Current: current, Runtime: input.Runtime})
+	planned, err := backend.plan(CurrentRuntimePlanInputV1{
+		DeploymentDir: dir, Current: current, Runtime: input.Runtime,
+		RequireCurrentPublishedAddresses: input.Action == "up" || input.Action == "restart",
+	})
 	if err != nil {
 		return recoverStop(err)
 	}
