@@ -29,6 +29,7 @@ func TestMappingEditorPreservesInputThroughRealSaveAndConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	document.Environment.Runtime.IdentityMapping = source.Environment.Runtime.IdentityMapping
+	document.Docker.Workload = &blueprint.DockerWorkload{Endpoints: map[string]blueprint.DockerEndpoint{"https": {Publish: blueprint.Publication{Address: "127.0.0.1", Staging: 18075, Deployed: 8075}}}}
 	writeEditorState(t, dir, document)
 	raw := editorMappingInputV1(t)
 	commitOverrides(t, dir, raw)
@@ -37,6 +38,7 @@ func TestMappingEditorPreservesInputThroughRealSaveAndConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.baseImage = "python:3.13-slim"
+	m.setPublishedAddress("https", "0.0.0.0")
 	updated := m.buildRaw()
 	if !reflect.DeepEqual(updated.IdentityMappingOverride(), raw.IdentityMappingOverride()) {
 		t.Fatal("package editor dropped unrelated identity mapping")
@@ -49,7 +51,7 @@ func TestMappingEditorPreservesInputThroughRealSaveAndConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	retained, found, err := deploy.ReadPackageOverridesV1(dir)
-	if err != nil || !found || retained.Environment.Base.Image != "python:3.13-slim" || !reflect.DeepEqual(retained.IdentityMappingOverride(), raw.IdentityMappingOverride()) {
+	if err != nil || !found || retained.Environment.Base.Image != "python:3.13-slim" || retained.PublishedAddressesV1()["https"] != "0.0.0.0" || !reflect.DeepEqual(retained.IdentityMappingOverride(), raw.IdentityMappingOverride()) {
 		t.Fatalf("saved package/base change lost mapping input: %#v / %v", retained, err)
 	}
 	if _, err := saveSidecarAt(t.Context(), dir, snapshot, raw); err == nil || !strings.Contains(err.Error(), "changed while the editor was open") {

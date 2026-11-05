@@ -102,7 +102,7 @@ func WriteRuntimeStatusV1(output io.Writer, status RuntimeStatusV1, plan DockerE
 		if scheme == "" {
 			scheme = "tcp"
 		}
-		address := net.JoinHostPort(endpoint.PublishAddress, fmt.Sprintf("%d", endpoint.PublishedPort))
+		address := net.JoinHostPort(strings.Trim(endpoint.PublishAddress, "[]"), fmt.Sprintf("%d", endpoint.PublishedPort))
 		if _, err := fmt.Fprintf(output, "endpoint %s: %s://%s\n", name, scheme, address); err != nil {
 			return err
 		}

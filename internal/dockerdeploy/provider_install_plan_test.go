@@ -14,6 +14,13 @@ func TestPlanProviderInstallationV1UsesLockedBlueprintAndDestinationReference(t 
 	if runtime.GOOS == "windows" {
 		t.Skip("Linux/systemd installation planning is not a native Windows operation")
 	}
+	for _, address := range []string{"127.0.0.1", "0.0.0.0"} {
+		t.Run(address, func(t *testing.T) { testPlanProviderInstallationAddress(t, address) })
+	}
+}
+
+func testPlanProviderInstallationAddress(t *testing.T, address string) {
+	t.Helper()
 	previousUnitDir := installSystemdUnitDir
 	installSystemdUnitDir = t.TempDir()
 	t.Cleanup(func() { installSystemdUnitDir = previousUnitDir })
@@ -57,7 +64,7 @@ func TestPlanProviderInstallationV1UsesLockedBlueprintAndDestinationReference(t 
 	plan, err := planProviderInstallationV1(t.Context(), providerInstallPlanningV1{
 		SourceBuild: CurrentBuild{
 			State: deploy.StateV1{Blueprint: testResolvedBlueprintV1(t, document)},
-			Lock: deploy.BuildLockV1{Catalog: []providers.RealizedOutput{{
+			Lock: deploy.BuildLockV1{PackageOverrides: deploy.PackageOverrideIntentV1{PublishedAddresses: map[string]string{"http": address}}, Catalog: []providers.RealizedOutput{{
 				SupplierComponent: "application/application/python", SupplierNode: "python/application/application", Name: "demo",
 				Candidate: providers.ExecutableCandidate{InvocationPath: "/opt/demo"},
 				Evidence:  providers.ExecutableEvidence{InvocationPath: "/opt/demo"},
@@ -90,7 +97,7 @@ func TestPlanProviderInstallationV1UsesLockedBlueprintAndDestinationReference(t 
 		TargetDir: destinationDir, Scope: "system", Service: "demo-service",
 		UnitPath: systemdPath(installSystemdUnitDir, "demo-service.service"), InstanceID: instanceID,
 		ComposeProject: resourceName, ContainerName: resourceName, NetworkName: resourceName,
-		Ports: []deploy.InstallationPortBindingV1{{Name: "http", HostBind: "127.0.0.1", HostPort: "19090", ContainerPort: "8080"}},
+		Ports: []deploy.InstallationPortBindingV1{{Name: "http", HostBind: address, HostPort: "19090", ContainerPort: "8080"}},
 	}
 	if !reflect.DeepEqual(plan.Installation, wantInstallation) {
 		t.Fatalf("installation = %#v, want %#v", plan.Installation, wantInstallation)

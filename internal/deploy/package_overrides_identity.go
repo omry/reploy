@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/omry/reploy/internal/blueprint"
 	"gopkg.in/yaml.v3"
@@ -96,12 +97,12 @@ func validateMappingOverridePresenceV1(content []byte, mappingInput bool) error 
 			if mappingInput && child == "environment.package_overrides" && value.Tag == "!!null" {
 				return fmt.Errorf("overrides %s must use a mapping", child)
 			}
-			if child == "environment.runtime" || child == "environment.runtime.identity_mapping" {
+			if child == "environment.runtime" || child == "environment.runtime.identity_mapping" || child == "docker" || strings.HasPrefix(child, "docker.") && !strings.HasSuffix(child, ".address") {
 				if value.Kind != yaml.MappingNode {
 					return fmt.Errorf("overrides %s must use a mapping", child)
 				}
 			}
-			if child == "environment" || child == "environment.runtime" {
+			if child == "environment" || child == "environment.runtime" || child == "docker" || strings.HasPrefix(child, "docker.") {
 				if err := inspect(value, child); err != nil {
 					return err
 				}

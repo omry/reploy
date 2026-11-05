@@ -53,7 +53,8 @@ func planProviderInstallationV1(ctx context.Context, input providerInstallPlanni
 	}
 	dockerScope := blueprint.InstallScope(scope)
 	dockerContext := DockerPlanContext{
-		DeploymentDir: input.Input.SourceDeploymentDir, InstallTarget: destinationDir,
+		PublishedAddresses: input.SourceBuild.Lock.PackageOverrides.PublishedAddresses,
+		DeploymentDir:      input.Input.SourceDeploymentDir, InstallTarget: destinationDir,
 		Phase: blueprint.PhaseInstalled, Scope: &dockerScope, GeneratedImage: input.References.Generation,
 		Host: input.Input.Runtime.Host, PortOverrideArgs: append([]PortOverride(nil), input.Input.Install.PortOverrides...),
 	}

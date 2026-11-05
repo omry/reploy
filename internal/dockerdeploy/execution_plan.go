@@ -14,19 +14,20 @@ import (
 )
 
 type DockerPlanContext struct {
-	DeploymentDir     string
-	InstallTarget     string
-	Phase             blueprint.Phase
-	Scope             *blueprint.InstallScope
-	GeneratedImage    string
-	Host              blueprint.HostOS
-	UID               uint32
-	GID               uint32
-	SupplementaryGIDs []uint32
-	SystemUser        string
-	SystemGroup       string
-	PortOverrides     map[string]int
-	PortOverrideArgs  []PortOverride
+	DeploymentDir      string
+	InstallTarget      string
+	Phase              blueprint.Phase
+	Scope              *blueprint.InstallScope
+	GeneratedImage     string
+	Host               blueprint.HostOS
+	UID                uint32
+	GID                uint32
+	SupplementaryGIDs  []uint32
+	SystemUser         string
+	SystemGroup        string
+	PublishedAddresses map[string]string
+	PortOverrides      map[string]int
+	PortOverrideArgs   []PortOverride
 }
 
 type DockerExecutionPlan struct {
@@ -88,6 +89,11 @@ type RuntimeUserPlan struct {
 }
 
 func PlanDockerExecution(document blueprint.Document, context DockerPlanContext) (DockerExecutionPlan, error) {
+	addresses, err := deploy.ResolvePublishedAddressesV1(document, context.PublishedAddresses)
+	if err != nil {
+		return DockerExecutionPlan{}, err
+	}
+	context.PublishedAddresses = addresses
 	if context.DeploymentDir == "" {
 		return DockerExecutionPlan{}, fmt.Errorf("Docker plan deployment directory is required")
 	}
@@ -272,10 +278,7 @@ func planDockerEndpoints(document blueprint.Document, context DockerPlanContext,
 		if bindAddress == "" {
 			bindAddress = "0.0.0.0"
 		}
-		publishAddress := strings.TrimSpace(endpoint.Publish.Address)
-		if publishAddress == "" {
-			publishAddress = "127.0.0.1"
-		}
+		publishAddress := context.PublishedAddresses[name]
 		published := endpoint.Publish.Staging
 		if context.Phase == blueprint.PhaseInstalled {
 			published = endpoint.Publish.Deployed

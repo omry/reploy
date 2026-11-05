@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"fmt"
+	"maps"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -59,7 +60,8 @@ func planCurrentRuntimeV1(input CurrentRuntimePlanInputV1, backend currentRuntim
 		return CurrentRuntimePlanV1{}, fmt.Errorf("plan current runtime blueprint: %w", err)
 	}
 	context := DockerPlanContext{
-		DeploymentDir: dir, Phase: blueprint.PhaseStaged,
+		PublishedAddresses: input.Current.Lock.PackageOverrides.PublishedAddresses,
+		DeploymentDir:      dir, Phase: blueprint.PhaseStaged,
 		GeneratedImage: input.Current.Generation.Reference,
 		Host:           input.Runtime.Host, UID: input.Runtime.UID, GID: input.Runtime.GID,
 		SupplementaryGIDs: append([]uint32(nil), input.Runtime.SupplementaryGIDs...),
@@ -101,6 +103,20 @@ func planCurrentRuntimeV1(input CurrentRuntimePlanInputV1, backend currentRuntim
 			context.UID = owner.UID
 			context.GID = owner.GID
 			context.SupplementaryGIDs = append([]uint32(nil), owner.SupplementaryGIDs...)
+		}
+	}
+	if input.Current.State.Deployment == nil {
+		raw, found, err := deploy.ReadPackageOverridesV1(dir)
+		if err != nil {
+			return CurrentRuntimePlanV1{}, err
+		}
+		if found {
+			if err := raw.CheckDeclarationsV1(document); err != nil {
+				return CurrentRuntimePlanV1{}, err
+			}
+		}
+		if !maps.Equal(raw.PublishedAddressesV1(), context.PublishedAddresses) {
+			return CurrentRuntimePlanV1{}, fmt.Errorf("published-address overrides changed; run `reploy build` before using this generation")
 		}
 	}
 	plan, err := PlanDockerExecution(document, context)

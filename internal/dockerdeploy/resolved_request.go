@@ -225,6 +225,7 @@ func relevantPackageOverrideIntentV1(
 		}
 	}
 	result := deploy.EmptyPackageOverrideIntentV1(intent.EnvironmentID)
+	result.PublishedAddresses = intent.PublishedAddresses
 	result.Additions = append([]deploy.PackageAdditionIntentV1(nil), intent.Additions...)
 	for _, choice := range intent.Choices {
 		if relevant[choice.Provider][choice.Package] {
