@@ -1,0 +1,2 @@
+kind: Changed
+body: Update website dependency maintenance to v2 and add the workflow for explicitly selected dependency repairs.
