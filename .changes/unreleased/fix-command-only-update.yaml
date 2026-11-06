@@ -1,0 +1,2 @@
+kind: Fixed
+body: Update command-only installations without stopping a nonexistent workload, while preserving installed configuration and current-generation validation.
