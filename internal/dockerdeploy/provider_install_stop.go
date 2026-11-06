@@ -32,6 +32,9 @@ func stopProviderInstallDestinationWithV1(ctx context.Context, locked lockedProv
 	if locked.DestinationOperation == nil {
 		return fmt.Errorf("stop provider install destination requires the destination operation lock")
 	}
+	if err := locked.DestinationOperation.RequireWritable(); err != nil {
+		return err
+	}
 	if backend.load == nil || backend.plan == nil || backend.inspect == nil || backend.run == nil {
 		return fmt.Errorf("stop provider install destination requires a complete backend")
 	}
@@ -57,6 +60,13 @@ func stopProviderInstallDestinationWithV1(ctx context.Context, locked lockedProv
 	})
 	if err != nil {
 		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// A verified command-only generation has no workload lifecycle to stop.
+	if planned.Document.Environment.Workload == nil && planned.Docker.Workload == nil {
+		return nil
 	}
 	var stopCommand *CommandSpec
 	installation := state.Deployment.Installation
