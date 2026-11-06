@@ -71,6 +71,15 @@ jobs:
           NO_UPDATE_NOTIFIER: "1"
         run: nox -s ci
 
+      - name: Prove command-only installed updates preserve operator config
+        env:
+          REPLOY_DOCKER_INTEGRATION: "1"
+        run: |
+          python tools/build_reploy --target linux-amd64 --outdir "$RUNNER_TEMP/command-only-update-bin"
+          REPLOY_TEST_BINARY="$RUNNER_TEMP/command-only-update-bin/linux-amd64/reploy" \
+            go test -v -count=1 -timeout 5m ./internal/dockerdeploy \
+            -run '^TestProviderCommandOnlyUpdateDockerIntegration$'
+
       - name: Prove complete Java, Playwright and Bash amd64 cases and current evidence
         env:
           REPLOY_DOCKER_INTEGRATION: "1"
