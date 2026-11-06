@@ -1,0 +1,94 @@
+// Disposable design probe, loaded through go test -overlay. Not production code.
+package probe
+
+import (
+ "bytes"
+ "context"
+ "encoding/binary"
+ "fmt"
+ "io"
+ "os"
+ "os/exec"
+ "strings"
+ "testing"
+ "time"
+
+ "github.com/omry/reploy/internal/mappedlaunch"
+)
+
+const fgDummyValue = "FG-DUMMY-PRIVATE-6238"
+
+// New private-mode preamble, before the unchanged E release frame. Reuse the
+// real private assignment parser and real unbuffered bounded mapped fd reader.
+func fgReadPreamble(input io.Reader) ([]string, error) {
+ var head [12]byte
+ if _, err := io.ReadFull(input, head[:]); err != nil { return nil, err }
+ n := binary.BigEndian.Uint32(head[8:])
+ if string(head[:8]) != "RPLYENV1" || n == 0 || n > privateEnvironmentPayloadLimitV1 {
+  return nil, fmt.Errorf("invalid private preamble")
+ }
+ payload := make([]byte, n)
+ if _, err := io.ReadFull(input, payload); err != nil { return nil, err }
+ return privateEnvironmentAssignmentsV1(payload)
+}
+
+func fgPreamble(payload []byte) []byte {
+ data := make([]byte, 12+len(payload))
+ copy(data, "RPLYENV1")
+ binary.BigEndian.PutUint32(data[8:], uint32(len(payload)))
+ copy(data[12:], payload)
+ return data
+}
+
+func TestFGPrivateInputComposition(t *testing.T) {
+ binding := mappedWaitBindingV1()
+ release, err := mappedlaunch.Frame(mappedlaunch.Request{Binding:binding, Container:strings.Repeat("b",64)})
+ if err != nil { t.Fatal(err) }
+ canary := []byte("application\x00stdin\n")
+ payload := []byte("FG_PRIVATE="+fgDummyValue+"\n\n")
+ correct := append(append(fgPreamble(payload), release...), canary...)
+ badBinding := binding; badBinding.Operation = "other-operation"
+ wrong, _ := mappedlaunch.Frame(mappedlaunch.Request{Binding:badBinding, Container:strings.Repeat("b",64)})
+ oversized := fgPreamble(nil)
+ binary.BigEndian.PutUint32(oversized[8:], privateEnvironmentPayloadLimitV1+1)
+ cases := []struct{name string; input []byte; cancel bool; valid bool}{
+  {"valid-preserves-binary-stdin",correct,false,true},
+  {"no-private-preamble",append(release,canary...),false,false},
+  {"oversized-before-allocation",oversized,false,false},
+  {"truncated-private-payload",fgPreamble(payload)[:15],false,false},
+  {"invalid-private-assignments",append(fgPreamble([]byte("not-an-assignment\n\n")),release...),false,false},
+  {"wrong-release-binding",append(fgPreamble(payload),wrong...),false,false},
+  {"cancel-incomplete-private-input",correct[:15],true,false},
+ }
+ for _, tc := range cases { t.Run(tc.name,func(t *testing.T) {
+  input, output, err := os.Pipe(); if err != nil { t.Fatal(err) }
+  defer input.Close(); defer output.Close()
+  ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second); defer cancel()
+  go func(){ _, _ = output.Write(tc.input); if tc.cancel { cancel() } else { _=output.Close() } }()
+  reader := mappedWaitInputV1{ctx:ctx, fd:int(input.Fd())}
+  assignments, err := fgReadPreamble(reader)
+  if err == nil { _,err=mappedlaunch.Read(reader,binding) }
+  if !tc.valid { if err == nil { t.Fatal("invalid input reached application boundary") }; return }
+  if err != nil { t.Fatal(err) }
+  remaining, err := io.ReadAll(input)
+  if err != nil || !bytes.Equal(remaining,canary) { t.Fatalf("application stdin altered: %v",err) }
+  // Dummy bytes are in stdin, not argv or the waiter's inherited environment.
+  argv,_ := os.ReadFile("/proc/self/cmdline")
+  if bytes.Contains(argv,[]byte(fgDummyValue)) || os.Getenv("FG_PRIVATE") != "" { t.Fatal("dummy input leaked into waiter metadata") }
+  app := exec.Command(os.Args[0],"-test.run=^TestFGPrivateInputApp$")
+  app.Env=append([]string{"FG_PRIVATE_PROBE_APP=1"},assignments...)
+  app.Stdin=bytes.NewReader(remaining)
+  result,err:=app.CombinedOutput()
+  if err != nil || !bytes.Equal(result,[]byte("private-env-and-stdin-ok\n")) { t.Fatalf("app contract: %v %q",err,result) }
+ }) }
+}
+
+func TestFGPrivateInputApp(t *testing.T) {
+ if os.Getenv("FG_PRIVATE_PROBE_APP") != "1" { return }
+ data,err:=io.ReadAll(os.Stdin)
+ if err != nil || !bytes.Equal(data,[]byte("application\x00stdin\n")) || os.Getenv("FG_PRIVATE") != fgDummyValue { os.Exit(77) }
+ argv,_:=os.ReadFile("/proc/self/cmdline")
+ if bytes.Contains(argv,[]byte(fgDummyValue)) { os.Exit(78) }
+ fmt.Println("private-env-and-stdin-ok")
+ os.Exit(0)
+}

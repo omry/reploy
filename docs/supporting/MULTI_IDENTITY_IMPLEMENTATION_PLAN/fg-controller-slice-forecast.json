@@ -1,0 +1,706 @@
+{
+  "status": "Controller authoring forecast; not independently reviewed, human-accepted or implementation-ready. The canonical delivery inventory is the F/G engineering section of MULTI_IDENTITY_IMPLEMENTATION_PLAN.md; this JSON is its sizing projection.",
+  "unit": "Added or rewritten handwritten physical LF lines, including comments and blanks. Count moved code at destination; do not subtract deletions. Report deletions and mechanical moves separately. Production/configuration and tests/fixtures are separate; prose, generated files, dependencies and observations are excluded.",
+  "source_head": "87899abecced4c5f8b3513ecee66793ecdd2df37",
+  "limit": {
+    "production_target": 500,
+    "production_hard_max": 750
+  },
+  "confidence": "Conditional, with lowest confidence in code-closure, effective-policy and native platform proofs. A failing mechanism proof returns to engineering before dependent implementation; ranges are not budgets or measured results.",
+  "slices": [
+    {
+      "id": "F1.0",
+      "title": "Prove the managed-data and immutable-code boundary",
+      "production": [
+        0,
+        0
+      ],
+      "tests": [
+        350,
+        650
+      ],
+      "depends": [
+        "E4.2"
+      ],
+      "source": [
+        "internal/dockerdeploy/mapped_sandbox_proof.go",
+        "internal/dockerdeploy/runtime_host_filesystem_linux.go"
+      ],
+      "owns": "Reuse conservative image projection and shadow/ancestor controls; qualify confined descriptors and trusted artifact/source lifetime races on eligible engine.",
+      "check": "Mapped empty/absent destinations work, populated writable ones refuse under RO root, trusted paths remain protected with RW root; ordinary behavior unchanged. Broader restrictions/weaker guarantees return to design."
+    },
+    {
+      "id": "F1.1.1",
+      "title": "Declare managed metadata and intrinsic root policy",
+      "production": [
+        280,
+        430
+      ],
+      "tests": [
+        450,
+        750
+      ],
+      "depends": [
+        "F1.0"
+      ],
+      "source": [
+        "internal/blueprint/syntax.go",
+        "internal/blueprint/model.go",
+        "internal/dockerdeploy/execution_plan.go"
+      ],
+      "owns": "Accepted owner/group/permissions and separate relative directories/files maps. Intrinsic root defaults read-only, with explicit environment.mounts.root writable policy. Preserve ordinary omitted-field identity.",
+      "check": "Resolve contextual owners and primary groups, reject unsafe paths/unknown principals before effects, bind the root policy canonically without admitting an external bind over /."
+    },
+    {
+      "id": "F1.1.2",
+      "title": "Bind image-destination projection to the generation",
+      "production": [
+        350,
+        550
+      ],
+      "tests": [
+        700,
+        1100
+      ],
+      "depends": [
+        "F1.1.1"
+      ],
+      "source": [
+        "internal/dockerdeploy/image_identity_layers.go",
+        "internal/dockerdeploy/image_identity_archive.go",
+        "internal/deploy/build_lock.go",
+        "internal/dockerdeploy/current_build_reuse.go"
+      ],
+      "owns": "Bounded metadata projection within verified immutable-image stream; canonical mapped-only build-lock evidence, validation/publication and exact reuse. No launch-time full export or separate authority store.",
+      "check": "Layer/alias/whiteout/type controls and aggregate limits/cancellation; missing/stale/forged evidence refuses, ordinary omitted-field bytes stable, host admission remains independent."
+    },
+    {
+      "id": "F1.2",
+      "title": "Prepare declared objects through pinned descriptors",
+      "production": [
+        300,
+        480
+      ],
+      "tests": [
+        600,
+        950
+      ],
+      "depends": [
+        "F1.1.2"
+      ],
+      "source": [
+        "internal/dockerdeploy/runtime_host_filesystem_linux.go"
+      ],
+      "owns": "Descriptor-relative inert directory/file creation and existing-object verification, parent-first directories then files. No symlink/mount crossing, alias/type substitution, recursive ownership repair or application code.",
+      "check": "Exact declared metadata succeeds; substitution, hardlink and foreign-tree races leave protected targets unchanged. Count shared adversarial fixtures here once."
+    },
+    {
+      "id": "F1.3",
+      "title": "Confine preparation to selected subordinate authority",
+      "production": [
+        240,
+        400
+      ],
+      "tests": [
+        450,
+        750
+      ],
+      "depends": [
+        "F1.2"
+      ],
+      "source": [
+        "internal/deploy/identity_mapping_operations.go",
+        "internal/probe/mapped_exec_linux.go"
+      ],
+      "owns": "Reviewed setup-helper invocation with freshly validated selected geometry, pinned handoff descriptors, numeric ownership and bounded cancellation. Reuse existing mapping/writer authority.",
+      "check": "Private subordinate ownership and recipient access work without host-root/operator aliases, unrelated mutations, application execution or a surviving privileged helper. The earlier namespace/file probe is partial feasibility evidence only."
+    },
+    {
+      "id": "F2.1",
+      "title": "Record storage ownership and exclusive preparation",
+      "production": [
+        280,
+        460
+      ],
+      "tests": [
+        550,
+        850
+      ],
+      "depends": [
+        "F1.3"
+      ],
+      "source": [
+        "internal/deploy/state_v1.go",
+        "internal/deploy/identity_mapping_native_state.go"
+      ],
+      "owns": "Managed resource identities and preparation/attachment inhibition in the existing transaction. Capture selected handles, revisions and pending effects; no independent resource registry.",
+      "check": "Concurrent attach/prepare and stale geometry refuse before writes; crashes retain exact ownership and reservations. A process exit or API success alone cannot prove an unattached resource."
+    },
+    {
+      "id": "F2.2",
+      "title": "Fence recovery owners before protected storage effects",
+      "production": [
+        240,
+        420
+      ],
+      "tests": [
+        550,
+        900
+      ],
+      "depends": [
+        "F2.1"
+      ],
+      "source": [
+        "internal/dockerdeploy/current_workload_lifecycle_mapped.go",
+        "internal/deploy/control_lease.go"
+      ],
+      "owns": "Exact retirement and restart-owner fence contract consumed by later controller adapters. Keep the operation lock out of external manager-stop waits; require fresh retirement observations before preparation.",
+      "check": "No registered engine/controller owner can recreate during preparation or undo stop/revocation. Lost observation retains inhibition; retained application data and reservations remain intact."
+    },
+    {
+      "id": "F3.0",
+      "title": "Prove eligible rootless network and effective observation",
+      "production": [
+        0,
+        0
+      ],
+      "tests": [
+        450,
+        800
+      ],
+      "depends": [
+        "F2.2"
+      ],
+      "source": [
+        "internal/probe/network_firewall_linux.go",
+        "internal/dockerdeploy/podman_mapped_waiter.go"
+      ],
+      "owns": "Disposable proof on an E-compatible rootless Podman path: trusted pre-release setup, namespace-pinned effective rules, DNS, private peer boundary and endpoint transport. Establish which final capabilities preserve that boundary.",
+      "check": "Positive allowed egress/endpoints and direct peer, gateway and IPv6 negatives with exact cleanup. Existing C patched-guest and ordinary Docker results do not close this gate. Failure blocks dependent code rather than weakening policy."
+    },
+    {
+      "id": "F3.1.1",
+      "title": "Prepare trusted network policy before mapped release",
+      "production": [
+        180,
+        330
+      ],
+      "tests": [
+        350,
+        650
+      ],
+      "depends": [
+        "F3.0"
+      ],
+      "source": [
+        "internal/probe/mapped_wait.go",
+        "internal/probe/sandbox_exec_linux.go",
+        "internal/probe/network_firewall_linux.go"
+      ],
+      "owns": "Move only trusted policy setup before the release wait, using the frozen plan and existing nftables installer. Keep application execution after the host gate and final native transition; do not copy the installer.",
+      "check": "Effective setup exists while payload is inhibited; failure/timeout never releases the application; no setup network authority survives the final transition."
+    },
+    {
+      "id": "F3.1.2",
+      "title": "Supply production mount and kernel sandbox observations",
+      "production": [
+        300,
+        500
+      ],
+      "tests": [
+        650,
+        1000
+      ],
+      "depends": [
+        "F1.1.2",
+        "F3.1.1"
+      ],
+      "source": [
+        "internal/dockerdeploy/mapped_sandbox_proof.go",
+        "internal/dockerdeploy/podman_mapped_waiter.go"
+      ],
+      "owns": "Replace the private complete-code-closure placeholder with the locked bounded image-destination projection and actual complete root/mount/source/kernel observations. Protect the generation-verified top-level verifier bind even with writable root; no general executable classifier.",
+      "check": "Exact process/namespace/source/root-policy and effective-kernel controls; stale/substituted/unplanned mounts, missing projection and writable image-shadow refuse. Explicit root mutation never exposes trusted Reploy code."
+    },
+    {
+      "id": "F3.2",
+      "title": "Enforce private installation network boundaries",
+      "production": [
+        260,
+        440
+      ],
+      "tests": [
+        550,
+        900
+      ],
+      "depends": [
+        "F3.1.2"
+      ],
+      "source": [
+        "internal/dockerdeploy/podman_mapped_policy.go",
+        "internal/probe/network_firewall_linux.go"
+      ],
+      "owns": "Canonical private namespace/attachment shape, resolver and host-gateway handling, public/local/ambiguous policy and capability-conditioned refusals. No shared private network or implicit peer reachability.",
+      "check": "Selected transport preserves intended allowed traffic and denies undeclared TCP/UDP/abstract-socket peers. Unsupported capability or transport combinations fail explicitly before effects."
+    },
+    {
+      "id": "F4.1",
+      "title": "Publish and observe only declared endpoints",
+      "production": [
+        260,
+        430
+      ],
+      "tests": [
+        500,
+        800
+      ],
+      "depends": [
+        "F3.2"
+      ],
+      "source": [
+        "internal/dockerdeploy/execution_plan.go",
+        "internal/dockerdeploy/podman_application_identity.go"
+      ],
+      "owns": "Typed create/inspect endpoint fields, staged/deployed port selection and exact network/publication ownership and cleanup.",
+      "check": "Only declared addresses/ports are reachable; mismatched publication blocks payload. Partial teardown retains uncertainty and never removes a foreign object."
+    },
+    {
+      "id": "F4.2",
+      "title": "Qualify storage and network together",
+      "production": [
+        0,
+        0
+      ],
+      "tests": [
+        700,
+        1100
+      ],
+      "depends": [
+        "F4.1"
+      ],
+      "source": [
+        "internal/dockerdeploy/current_workload_lifecycle_mapped_test.go"
+      ],
+      "owns": "Integrated exact/bounded preparation, attachment, effective sandbox, network, endpoint and failure evidence on the qualified engine. Reuse child fixtures without repeating their entire test inventory.",
+      "check": "Observable supported-boundary filesystem/network positives and refusal/no-mutation negatives close F's parent obligations; injected fixtures alone do not."
+    },
+    {
+      "id": "G1.0",
+      "title": "Prove controller transport and interrupted startup boundaries",
+      "production": [
+        0,
+        0
+      ],
+      "tests": [
+        450,
+        800
+      ],
+      "depends": [
+        "F3.0"
+      ],
+      "source": [
+        "internal/dockerdeploy/docker_pty_attach.go",
+        "internal/dockerdeploy/private_workload_environment_inject.go"
+      ],
+      "owns": "Bounded disposable direct wait/attach/EOF/cancellation and mapped private-input feasibility. Reuse the successful WSL Docker wait proof; add missing Podman and native transport evidence where load-bearing.",
+      "check": "Exact exit status, no duplicate/foreign start, private input confinement and no setup descriptors/authority at exec. Missing native tests remain named adapter readiness gates; no false universal qualification."
+    },
+    {
+      "id": "G1.1",
+      "title": "Select phase mappings under the Podman input",
+      "production": [
+        280,
+        450
+      ],
+      "tests": [
+        550,
+        900
+      ],
+      "depends": [
+        "F1.1.1"
+      ],
+      "source": [
+        "internal/blueprint/syntax.go",
+        "internal/deploy/state_v1.go"
+      ],
+      "owns": "Direct schema-1 relocation and staging/deployed selection through existing typed whole-array overrides. Update all consumers and retained-state guards; no mapping-specific install flags.",
+      "check": "Correct phase/override precedence, strict existing override decoding and whole-array replacement; no old undeployed mapping path, source-sidecar adoption, fallback profile or declaration-removal bypass."
+    },
+    {
+      "id": "G1.2",
+      "title": "Connect approved identity maintenance commands",
+      "production": [
+        200,
+        340
+      ],
+      "tests": [
+        400,
+        650
+      ],
+      "depends": [
+        "G1.1"
+      ],
+      "source": [
+        "internal/cli/cli.go",
+        "internal/deploy/identity_mapping_operations.go"
+      ],
+      "owns": "Public check/configure/status/recover wiring to delivered identity operations with bounded contexts, diagnostics and held-lock authority. Reuse approved command contracts.",
+      "check": "Actual commands reach existing operations; pending/dormant/revoked state stays authoritative; commands do not launch payload or adopt copied state."
+    },
+    {
+      "id": "G1.3",
+      "title": "Install an independent destination owner",
+      "production": [
+        320,
+        520
+      ],
+      "tests": [
+        600,
+        1000
+      ],
+      "depends": [
+        "G1.2",
+        "F4.2"
+      ],
+      "source": [
+        "internal/dockerdeploy/provider_install_run.go",
+        "internal/dockerdeploy/provider_install_plan.go"
+      ],
+      "owns": "Destination-local override snapshot under paired operation locks, independent mapping decision, publication/build reuse, overlap/revision checks and partial-install recovery. Existing staging loader is not installed support.",
+      "check": "Staging and user install have separate reservations; source state/data remain unchanged. Never copy source pending operations, admission, managed ownership or secrets."
+    },
+    {
+      "id": "G1.4",
+      "title": "Declare Reploy restart policy and durable controller state",
+      "production": [
+        300,
+        480
+      ],
+      "tests": [
+        550,
+        900
+      ],
+      "depends": [
+        "G1.0",
+        "G1.3"
+      ],
+      "source": [
+        "internal/blueprint/syntax.go",
+        "internal/blueprint/model.go",
+        "internal/deploy/deployment_state_v1.go",
+        "internal/deploy/control_lease.go"
+      ],
+      "owns": "Restart policy and legacy conflict checks; current activation intent/epoch, independent observed manager enablement, controller lease and durable attempt/retry accounting. No permanent up/down preference or parallel enablement authority.",
+      "check": "Start/stop and enable/disable are independent. Controller recovery preserves activation stop and retry allowance; actual enabled boot/login or explicit start can establish a new activation after recovery. Security inhibition survives all activations."
+    },
+    {
+      "id": "G1.5.1",
+      "title": "Produce trusted mapped startup-completion evidence",
+      "production": [
+        350,
+        600
+      ],
+      "tests": [
+        800,
+        1300
+      ],
+      "depends": [
+        "G1.4",
+        "F1.3",
+        "F3.1.2"
+      ],
+      "source": [
+        "internal/dockerdeploy/current_workload_lifecycle_mapped.go",
+        "internal/dockerdeploy/mapped_process_linux.go",
+        "internal/probe/mapped_exec_linux.go"
+      ],
+      "owns": "Managed per-attempt exec-status FIFO/header/unlink; qualified raw CLOEXEC tail/fixed errno; exact post-EOF kernel live-image observation bound to existing process/lifecycle ownership. No tracer, resident helper or app marker.",
+      "check": "Both-profile/native-tuple real startup, same-binary, errno/cancel/kill/exit-race, object substitution and private-fd controls. EOF or engine running alone cannot promote startup; old E evidence not relabelled; guard remains if proof unavailable."
+    },
+    {
+      "id": "G1.5.2",
+      "title": "Recover workloads through the shared controller loop",
+      "production": [
+        300,
+        500
+      ],
+      "tests": [
+        650,
+        1050
+      ],
+      "depends": [
+        "G1.5.1",
+        "F2.2"
+      ],
+      "source": [
+        "internal/dockerdeploy/installed_service_container.go",
+        "internal/dockerdeploy/installed_service_wait.go",
+        "internal/dockerdeploy/workload_lifecycle.go"
+      ],
+      "owns": "Adapt the existing runner for qualified user ownership, host-manager/workload failure separation, policy/backoff, exact reattachment and interrupted-attempt recovery. No persistent approval file or secret snapshot.",
+      "check": "Confirmed surviving processes are observed without reinjection; failed mapped instances retire before fresh admission. Lost engine observation never implies death or authorizes a second workload."
+    },
+    {
+      "id": "G1.6",
+      "title": "Wait on the engine without a persistent Docker CLI child",
+      "production": [
+        160,
+        290
+      ],
+      "tests": [
+        350,
+        600
+      ],
+      "depends": [
+        "G1.5.2"
+      ],
+      "source": [
+        "internal/dockerdeploy/installed_service_wait.go",
+        "internal/dockerdeploy/docker_endpoint.go",
+        "internal/dockerdeploy/docker_pty_attach_windows.go"
+      ],
+      "owns": "Narrow in-process wait using existing local Unix/named-pipe dialers, pinned endpoint/API version, bounded result decoding and request/body cancellation. Retain short-lived CLI operations where appropriate.",
+      "check": "Preserve actual exit status and error distinction; disconnect/cancel releases resources and triggers checked reconciliation. Compare whole-process-tree idle memory, not just a minimal probe binary."
+    },
+    {
+      "id": "G1.7",
+      "title": "Replace lifetime stream children with bounded direct attachment",
+      "production": [
+        260,
+        440
+      ],
+      "tests": [
+        550,
+        950
+      ],
+      "depends": [
+        "G1.6"
+      ],
+      "source": [
+        "internal/dockerdeploy/docker_pty_attach.go",
+        "internal/dockerdeploy/live_run_container.go",
+        "internal/dockerdeploy/live_run_mapped.go"
+      ],
+      "owns": "Reuse PTY transport and add only required non-TTY framing, incremental stdout/stderr handling, stdin half-close, backpressure and independent exit observation. Preserve attach-before-payload ordering.",
+      "check": "Large/slow streams have bounded buffers; EOF is not exit status; actual stdin/cancellation and exact cleanup survive on supported transports. Preserve the separately delivered RDA hotfix contract."
+    },
+    {
+      "id": "G1.8",
+      "title": "Integrate private input with the mapped final transition",
+      "production": [
+        230,
+        410
+      ],
+      "tests": [
+        550,
+        900
+      ],
+      "depends": [
+        "G1.7",
+        "F1.3"
+      ],
+      "source": [
+        "internal/probe/private_workload_environment_linux.go",
+        "internal/probe/mapped_exec_linux.go",
+        "internal/dockerdeploy/private_workload_environment_inject.go"
+      ],
+      "owns": "Distinct private preamble before unchanged E release and application stdin; reuse bounded parser/descriptor reader and native mapped exec. Transfer intent follows admission; original deadline, no stronger occupied exec, no retained secret snapshot.",
+      "check": "One accepted recipient/process receives dummy input exactly once; other roles/transient commands do not. Interrupted transfer retires safely; final descriptors, credentials and capabilities remain correct before enabling the guarded path."
+    },
+    {
+      "id": "G1.9",
+      "title": "Install and control the Linux user controller",
+      "production": [
+        180,
+        320
+      ],
+      "tests": [
+        400,
+        700
+      ],
+      "depends": [
+        "G1.8"
+      ],
+      "source": [
+        "internal/dockerdeploy/provider_install_systemd.go",
+        "internal/dockerdeploy/provider_install_host_commands.go",
+        "internal/dockerdeploy/install_types.go"
+      ],
+      "owns": "Per-installation systemd user adapter, embedded executable/account/endpoint binding, checked stop rather than raw Compose, readiness and removal. Reuse system-unit rendering without granting mapped system scope.",
+      "check": "Actual user lifecycle and engine readiness; explicit manager/lingering prerequisites and WSL distribution limits. No auto elevation, hidden host configuration or fallback recovery owner."
+    },
+    {
+      "id": "G1.10",
+      "title": "Add the macOS user controller adapter",
+      "production": [
+        220,
+        400
+      ],
+      "tests": [
+        450,
+        800
+      ],
+      "depends": [
+        "G1.9"
+      ],
+      "source": [
+        "internal/dockerdeploy/platform.go",
+        "internal/dockerdeploy/provider_install_host_commands.go"
+      ],
+      "owns": "Per-installation launchd user adapter for the common ordinary-workload controller: install/control, account/session binding, engine/VM readiness and removal. No system backend or mapped macOS promise.",
+      "check": "Native user login/logout, controller failure, explicit stop, update/removal and engine recovery. An unqualified adapter cannot accept the new public Reploy restart field by silently delegating it."
+    },
+    {
+      "id": "G1.11",
+      "title": "Add the native Windows user controller adapter",
+      "production": [
+        250,
+        440
+      ],
+      "tests": [
+        500,
+        850
+      ],
+      "depends": [
+        "G1.10"
+      ],
+      "source": [
+        "internal/dockerdeploy/platform.go",
+        "internal/dockerdeploy/docker_pty_attach_windows.go",
+        "internal/cli/control.go"
+      ],
+      "owns": "Per-installation Task Scheduler user adapter, exact executable/identity, process lifetime/duplicate-instance settings, controller recovery and removal. Reuse native pipe/file validation; no Windows system service or mapped runtime expansion.",
+      "check": "Actual native Desktop Linux-engine lifecycle, quoting/paths, controller death, stop intent, login and removal. No default task duration termination, duplicate controller or claims based on WSL tests."
+    },
+    {
+      "id": "G1.12",
+      "title": "Connect checked persistent controls and replacement",
+      "production": [
+        300,
+        500
+      ],
+      "tests": [
+        600,
+        1000
+      ],
+      "depends": [
+        "G1.11"
+      ],
+      "source": [
+        "internal/cli/control.go",
+        "internal/dockerdeploy/current_workload_lifecycle.go",
+        "internal/dockerdeploy/current_workload_lifecycle_mapped.go"
+      ],
+      "owns": "Checked up/down/restart/status/log/health and existing enable/disable control surface, hooks/readiness, exact replacement, activation-scoped stop and independent manager enablement. No silent legacy migration.",
+      "check": "Up requires actual startup/handoff and does not enable; enable/disable do not start/stop. No duplicate injection, manager-stop deadlock, recovery-policy bypass or unqualified mapped path."
+    },
+    {
+      "id": "G1.13",
+      "title": "Connect fresh commands and tests with their existing semantics",
+      "production": [
+        260,
+        440
+      ],
+      "tests": [
+        550,
+        950
+      ],
+      "depends": [
+        "G1.12"
+      ],
+      "source": [
+        "internal/dockerdeploy/current_app_command_run.go",
+        "internal/dockerdeploy/current_shell_run.go",
+        "internal/dockerdeploy/mapped_entry_plan.go"
+      ],
+      "owns": "Actual staged/test/hook/deployed command adapters and correct fresh-container classification. Preserve stdin/EOF/TTY, role and output/status semantics; no default raw-shell role or unqualified occupied exec.",
+      "check": "Supported command journeys use the common complete gate; actual unqualified host-native/occupied/shared-session paths refuse before effects. Enum names cannot misclassify ordinary fresh deployed commands."
+    },
+    {
+      "id": "G1.14",
+      "title": "Qualify common controller behavior on supported hosts",
+      "production": [
+        0,
+        0
+      ],
+      "tests": [
+        700,
+        1150
+      ],
+      "depends": [
+        "G1.13"
+      ],
+      "source": [
+        "internal/dockerdeploy/platform_test.go",
+        "internal/dockerdeploy/installed_service_wait_test.go"
+      ],
+      "owns": "Native Linux user/system ordinary, WSL, native Windows user and macOS user manager/session qualification with actual supported engines. System-scope mapped remains refused. Shared state tests are reused, not counted again.",
+      "check": "Install/start/stop/restart/update/rollback/remove, controller crash, engine outage and host/session activation evidence with exact versions/locations, retained data and full process-tree memory/CPU observations. Unsupported combinations remain explicit."
+    },
+    {
+      "id": "G2.1",
+      "title": "Revoke active runtime while retaining ownership",
+      "production": [
+        260,
+        440
+      ],
+      "tests": [
+        500,
+        850
+      ],
+      "depends": [
+        "G1.14",
+        "F2.2"
+      ],
+      "source": [
+        "internal/deploy/identity_mapping_operations.go",
+        "internal/dockerdeploy/current_workload_lifecycle_mapped.go"
+      ],
+      "owns": "Active revocation composition, stopped/inhibited intent, every registered retry/replacement fence, exact stop/removal and retained mapping/data state.",
+      "check": "Success means runtime retired and no recovery owner can restart it. Later admission rejects; data/reservations remain. Ambiguous cleanup cannot report revocation success."
+    },
+    {
+      "id": "G3.1",
+      "title": "Reconcile interrupted activation and exact cleanup",
+      "production": [
+        260,
+        440
+      ],
+      "tests": [
+        550,
+        900
+      ],
+      "depends": [
+        "G2.1"
+      ],
+      "source": [
+        "internal/deploy/identity_mapping_native_state.go",
+        "internal/dockerdeploy/live_run_recovery.go"
+      ],
+      "owns": "Complete pending-operation matrix across install, preparation, admission, private transfer, replacement, manager effects, revocation and network cleanup. Reuse B recovery and existing ownership checks.",
+      "check": "Each interruption has one supported safe continuation. No stale PID/copied receipt/name-only object authorizes adoption, duplicate start, data deletion or reservation release."
+    },
+    {
+      "id": "G3.2",
+      "title": "Qualify the complete public multi-identity launch path",
+      "production": [
+        0,
+        0
+      ],
+      "tests": [
+        1000,
+        1600
+      ],
+      "depends": [
+        "G3.1",
+        "F4.2"
+      ],
+      "source": [
+        "internal/dockerdeploy/current_workload_lifecycle_mapped_test.go",
+        ".github/workflows/ci.yml"
+      ],
+      "owns": "Source-bound public exact/bounded stage/build/configure/run/test/install/start/retry/stop/revoke journeys and full refusal/cleanup matrix. Close every generic-launch row through supported interfaces.",
+      "check": "No public guard opens before all required positive and negative evidence passes. Require every exact-head CI job and the separate remote reviews; injected/cross-build/WSL results cannot substitute for unavailable native qualifications."
+    }
+  ]
+}

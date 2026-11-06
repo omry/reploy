@@ -1,6 +1,6 @@
 ---
-status: A/B landed; C internal integration delivered; full-campaign architecture approved; remaining group delivery includes LLD preparation and review; public mapped execution remains inhibited
-updated: 2026-10-27
+status: A–E delivered; F/G controller LLD and slice review in progress; H–K remain; public mapped execution remains inhibited
+updated: 2026-11-01
 summary: Full-campaign architecture and contracts for isolated single-installation identities, with implementation-ordered slices and separate proof and approval gates.
 ---
 
@@ -35,6 +35,16 @@ and root-run mapped operations reject before mutation; the existing system-unit
 path does not establish that rootless runtime account. This is the initial mapped runtime scope; it does not claim system-scope support.
 Ordinary single-identity behavior keeps its backend-independent default.
 
+## Current delivery state — 2026-11-01
+
+A–E are delivered. D's declarations/image evidence and E's private mapped
+mechanisms do not open public mapped execution. The next work is review and
+mechanism engineering for the [F/G draft](#fg-engineering-and-slice-inventory--draft),
+followed by its design publication/PR cycle. The separately requested RDA
+cancellation hotfix precedes F/G implementation. H–K remain unfinished.
+The old post-C table and D continuation below retain historical planning and
+evidence. Do not select or reset completed D/E from those sections.
+
 ## Approved scope boundary — 2026-10-19
 
 - Implement mapping input, validation, state and recovery for one workload
@@ -64,7 +74,12 @@ The superseded proposal made that a delivery dependency. The scope correction
 above removes that dependency while retaining explicit mappings and manual
 external coordination. It does not approve a composition API.
 
-## Remaining scope: implementation-ordered delivery table
+## Historical post-C forecast: implementation-ordered delivery table
+
+This table preserves the post-C forecast, including the then-unfinished D/E.
+D/E are now delivered. It is not the current unfinished-work count or estimate.
+The F/G engineering section below owns the proposed next inventory; H–K retain
+their provisional parent estimates until their own LLD review.
 
 Letters are delivery groups, numbers are slices within the group. Read top to
 bottom. Earlier independent work may run sooner (notably K1). Group subtotals
@@ -227,8 +242,11 @@ retained data and unmanaged services. Reploy serializes and checks one
 installation's own authority. Host snapshots and installation locks are not a
 global allocator or an atomic lock over administrator changes. Operators must
 stop and fence affected workloads before changing delegation or reservations.
-Every new controlled execution admission still refreshes the required host
-inventory and delegation checks; earlier success is never a cached permission.
+Every new controlled creation, replacement or external-entry admission still
+refreshes the required host inventory and delegation checks. Only the same
+unchanged, previously admitted container may reuse its approval for engine
+restart, subject to the qualified mechanism and fences below. Earlier success
+does not authorize a new object or changed execution authority.
 
 The host operator, Reploy implementation and accepted blueprint are trusted.
 Application code, application-controlled data and ordinary image hooks are
@@ -262,6 +280,9 @@ untrusted; image locking identifies bytes rather than establishing trust.
 
 These are logical contracts; reuse and extend existing records rather than
 create a parallel state store or admission cache.
+An unchanged-container retry record is a confined startup projection of the
+existing exact-object admission transaction, not a second mapping authority or
+a cache that can admit new objects.
 
 | Record | Required binding | Producer and consumer |
 | --- | --- | --- |
@@ -346,7 +367,9 @@ ownership or authorize a previously omitted role.
 
 All Reploy-controlled application paths use one admission boundary: initial
 start, application command, test, shell, controlled session, lifecycle hook,
-runtime exec and restart. An unsupported path
+runtime exec and replacement. An engine restart of the same unchanged admitted
+container may reuse that container's original approval through a qualified
+startup mechanism. An unsupported path
 rejects before payload execution. Native processes may fork, exec, select mapped
 identities with admitted capabilities and restart workers inside already accepted
 workload authority; they cannot use those actions to enlarge that authority.
@@ -383,17 +406,23 @@ The host operation authorizes each requested role entry against fresh host and
 installation authority. Reuse the existing command/session transport to invoke
 the trusted launch boundary, binding the installation, generation,
 mapping revision, exact owned container, role and attempt. This is operation
-evidence, not a new bearer token, admission cache or always-connected replacement
-protocol. Stale, disconnected or incomplete requests launch no application code;
+evidence, not a bearer token for other objects or an always-connected replacement
+protocol. The approved unchanged-container retry exception requires a separate
+exact-object approval record; it cannot reinterpret a one-shot frame as reusable
+permission. Stale, disconnected or incomplete first-admission requests launch no application code;
 ambiguous replies retain their operation and never authorize a blind replay.
 
 The required foreground master's exit ends its container instance. Native worker
 replacement may use existing admitted authority; it is not a new host admission.
 Whole-container recreation and external entries still require fresh admission.
 Completion of a transient hook or explicit app command does not itself end the workload.
-An installed user-service may apply its existing restart policy only by
-re-entering host admission for a new instance. Detached staging requires an
-explicit new host operation. No engine restart policy bypasses these checks.
+An installed host service must re-enter host admission when creating a new
+container. A qualified engine policy may retry the same unchanged admitted
+container without a new host invocation. A new detached staged container still
+requires an explicit host operation. Reploy stop, preparation and revocation
+must fence all owners that can retry or create a replacement before completing
+the protected operation; removing the exact owned container is a candidate
+common engine fence, not permission to delete retained storage.
 Foreground/session ownership loss follows existing bounded stop/cleanup and
 retains uncertainty when stopping cannot be proved. An already admitted detached
 instance needs no continuously running host broker. Native worker changes cannot
@@ -453,12 +482,17 @@ to start and inspect later. J may add only its explicit narrow interface rights.
 
 ### G contract: activation, restart and revocation
 
-The existing host operation or foreground user-service runner owns application
-admission and the permitted whole-container restart chain. User-service startup re-enters the normal host authority and
-generation checks under the selected OS user. Reuse the existing user-service
-lifecycle; do not delegate autonomous workload restart to an engine policy
-that can bypass Reploy. Non-root foreground staging/run/test follows the same
-admission. System units and root-run mapped operations remain ineligible.
+Reploy owns application admission, recovery policy and stop/revocation state.
+Reuse existing host service/control integration where applicable rather than
+assuming a user-service runner exists or introducing a shared daemon. A host
+manager invokes fresh admission for a new container under the selected OS user.
+A qualified engine may execute configured retries of the same unchanged
+admitted container; it may not create replacements, reinterpret policy or undo
+a completed Reploy fence. The LLD must cover supported user/system and
+OS/engine combinations and their actual gaps separately. Non-root foreground
+staging/run/test follows the same admission. System units, system-scope and
+root-run mapped operations remain ineligible; the recovery amendment does not
+expand that cohort.
 
 Installing from staging creates a separate destination mapping owner with an
 explicit independently validated mapping decision. It copies portable build
@@ -654,7 +688,7 @@ Evidence gates remain independent from design approval. Completing this section
 does not claim the one-shot launch, storage, network, restore or interface mechanisms
 have passed. Their owning LLD must provide the exact proof plan before code.
 
-The current 37 remaining slice estimates are conditional. The explicit
+The historical post-C 37-slice estimates are conditional. The explicit
 host-operation/one-shot launch boundary, exclusive storage and interface obligations
 may require decimal splits, especially E2/E3, F2 and J1/J3. Re-estimate against
 the selected LLD before implementation; do not force a new control plane into
@@ -797,8 +831,10 @@ input files cannot retarget an operation midway; a later operation rereads input
 and performs normal revision checks. A changed desired mapping never overrides
 accepted or uncertain reservations. Check/status distinguish desired missing or
 conflicting input from recorded candidate/accepted/retained authority. Existing
-runtime restart uses recorded accepted maps plus fresh admission, not a mutable
-sidecar. Removing overrides or introducing `???` cannot erase stored reservations.
+runtime replacement uses recorded accepted maps plus fresh admission, not a
+mutable sidecar. A qualified unchanged-container retry uses its original exact
+admission binding; removing overrides or introducing `???` cannot erase stored
+reservations or authorize a different container.
 
 Range length does not authorize work proportional to the represented ID count.
 Validate interval arithmetic and delegated containment before account/group
@@ -958,7 +994,7 @@ belongs only to the inhibited pending intent.
 The source stays valid, unchanged and separately reserved. Do not inherit its
 mapping ID, reservation history, pending operation, inhibition or owned resources.
 No source-to-destination ownership transfer or cross-directory commit is needed.
-The exact public install flags remain part of service-design.
+Destination input follows the current F/G override contract below; no mapping-specific install flags are selected.
 
 Only immutable build/image authority crosses this boundary automatically. Existing
 path-update/config/data transfer routes must reject mapped source storage that
@@ -1189,8 +1225,10 @@ and user-service runtime account must be the same non-root numeric UID/GID. Stor
 daemon or restart owner. C1/G1 must positively identify the selected local rootless
 engine and its operating account and pin its endpoint. Configure/admission rejects
 root, sudo-mediated account substitution, a different engine account, and installed
-`scope: system` before mapped workload mutation. Every start, restart, recreation,
-exec and ownership-preparation path rechecks this binding and delegated authority.
+`scope: system` before mapped workload mutation. Every new container creation,
+replacement, external exec and ownership-preparation path rechecks this binding
+and delegated authority. A qualified unchanged-container engine retry reuses
+the admitted binding instead of refreshing host inventory on every process start.
 Unproved endpoint/runtime-account evidence rejects rather than trusting the caller
 or a socket path alone. Existing system installation resolves an application account
 separately but its systemd unit runs as root; that account is not a rootless engine
@@ -1217,12 +1255,15 @@ retain those recorded effects and inhibition for exact recovery; do not claim
 atomic rollback of a multi-object preparation. F1/F2 test account/delegation changes
 between configuration and preparation, with unchanged objects on rejection.
 
-Every execution admission, including start, restart, recreation and runtime
-exec, also refreshes delegation, engine identity and the complete authoritative bulk
+Every new-container, replacement or external-entry execution admission also
+refreshes delegation, engine identity and the complete authoritative bulk
 UID/GID principal inventory. Rerun the interval collision checks and reject
 unavailable, incomplete or conflicting evidence before payload release; staging
 or earlier execution evidence cannot substitute. Verify effective kernel maps
-before release as well. If host delegation changes
+before first release as well. The qualified same-container engine-retry exception
+retains the exact original admitted authority and still performs its trusted
+local startup checks; it cannot authorize another container or changed plan.
+If host delegation changes
 concurrently, Reploy cannot prevent that administrator action; it must reject
 known disagreement and never report revocation complete while resources remain.
 
@@ -1711,7 +1752,612 @@ policy before child launch, and preparation/network checks before service
 activation. It replaces the earlier group table with forward prerequisites.
 No obsolete enrollment/global-allocator implementation remains in B.
 
+<!-- FG-CONTROLLER-LLD-START -->
+
+## F/G engineering and slice inventory — draft
+
+The accepted direction is a lean host controller per persistent installation,
+reusing the existing embedded runner and local engine transports. This section
+is the canonical **F/G delivery candidate inventory**. The earlier F/G parent
+rows preserve the original forecast; they are not an additional implementation
+queue. D/E delivery is complete and is not reset by this replan. Publication and implementation require current local/independent/remote review,
+agreed public contracts and the applicable proof gates. No public mapped guard
+opens from this document alone.
+
+### Accepted public surface and scope
+
+- Managed mounts use optional `owner`, `group`, `permissions` and separate
+  `directories`/`files` maps. Omitted owner resolves from the applicable runtime
+  context; omitted group uses that owner's primary group. Omitted permissions
+  preserve existing creation behavior. Directories are prepared parent-first,
+  before files. No recursive repair, foreign-tree adoption, general content
+  templating or implicit role-to-user conversion is introduced.
+- `environment.mounts.root` with `target: /` describes the intrinsic image root,
+  not an external bind. Omitted means read-only. `writable: true` explicitly
+  permits application image-root changes; trusted Reploy startup/control paths
+  remain protected. Other mounts keep their independent writable policies.
+  For the initial mapped cohort, a writable managed mount under the default
+  read-only root must target an absent, empty or directory-only image location.
+  Any existing image file beneath its resolved destination causes refusal,
+  including data-only files. Root writable opt-in relinquishes application-image
+  replacement protection, not trusted-path protection. Ordinary installations
+  do not acquire this mapped-only restriction.
+- Mapping input moves directly to schema-1 `podman.identity_mapping`, with
+  explicit `staging` and `deployed` decisions and whole-array UID/GID overrides.
+  This is the undeployed feature revision, not a parallel legacy mapping path.
+  Destination admission is independent and never copies staging reservations,
+  ownership, secret values or an admission result.
+- `environment.workload.restart` is the Reploy-owned policy, with `no` as the
+  default, `on-failure[:N]` and `always`. `N` is a positive decimal retry limit.
+  All conditions honor explicit stop for the current activation. Automatic
+  boot/login enablement is separate: `up`/`down` do not change it, and existing
+  `enable`/`disable` controls do not implicitly start/stop. An enabled installation
+  can start at its next qualified boot/login even after `down` or with retry
+  policy `no`. Revocation, preparation and uncertain-cleanup fences still survive
+  every activation. No `unless-stopped` value is selected.
+  Existing ordinary `docker.workload.restart` remains compatible;
+  specifying both fields is an error. No silent ordinary-install migration or
+  engine-policy fallback is allowed when the new controller is unavailable.
+
+```yaml
+environment:
+  workload:
+    command: mail
+    restart: "on-failure:5"
+```
+
+Reploy owns recovery policy. The engine performs effects with its independent
+automatic restart disabled for controller-owned workloads. The OS manager
+supervises Reploy. A confirmed surviving workload can be reobserved after
+controller loss without replaying startup or private delivery. A failed mapped
+instance uses exact retirement and fresh container admission; E's consumed
+one-shot release frame cannot restart an old container. The earlier permission
+for a separately qualified unchanged-container engine retry remains a contract
+permission, not a second mechanism to implement in this plan.
+
+Initial mapped execution remains non-root local rootless Linux Podman through
+the Docker-compatible local socket. Ordinary Docker/Podman controller behavior
+is covered separately on currently supported host/scope combinations. Native
+Windows/macOS system installs, remote engines, mapped Docker and mapped system
+scope remain outside this delivery. Secret-manager and clipboard features are
+future consumers, not implementation work hidden in these slices.
+
+### Destination input and override contract
+
+Use the existing typed deployment overrides mechanism. The blueprint's
+`podman.identity_mapping.deployed` declaration supplies destination defaults;
+destination-local `overrides.yaml` can replace selected mapping values through
+the same strict override model. A supplied UID or GID array replaces that whole
+array; omitted values retain the selected declaration. Host starts are actual
+host IDs, not Podman's intermediate parent-namespace IDs. No mapping-specific
+install flags, second override language or mandatory separate mapping file is
+introduced. Existing `--port` behavior is outside this change.
+
+The delivered mapping loader currently handles staging only. G1.1 relocates
+and phase-selects the existing typed override consumers; G1.3 connects the
+strict destination-local reader to first installation and updates. Read and
+validate one destination input snapshot under the destination operation lock,
+bind its environment and selected declaration, and use that same captured intent
+for the pending operation. Source staging overrides are not destination input.
+A fresh destination's override file supplies desired configuration only; it
+cannot establish ownership or authorize adoption of existing data. Existing
+installation/directory checks and paired-lock ordering still apply.
+
+The existing exact/bounded validators check the complete effective candidate,
+fresh host delegation, principals, retained reservations and source/destination
+overlap before effects. A missing override uses the blueprint's deployed values.
+An update or retry preserves the destination's retained assignments; changing
+an override cannot silently remap them. These consumers remain implementation
+work, not a claim that installed override support already exists.
+
+```yaml
+podman:
+  identity_mapping:
+    schema: 1
+    staging:
+      profile: bounded
+      uids: [{container_start: 0, host_start: 100000, count: 65536}]
+      gids: [{container_start: 0, host_start: 100000, count: 65536}]
+    deployed:
+      profile: bounded
+      uids: [{container_start: 0, host_start: 200000, count: 65536}]
+      gids: [{container_start: 0, host_start: 200000, count: 65536}]
+```
+
+These are illustrative administrator-provided ranges. Their presence is not
+proof that the host has delegation or that another installation has not reserved
+them. Never interpret them as Podman's intermediate parent-namespace IDs.
+
+### Engineering contracts and ordering
+
+The [controller engineering draft](supporting/MULTI_IDENTITY_IMPLEMENTATION_PLAN/fg-controller-engineering.md)
+defines separate manager enablement and current-activation intent, control epochs,
+exclusive kernel-backed owner leases,
+per-process receipts, bounded engine calls, retry accounting, exact reattachment
+and manager-stop lock ordering. Extend the existing machine-local deployment
+state; do not add a second registry or portable authority. Current-activation stop and durable
+revocation/preparation inhibition outrank recovery within their respective scope. A wait error, missing engine
+observation or successful stop command is not proof that the runtime is retired.
+
+Storage preparation receives a frozen manifest of declared relative objects,
+held managed-root descriptors, selected geometry and fresh operation/revision
+authority. It returns exact observed object identities and metadata, or an
+inhibited failure. No user path, image code, callback or recursively traversed
+application tree runs with setup authority. Reject symlink/mount/alias/type
+substitution. Existing recorded data is verified; it is not silently repaired.
+Observe every relevant attachment and fence its registered recovery owner before
+protected mutation. G connects its actual controller adapter to this F contract;
+F does not depend on a future G implementation to qualify unattached staging.
+
+The [mechanism engineering contract](supporting/MULTI_IDENTITY_IMPLEMENTATION_PLAN/fg-mechanism-engineering.md)
+defines the bounded build-time image-destination projection and its actual
+mount observations. Extend the verified image stream and existing build lock;
+do not discover a general executable/dependency closure or export the image on
+every launch. Bind literal/resolved destinations and content facts to the locked
+immutable image, platform, root policy and exact mount selection. Missing or
+stale required evidence means rebuild or refusal. Preserve ordinary absent-field
+canonical identity. F1.1.2 owns this producer and validation integration once.
+F3.1.2 replaces the private E closure placeholder with this enforceable policy
+and complete actual root/mount/source observations; update request, validator
+and provider together. Trusted paths and ancestors remain independently
+protected, including a generation-verified read-only `/reploy-probe` file bind
+when the application root is writable. Reuse the packaged verifier artifact
+and private operation/installation workspace with exact lifetime cleanup.
+
+Network setup must occur while the trusted mapped process is inhibited, before
+host release. Reuse the nftables installer, which currently runs too late inside
+the post-release sandbox path. F's production provider must obtain effective
+namespace/mount/code/kernel observations bound to the exact frozen plan and
+pinned process; returning request digests or configured engine strings is
+insufficient. Final authority transitions still run on the qualified native
+exec path, close all setup descriptors and leave no stronger resident Reploy
+identity process in the container. A final capability that defeats the required
+network boundary remains an explicit pre-effect refusal until qualified.
+
+Keep public/local/ambiguous egress meanings, but do not treat allowed egress as
+peer permission. Admit only private per-installation namespaces and declared
+endpoint publication. Observe actual bindings and cleanup, including IPv6,
+resolvers, host gateway and direct peer paths. Publication requires effective
+pre-start evidence; an absent compatible observation is a failed gate.
+
+The controller transport reuses existing Unix and native Windows pipe dialers
+and PTY attachment. Add narrow in-process exact-container wait and required
+non-TTY stream framing, half-close, cancellation and backpressure. Remove the
+lifetime-long CLI child rather than adding a controller beside it. Keep bounded
+short-lived CLI operations where their existing behavior is useful. Compare
+the complete process tree under idle, streaming and recovery; the standalone
+waiter measurement does not establish full-controller memory savings.
+
+E's `StartupComplete` requirement needs a production source. G1.5.1 owns the
+bounded private exec-status channel in the supporting mechanism contract:
+prepare/pin its FIFO before release, verify the exact startup header, unlink
+before application execution, and retain a writer until atomic close-on-exec.
+The qualified raw tail detaches its descriptor table, moves the private status
+writer to close-on-exec descriptor 3, closes other high descriptors immediately,
+then executes or writes a fixed errno and exits without Go work. It retains E's
+existing close-range operation instead of requiring a newer range flag.
+The host requires clean channel EOF plus a fresh positive kernel live-image
+observation through the exact existing process pin; EOF, running state, argv
+or an app marker alone cannot claim startup. Preserve final credentials and
+private descriptor isolation, requalify the affected transition, and keep the
+guard if evidence is unavailable. Actual hooks/readiness and detached handoff
+remain separate completion steps. A lost uncommitted channel means exact
+retirement/recovery, never fabricated acknowledgement or private-input replay.
+
+Private `.env` readers/parsers and current once-per-process semantics already
+exist. Use a distinct internal mapped startup mode: after pre-release network
+setup and host admission, persist transfer intent, send an exact bounded private
+preamble, the unchanged E release frame and then application stdin. Startup
+uses the existing private parser and unbuffered descriptor reader, then gives
+the environment to the existing final native transition. No bytes after the E
+frame are reinterpreted, and no application bytes are prefetched. The original
+admission deadline bounds the entire sequence. Partial/invalid/cancelled input
+executes no application; retire an uncertain instance before fresh admission.
+Reattachment never resends input to a surviving process. Mapped final exec's
+guard remains until this composition and descriptor/credential closure qualify.
+No stronger occupied-namespace exec, retained secret snapshot, engine Env value,
+secret argv/metadata or silent omission is introduced. Preserve ordinary FIFO
+compatibility, the separate RDA hotfix and controlled-session parent-loss
+contract. The supporting contract records the concrete framing and proof.
+
+### Mechanism readiness and proof gates
+
+The supporting [prerequisite audit](supporting/MULTI_IDENTITY_IMPLEMENTATION_PLAN/fg-prerequisite-audit.md)
+distinguishes existing interfaces from missing providers. The following are
+load-bearing work, not completed qualifications:
+
+| Gate | Required result before dependent work | Evidence currently available |
+| --- | --- | --- |
+| F1.0 | Qualify the accepted conservative image-content boundary, confined descriptors and writable-root trusted artifact protection. | Disposable shadow/ancestor negative controls and 22 layered projection cases pass; eligible-engine descriptor/source-race and product observation checks remain. |
+| F3.0 | Eligible rootless engine network/namespace/effective-policy and endpoint mechanism, including final capability constraints. | Actual pre-release nft setup/readback and peer egress controls pass in isolated fixtures; eligible-engine DNS/IPv6/private-peer/endpoints remain. |
+| G1.0 | Direct wait/stream/EOF and mapped private-input feasibility without stronger occupied-namespace setup. | WSL Docker wait/exit/cancellation, seven private-parser cases and five refined exec-status process/FIFO cases pass; actual engine/native/final-authority and startup-race qualification remains. |
+| G1.9–G1.14 | Actual manager/account/scope, login/boot, engine availability and recovery on supported hosts. | Linux system runner and native dialers exist. New user/desktop adapters and real native qualification remain work. |
+
+F1.1.1–F4.2 remain qualification-gated until the relevant F1.0/F3.0 results
+settle their actual providers. G1.4–G1.13 additionally depend on G1.0's safe
+transport/private-input composition. Native adapter slices remain qualification-
+incomplete until their actual host checks pass. These are not declarations of
+implementation readiness merely because candidate names and ranges exist.
+
+A failed gate stops its dependents and returns to engineering. It cannot be
+closed by a document rewrite, copied evidence, new qualification flag or an
+unapproved compatibility restriction. If a mechanism needs broader authority,
+new image/consumer obligations, weaker guarantees or materially larger scope,
+return for the affected architecture decision before production work. Qualification
+rows may reuse valid existing evidence; they do not require a fabricated code
+change or an automatic extra PR when no fixture change is needed.
+
+### Counting and forecast
+
+Use the existing delivery counting convention: added or rewritten handwritten
+physical LF lines, including comments, blanks and shipped configuration. Count
+moved code at its destination, do not subtract deletions, and report mechanical
+moves/deletions separately. Production/configuration and test/fixture counts
+are separate. Exclude prose, generated files, dependencies and observations.
+Do not compare these values directly with historical delivered gross additions
+plus removals. No working-hour or token budget is inferred.
+
+The [sizing basis](supporting/MULTI_IDENTITY_IMPLEMENTATION_PLAN/fg-sizing-basis.md)
+records inspected seams and component allocations. Ranges price incremental
+work against those source seams, not complete reused files. Common state, fixtures and transports are owned once. Missing
+native adapters are priced explicitly. Upper bounds remain conditional on the
+mechanism gates; this forecast is not an implementation-readiness claim.
+Target 500 production lines per implementation PR; hard maximum 750. Split
+before implementation if new evidence invalidates a range. Do not weaken a
+parent requirement to fit the target.
+
+| Group | Candidates | Production/configuration LOC | Test/fixture LOC |
+| --- | ---: | ---: | ---: |
+| F | 13 | 2,690–4,440 | 6,850–11,200 |
+| G | 19 | 4,130–7,010 | 10,700–17,850 |
+| **Combined** | **32** | **6,820–11,450** | **17,550–29,050** |
+
+The original logical-parent forecast was 2,400–4,200 production and
+4,300–7,050 test lines. The revised draft adds concrete sandbox observation,
+entry coverage, crash/stop state, direct transport and native manager work that
+the parent estimates did not price adequately. The intermediate retained-input
+engine-retry forecast is historical analysis, not another delivery queue. Its
+line-count convention excluded unchanged moves, so do not report its numerical
+delta as a strictly normalized before/after result.
+
+### Ordered candidates and completion checks
+
+The order below is the proposed delivery order. Dependencies are actual prior
+results, including proof outcomes. The proposed decimal children replace their
+F/G parent candidates only after review and supported campaign adoption.
+
+| Slice | Concrete change | Production LOC | Test/fixture LOC | Prerequisites |
+| --- | --- | ---: | ---: | --- |
+| F1.0 | Prove the managed-data and immutable-code boundary | 0–0 | 350–650 | E4.2 |
+| F1.1.1 | Declare managed metadata and intrinsic root policy | 280–430 | 450–750 | F1.0 |
+| F1.1.2 | Bind image-destination projection to the generation | 350–550 | 700–1100 | F1.1.1 |
+| F1.2 | Prepare declared objects through pinned descriptors | 300–480 | 600–950 | F1.1.2 |
+| F1.3 | Confine preparation to selected subordinate authority | 240–400 | 450–750 | F1.2 |
+| F2.1 | Record storage ownership and exclusive preparation | 280–460 | 550–850 | F1.3 |
+| F2.2 | Fence recovery owners before protected storage effects | 240–420 | 550–900 | F2.1 |
+| F3.0 | Prove eligible rootless network and effective observation | 0–0 | 450–800 | F2.2 |
+| F3.1.1 | Prepare trusted network policy before mapped release | 180–330 | 350–650 | F3.0 |
+| F3.1.2 | Supply production mount and kernel sandbox observations | 300–500 | 650–1000 | F1.1.2; F3.1.1 |
+| F3.2 | Enforce private installation network boundaries | 260–440 | 550–900 | F3.1.2 |
+| F4.1 | Publish and observe only declared endpoints | 260–430 | 500–800 | F3.2 |
+| F4.2 | Qualify storage and network together | 0–0 | 700–1100 | F4.1 |
+| G1.0 | Prove controller transport and interrupted startup boundaries | 0–0 | 450–800 | F3.0 |
+| G1.1 | Select phase mappings under the Podman input | 280–450 | 550–900 | F1.1.1 |
+| G1.2 | Connect approved identity maintenance commands | 200–340 | 400–650 | G1.1 |
+| G1.3 | Install an independent destination owner | 320–520 | 600–1000 | G1.2; F4.2 |
+| G1.4 | Declare Reploy restart policy and durable controller state | 300–480 | 550–900 | G1.0; G1.3 |
+| G1.5.1 | Produce trusted mapped startup-completion evidence | 350–600 | 800–1300 | G1.4; F1.3; F3.1.2 |
+| G1.5.2 | Recover workloads through the shared controller loop | 300–500 | 650–1050 | G1.5.1; F2.2 |
+| G1.6 | Wait on the engine without a persistent Docker CLI child | 160–290 | 350–600 | G1.5.2 |
+| G1.7 | Replace lifetime stream children with bounded direct attachment | 260–440 | 550–950 | G1.6 |
+| G1.8 | Integrate private input with the mapped final transition | 230–410 | 550–900 | G1.7; F1.3 |
+| G1.9 | Install and control the Linux user controller | 180–320 | 400–700 | G1.8 |
+| G1.10 | Add the macOS user controller adapter | 220–400 | 450–800 | G1.9 |
+| G1.11 | Add the native Windows user controller adapter | 250–440 | 500–850 | G1.10 |
+| G1.12 | Connect checked persistent controls and replacement | 300–500 | 600–1000 | G1.11 |
+| G1.13 | Connect fresh commands and tests with their existing semantics | 260–440 | 550–950 | G1.12 |
+| G1.14 | Qualify common controller behavior on supported hosts | 0–0 | 700–1150 | G1.13 |
+| G2.1 | Revoke active runtime while retaining ownership | 260–440 | 500–850 | G1.14; F2.2 |
+| G3.1 | Reconcile interrupted activation and exact cleanup | 260–440 | 550–900 | G2.1 |
+| G3.2 | Qualify the complete public multi-identity launch path | 0–0 | 1000–1600 | G3.1; F4.2 |
+
+#### F1.0 — Prove the managed-data and immutable-code boundary
+
+Disposable descriptor/alias/mount and image-shadow probes. Reuse the accepted image-content projection and actual shadow/ancestor proofs; qualify the remaining confined-descriptor and trusted-source lifetime races before dependent production preparation.
+
+Prerequisites: E4.2. Existing source seams: `internal/dockerdeploy/mapped_sandbox_proof.go`, `internal/dockerdeploy/runtime_host_filesystem_linux.go`.
+
+Completion: Empty/absent/directory-only destinations work under read-only root; populated image destinations refuse writable managed mounts. Protected-path escape and trusted-source replacement refuse before effects, including under root writable opt-in. Ordinary installs retain their behavior. Failed eligible-engine proof blocks dependents; new restrictions or weaker guarantees require design review.
+
+#### F1.1.1 — Declare managed metadata and intrinsic root policy
+
+Accepted owner/group/permissions and separate relative directories/files maps. Intrinsic root defaults read-only, with explicit environment.mounts.root writable policy. Preserve ordinary omitted-field identity.
+
+Prerequisites: F1.0. Existing source seams: `internal/blueprint/syntax.go`, `internal/blueprint/model.go`, `internal/dockerdeploy/execution_plan.go`.
+
+Completion: Resolve contextual owners and primary groups, reject unsafe paths/unknown principals before effects, bind the root policy canonically without admitting an external bind over /.
+
+#### F1.1.2 — Bind image-destination projection to the generation
+
+Collect bounded layer metadata during the existing immutable-image stream, apply whiteout/alias/type rules and emit the closed per-destination projection defined in the supporting contract. Bind optional mapped-only evidence in the existing build lock to image/config/platform/rootfs, mount selection and root policy. Connect validation, publication and exact reuse without a second store or launch-time full export.
+
+Prerequisites: F1.1.1. Existing source seams: `internal/dockerdeploy/image_identity_layers.go`, `internal/dockerdeploy/image_identity_archive.go`, `internal/deploy/build_lock.go`, `internal/dockerdeploy/current_build_reuse.go`.
+
+Completion: The 22 projection controls and aggregate parser/resource/cancellation limits pass; forged/missing/stale evidence cannot admit populated writable mounts. Ordinary omitted-field canonical bytes remain stable. Rebuilt image/mount-policy evidence is required after changes; portable evidence never replaces host admission.
+
+#### F1.2 — Prepare declared objects through pinned descriptors
+
+Descriptor-relative inert directory/file creation and existing-object verification, parent-first directories then files. No symlink/mount crossing, alias/type substitution, recursive ownership repair or application code.
+
+Prerequisites: F1.1.2. Existing source seams: `internal/dockerdeploy/runtime_host_filesystem_linux.go`.
+
+Completion: Exact declared metadata succeeds; substitution, hardlink and foreign-tree races leave protected targets unchanged. Count shared adversarial fixtures here once.
+
+#### F1.3 — Confine preparation to selected subordinate authority
+
+Reviewed setup-helper invocation with freshly validated selected geometry, pinned handoff descriptors, numeric ownership and bounded cancellation. Reuse existing mapping/writer authority.
+
+Prerequisites: F1.2. Existing source seams: `internal/deploy/identity_mapping_operations.go`, `internal/probe/mapped_exec_linux.go`.
+
+Completion: Private subordinate ownership and recipient access work without host-root/operator aliases, unrelated mutations, application execution or a surviving privileged helper. The earlier namespace/file probe is partial feasibility evidence only.
+
+#### F2.1 — Record storage ownership and exclusive preparation
+
+Managed resource identities and preparation/attachment inhibition in the existing transaction. Capture selected handles, revisions and pending effects; no independent resource registry.
+
+Prerequisites: F1.3. Existing source seams: `internal/deploy/state_v1.go`, `internal/deploy/identity_mapping_native_state.go`.
+
+Completion: Concurrent attach/prepare and stale geometry refuse before writes; crashes retain exact ownership and reservations. A process exit or API success alone cannot prove an unattached resource.
+
+#### F2.2 — Fence recovery owners before protected storage effects
+
+Exact retirement and restart-owner fence contract consumed by later controller adapters. Keep the operation lock out of external manager-stop waits; require fresh retirement observations before preparation.
+
+Prerequisites: F2.1. Existing source seams: `internal/dockerdeploy/current_workload_lifecycle_mapped.go`, `internal/deploy/control_lease.go`.
+
+Completion: No registered engine/controller owner can recreate during preparation or undo stop/revocation. Lost observation retains inhibition; retained application data and reservations remain intact.
+
+#### F3.0 — Prove eligible rootless network and effective observation
+
+Disposable proof on an E-compatible rootless Podman path: trusted pre-release setup, namespace-pinned effective rules, DNS, private peer boundary and endpoint transport. Establish which final capabilities preserve that boundary.
+
+Prerequisites: F2.2. Existing source seams: `internal/probe/network_firewall_linux.go`, `internal/dockerdeploy/podman_mapped_waiter.go`.
+
+Completion: Positive allowed egress/endpoints and direct peer, gateway and IPv6 negatives with exact cleanup. Existing C patched-guest and ordinary Docker results do not close this gate. Failure blocks dependent code rather than weakening policy.
+
+#### F3.1.1 — Prepare trusted network policy before mapped release
+
+Move only trusted policy setup before the release wait, using the frozen plan and existing nftables installer. Keep application execution after the host gate and final native transition; do not copy the installer.
+
+Prerequisites: F3.0. Existing source seams: `internal/probe/mapped_wait.go`, `internal/probe/sandbox_exec_linux.go`, `internal/probe/network_firewall_linux.go`.
+
+Completion: Effective setup exists while payload is inhibited; failure/timeout never releases the application; no setup network authority survives the final transition.
+
+#### F3.1.2 — Supply production mount and kernel sandbox observations
+
+Actual F provider bound to exact inhibited PID/namespaces, locked image-destination projection, complete actual root/mount/source state and compiled capability-conditioned kernel policy. Replace the unimplemented complete-code-closure placeholder in request, validator and provider together. Reuse the packaged verifier for a protected top-level read-only bind under writable root. Obtain effective observations, not echoed request digests or engine strings alone.
+
+Prerequisites: F1.1.2, F3.1.1. Existing source seams: `internal/dockerdeploy/mapped_sandbox_proof.go`, `internal/dockerdeploy/podman_mapped_waiter.go`.
+
+Completion: Real protected-path/source/ancestor, root-policy and effective-kernel positives/negatives; stale PID, unplanned/substituted mount, missing projection, writable image-shadow and unverified filter facts refuse before release. Root opt-in never exposes trusted Reploy bytes or broadens capabilities.
+
+#### F3.2 — Enforce private installation network boundaries
+
+Canonical private namespace/attachment shape, resolver and host-gateway handling, public/local/ambiguous policy and capability-conditioned refusals. No shared private network or implicit peer reachability.
+
+Prerequisites: F3.1.2. Existing source seams: `internal/dockerdeploy/podman_mapped_policy.go`, `internal/probe/network_firewall_linux.go`.
+
+Completion: Selected transport preserves intended allowed traffic and denies undeclared TCP/UDP/abstract-socket peers. Unsupported capability or transport combinations fail explicitly before effects.
+
+#### F4.1 — Publish and observe only declared endpoints
+
+Typed create/inspect endpoint fields, staged/deployed port selection and exact network/publication ownership and cleanup.
+
+Prerequisites: F3.2. Existing source seams: `internal/dockerdeploy/execution_plan.go`, `internal/dockerdeploy/podman_application_identity.go`.
+
+Completion: Only declared addresses/ports are reachable; mismatched publication blocks payload. Partial teardown retains uncertainty and never removes a foreign object.
+
+#### F4.2 — Qualify storage and network together
+
+Integrated exact/bounded preparation, attachment, effective sandbox, network, endpoint and failure evidence on the qualified engine. Reuse child fixtures without repeating their entire test inventory.
+
+Prerequisites: F4.1. Existing source seams: `internal/dockerdeploy/current_workload_lifecycle_mapped_test.go`.
+
+Completion: Observable supported-boundary filesystem/network positives and refusal/no-mutation negatives close F's parent obligations; injected fixtures alone do not.
+
+#### G1.0 — Prove controller transport and interrupted startup boundaries
+
+Bounded disposable direct wait/attach/EOF/cancellation and mapped private-input feasibility. Reuse the successful WSL Docker wait proof; add missing Podman and native transport evidence where load-bearing.
+
+Prerequisites: F3.0. Existing source seams: `internal/dockerdeploy/docker_pty_attach.go`, `internal/dockerdeploy/private_workload_environment_inject.go`.
+
+Completion: Exact exit status, no duplicate/foreign start, private input confinement and no setup descriptors/authority at exec. Missing native tests remain named adapter readiness gates; no false universal qualification.
+
+#### G1.1 — Select phase mappings under the Podman input
+
+Direct schema-1 relocation to podman.identity_mapping with staging/deployed selection, typed whole-array overrides and independent install mapping selection. Update every opt-in/retained-state guard and resolved serialization path.
+
+Prerequisites: F1.1.1. Existing source seams: `internal/blueprint/syntax.go`, `internal/deploy/state_v1.go`.
+
+Completion: Correct phase/override precedence; no old undeployed mapping path, fallback profile, authority copied from staging or declaration-removal bypass. Existing typed overrides supply changed values without a mapping-specific CLI parser or source-sidecar adoption.
+
+#### G1.2 — Connect approved identity maintenance commands
+
+Public check/configure/status/recover wiring to delivered identity operations with bounded contexts, diagnostics and held-lock authority. Reuse approved command contracts.
+
+Prerequisites: G1.1. Existing source seams: `internal/cli/cli.go`, `internal/deploy/identity_mapping_operations.go`.
+
+Completion: Actual commands reach existing operations; pending/dormant/revoked state stays authoritative; commands do not launch payload or adopt copied state.
+
+#### G1.3 — Install an independent destination owner
+
+Destination locks, strict destination-local override snapshot, publication, independent mapping decision, immutable portable-build reuse, overlap/revision checks and partial install recovery.
+
+Prerequisites: G1.2, F4.2. Existing source seams: `internal/dockerdeploy/provider_install_run.go`, `internal/dockerdeploy/provider_install_plan.go`.
+
+Completion: Staging and user install have separate reservations; source state/data remain unchanged. Never copy source pending operations, admission, managed ownership or secrets.
+
+#### G1.4 — Declare Reploy restart policy and durable controller state
+
+environment.workload.restart parsing/serialization and legacy conflict checks; separate manager enablement and activation intent, control epoch, controller lease and durable attempt/retry accounting in existing deployment state. Shared controller test fixture belongs here once.
+
+Prerequisites: G1.0, G1.3. Existing source seams: `internal/blueprint/syntax.go`, `internal/blueprint/model.go`, `internal/deploy/deployment_state_v1.go`, `internal/deploy/control_lease.go`.
+
+Completion: No automatic exit retry by default. Start/stop, enable/disable and retry policy remain independent. Controller recovery cannot undo a stop within the same activation or reset its allowance; a genuine enabled boot/login or explicit start can create a new activation only after recovery gates pass. Security inhibition survives all activations. Unknown state and competing owners refuse.
+
+#### G1.5.1 — Produce trusted mapped startup-completion evidence
+
+Connect E's private startup confirmation to the bounded managed status FIFO, exact binding, unlink-before-release and fresh post-EOF kernel observation. Refine the final native tail to preserve only the close-on-exec status descriptor, close other high descriptors immediately and report fixed failure without Go work. Keep final authority unchanged. Reuse the existing process pin and lifecycle receipt; no application marker, tracer, resident helper or extra authority store.
+
+Prerequisites: G1.4, F1.3, F3.1.2. Existing source seams: `internal/dockerdeploy/current_workload_lifecycle_mapped.go`, `internal/dockerdeploy/mapped_process_linux.go`, `internal/probe/mapped_exec_linux.go`.
+
+Completion: Actual inhibited-versus-executed startup is distinguished on the supported mapped path. Both profiles/native tuples pass same-binary, failure/cancel/kill/exit-race and private-fd controls. Missing/stale/ambiguous status or kernel evidence refuses completion. Old E close-before-exec results are not relabelled new-tail qualification; uncertain startup retires before another admission. Hooks/readiness and detachment keep their own gates.
+
+#### G1.5.2 — Recover workloads through the shared controller loop
+
+Adapt the existing runner for qualified user ownership, host-manager/workload failure separation, policy/backoff, exact reattachment and interrupted-attempt recovery. No persistent approval file or secret snapshot.
+
+Prerequisites: G1.5.1, F2.2. Existing source seams: `internal/dockerdeploy/installed_service_container.go`, `internal/dockerdeploy/installed_service_wait.go`, `internal/dockerdeploy/workload_lifecycle.go`.
+
+Completion: Confirmed surviving processes are observed without reinjection; failed mapped instances retire before fresh admission. Lost engine observation never implies death or authorizes a second workload.
+
+#### G1.6 — Wait on the engine without a persistent Docker CLI child
+
+Narrow in-process wait using existing local Unix/named-pipe dialers, pinned endpoint/API version, bounded result decoding and request/body cancellation. Retain short-lived CLI operations where appropriate.
+
+Prerequisites: G1.5.2. Existing source seams: `internal/dockerdeploy/installed_service_wait.go`, `internal/dockerdeploy/docker_endpoint.go`, `internal/dockerdeploy/docker_pty_attach_windows.go`.
+
+Completion: Preserve actual exit status and error distinction; disconnect/cancel releases resources and triggers checked reconciliation. Compare whole-process-tree idle memory, not just a minimal probe binary.
+
+#### G1.7 — Replace lifetime stream children with bounded direct attachment
+
+Reuse PTY transport and add only required non-TTY framing, incremental stdout/stderr handling, stdin half-close, backpressure and independent exit observation. Preserve attach-before-payload ordering.
+
+Prerequisites: G1.6. Existing source seams: `internal/dockerdeploy/docker_pty_attach.go`, `internal/dockerdeploy/live_run_container.go`, `internal/dockerdeploy/live_run_mapped.go`.
+
+Completion: Large/slow streams have bounded buffers; EOF is not exit status; actual stdin/cancellation and exact cleanup survive on supported transports. Preserve the separately delivered RDA hotfix contract.
+
+#### G1.8 — Integrate private input with the mapped final transition
+
+Reuse .env validation and one-shot delivery through the distinct bounded private-preamble startup mode, followed by the unchanged E frame and exact application stdin. Persist transfer intent after admission, retain the original deadline and feed the existing native final transition. No stronger occupied-namespace exec or secret bytes in durable state, argv or engine metadata.
+
+Prerequisites: G1.7, F1.3. Existing source seams: `internal/probe/private_workload_environment_linux.go`, `internal/probe/mapped_exec_linux.go`, `internal/dockerdeploy/private_workload_environment_inject.go`.
+
+Completion: One accepted recipient/process receives dummy input exactly once; other roles/transient commands do not. Interrupted transfer retires safely; final descriptors, credentials and capabilities remain correct before enabling the guarded path.
+
+#### G1.9 — Install and control the Linux user controller
+
+Per-installation systemd user adapter, embedded executable/account/endpoint binding, checked stop rather than raw Compose, readiness and removal. Reuse system-unit rendering without granting mapped system scope.
+
+Prerequisites: G1.8. Existing source seams: `internal/dockerdeploy/provider_install_systemd.go`, `internal/dockerdeploy/provider_install_host_commands.go`, `internal/dockerdeploy/install_types.go`.
+
+Completion: Actual user lifecycle and engine readiness; explicit manager/lingering prerequisites and WSL distribution limits. No auto elevation, hidden host configuration or fallback recovery owner.
+
+#### G1.10 — Add the macOS user controller adapter
+
+Per-installation launchd user adapter for the common ordinary-workload controller: install/control, account/session binding, engine/VM readiness and removal. No system backend or mapped macOS promise.
+
+Prerequisites: G1.9. Existing source seams: `internal/dockerdeploy/platform.go`, `internal/dockerdeploy/provider_install_host_commands.go`.
+
+Completion: Native user login/logout, controller failure, explicit stop, update/removal and engine recovery. An unqualified adapter cannot accept the new public Reploy restart field by silently delegating it.
+
+#### G1.11 — Add the native Windows user controller adapter
+
+Per-installation Task Scheduler user adapter, exact executable/identity, process lifetime/duplicate-instance settings, controller recovery and removal. Reuse native pipe/file validation; no Windows system service or mapped runtime expansion.
+
+Prerequisites: G1.10. Existing source seams: `internal/dockerdeploy/platform.go`, `internal/dockerdeploy/docker_pty_attach_windows.go`, `internal/cli/control.go`.
+
+Completion: Actual native Desktop Linux-engine lifecycle, quoting/paths, controller death, stop intent, login and removal. No default task duration termination, duplicate controller or claims based on WSL tests.
+
+#### G1.12 — Connect checked persistent controls and replacement
+
+Public up/down/restart/status/log/health and existing enable/disable dispatch, hooks/readiness and exact replacement with activation-scoped intent, independent enablement and manager fencing. Preserve legacy ordinary behavior unless explicitly selected by the new policy.
+
+Prerequisites: G1.11. Existing source seams: `internal/cli/control.go`, `internal/dockerdeploy/current_workload_lifecycle.go`, `internal/dockerdeploy/current_workload_lifecycle_mapped.go`.
+
+Completion: Up requires actual startup/handoff and never changes enablement; enable/disable do not implicitly start/stop. Repeated up has no duplicate injection; stop/restart cannot deadlock or race a new attempt. Real boot/login activation remains distinct from controller crash recovery. Ordinary behavior stays explicit; unsupported mapped paths remain guarded.
+
+#### G1.13 — Connect fresh commands and tests with their existing semantics
+
+Actual staged/test/hook/deployed command adapters and correct fresh-container classification. Preserve stdin/EOF/TTY, role and output/status semantics; no default raw-shell role or unqualified occupied exec.
+
+Prerequisites: G1.12. Existing source seams: `internal/dockerdeploy/current_app_command_run.go`, `internal/dockerdeploy/current_shell_run.go`, `internal/dockerdeploy/mapped_entry_plan.go`.
+
+Completion: Supported command journeys use the common complete gate; actual unqualified host-native/occupied/shared-session paths refuse before effects. Enum names cannot misclassify ordinary fresh deployed commands.
+
+#### G1.14 — Qualify common controller behavior on supported hosts
+
+Native Linux user/system ordinary, WSL, native Windows user and macOS user manager/session qualification with actual supported engines. System-scope mapped remains refused. Shared state tests are reused, not counted again.
+
+Prerequisites: G1.13. Existing source seams: `internal/dockerdeploy/platform_test.go`, `internal/dockerdeploy/installed_service_wait_test.go`.
+
+Completion: Install/start/stop/restart/update/rollback/remove, controller crash, engine outage and host/session activation evidence with exact versions/locations, retained data and full process-tree memory/CPU observations. Unsupported combinations remain explicit.
+
+#### G2.1 — Revoke active runtime while retaining ownership
+
+Active revocation composition, stopped/inhibited intent, every registered retry/replacement fence, exact stop/removal and retained mapping/data state.
+
+Prerequisites: G1.14, F2.2. Existing source seams: `internal/deploy/identity_mapping_operations.go`, `internal/dockerdeploy/current_workload_lifecycle_mapped.go`.
+
+Completion: Success means runtime retired and no recovery owner can restart it. Later admission rejects; data/reservations remain. Ambiguous cleanup cannot report revocation success.
+
+#### G3.1 — Reconcile interrupted activation and exact cleanup
+
+Complete pending-operation matrix across install, preparation, admission, private transfer, replacement, manager effects, revocation and network cleanup. Reuse B recovery and existing ownership checks.
+
+Prerequisites: G2.1. Existing source seams: `internal/deploy/identity_mapping_native_state.go`, `internal/dockerdeploy/live_run_recovery.go`.
+
+Completion: Each interruption has one supported safe continuation. No stale PID/copied receipt/name-only object authorizes adoption, duplicate start, data deletion or reservation release.
+
+#### G3.2 — Qualify the complete public multi-identity launch path
+
+Source-bound public exact/bounded stage/build/configure/run/test/install/start/retry/stop/revoke journeys and full refusal/cleanup matrix. Close every generic-launch row through supported interfaces.
+
+Prerequisites: G3.1, F4.2. Existing source seams: `internal/dockerdeploy/current_workload_lifecycle_mapped_test.go`, `.github/workflows/ci.yml`.
+
+Completion: No public guard opens before all required positive and negative evidence passes. Require every exact-head CI job and the separate remote reviews; injected/cross-build/WSL results cannot substitute for unavailable native qualifications.
+
+### Parent obligation ownership and delivery boundary
+
+| Parent outcome | Owning candidates and integrated check |
+| --- | --- |
+| F1 declared objects, fresh subordinate authority and immutable code/mount boundary | F1.0–F1.3 and F3.1.2; integrated F4.2. |
+| F2 exclusive prepare/attach, crash inhibition and all restart owners | F2.1–F2.2; actual controller connection G1.5.2/G1.12; revocation G2.1; crash matrix G3.1. |
+| F3 public/local egress plus private, non-peer-reachable namespace/policy | F3.0–F3.2; effective pre-release observations F3.1.2; integrated F4.2. |
+| F4 declared endpoints, actual publication and exact cleanup | F4.1–F4.2; interrupted cleanup G3.1. |
+| G1 independent install, explicit destination maps, every supported entry, hooks/readiness and recovery | G1.0–G1.14; exact retirement/new admission G1.5.2/G1.12; fresh commands G1.13. |
+| Supported OS/scope/engine behavior without new mapped cohorts | G1.9–G1.14; existing unsupported system/remote/mapped cases remain refused. |
+| G2 active revocation, retained ownership and future admission refusal | G2.1 with F2.2 and actual manager fences. |
+| G3 uncertain effects, exact-resource cleanup and generic-launch | G3.1 and complete public positive/negative qualification G3.2. |
+
+Preserve public mapped inhibition through all intermediate slices. G3.2 alone
+can close generic-launch after the actual required evidence and approvals. A
+clean design review cannot substitute for runtime or native-platform proof.
+Every implementation PR requires all current exact-head `ci.yml` jobs before
+approval, including Linux, Bash evidence, every smoke target and both Windows
+host jobs; derive the actual current names when running its PR cycle.
+
+Finish affected LLD review and stamps, checkpoint/publish the reviewed design
+and complete its PR cycle before dependent implementation. The separately
+authorized RDA cancellation hotfix remains an independent delivery after F/G
+design and before F/G implementation. Do not merge, release or resume completed
+E work. Later H–K are not part of this delivery selection.
+
+<!-- FG-CONTROLLER-LLD-END -->
+
 ## Required design and evidence gates
+
+F/G engineering inputs are the [prerequisite audit](supporting/MULTI_IDENTITY_IMPLEMENTATION_PLAN/fg-prerequisite-audit.md),
+[lifecycle analysis](supporting/MULTI_IDENTITY_IMPLEMENTATION_PLAN/fg-lifecycle-options.md)
+and [restart/fencing evaluation](supporting/MULTI_IDENTITY_IMPLEMENTATION_PLAN/fg-restart-fencing-evaluation.md).
+The [per-installation controller comparison](supporting/MULTI_IDENTITY_IMPLEMENTATION_PLAN/fg-controller-evaluation.md)
+records the selected direction for detailed engineering. Its
+[controller draft](supporting/MULTI_IDENTITY_IMPLEMENTATION_PLAN/fg-controller-engineering.md)
+separates restart conditions from durable operator intent and targets removal
+of lifetime-long Docker CLI children. Detailed slices and qualification remain
+subject to the affected reviews; ordinary-install migration is not implied.
+Proposed amendments in supporting analysis do not change the governing contract
+without the affected review and maintainer decision.
 
 Gates are work inside delivery, not extra code PRs. Review establishes design
 quality; only the maintainer can approve a new intended behavior or authority.
@@ -1954,9 +2600,12 @@ Preserve that mapping and every slice-prefixed commit title.
 Do not create a duplicate PR or rewrite an approved ancestor.
 
 
-## Current design request and D continuation
+## Historical D design request and continuation — 2026-10-27
 
-The architecture PR #282 is published and approved, unmerged. Draft PR #284
+The following records the request at that time. D/E are now delivered; these
+old runs and stopping instructions are not the current continuation.
+
+At that time, architecture PR #282 was published and approved, unmerged. Draft PR #284
 owns the consolidated D design and native-process reconciliation. Current run
 `run_5yye79jpd9dbcb98rg135yrv00` finishes the approved amendment, document review,
 stamps, publication and exact-head PR cycle, records the continuation point and

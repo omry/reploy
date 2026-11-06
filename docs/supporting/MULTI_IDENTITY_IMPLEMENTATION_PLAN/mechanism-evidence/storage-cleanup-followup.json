@@ -1,0 +1,9 @@
+{
+  "at": "2026-11-01T16:05:42.800104+00:00",
+  "original_result": "storage-proof-result.json",
+  "cause": "Podman unshare recreated empty caller-owned storage lock directories while shutting down; original receipt retained unchanged.",
+  "private_root_removed": true,
+  "private_proof_processes": [],
+  "containers_and_image_removed_in_original_receipt": true,
+  "action": "Removed only the exact caller-owned private proof root after verifying ownership, realpath, empty engine inventory and no matching processes."
+}

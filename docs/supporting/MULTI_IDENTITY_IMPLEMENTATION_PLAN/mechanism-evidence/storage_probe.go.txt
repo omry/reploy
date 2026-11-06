@@ -1,0 +1,51 @@
+package main
+
+import (
+ "encoding/json"
+ "os"
+ "strings"
+ "syscall"
+)
+
+func main() {
+ mode := os.Args[1]
+ checks := map[string]bool{}
+ details := map[string]string{}
+ switch mode {
+ case "readonly":
+  err := os.WriteFile("/app/start", []byte("CHANGED"), 0755)
+  checks["image_code_write_denied"] = err != nil
+  err = os.WriteFile("/new-root-file", []byte("x"), 0600)
+  checks["root_write_denied"] = err != nil
+ case "shadow-control":
+  data, err := os.ReadFile("/app/start")
+  checks["declared_mount_masks_image_code"] = err == nil && string(data) == "SHADOW"
+  err = os.WriteFile("/app/start", []byte("CHANGED"), 0755)
+  checks["readonly_root_does_not_protect_rw_mount"] = err == nil
+ case "writable-protected":
+  err := os.WriteFile("/app/start", []byte("CHANGED"), 0755)
+  checks["explicit_root_write_works"] = err == nil
+  file, err := os.OpenFile("/probe", os.O_WRONLY, 0)
+  checks["trusted_binary_write_denied"] = err != nil
+  if file != nil { file.Close() }
+  checks["trusted_binary_unlink_denied"] = os.Remove("/probe") != nil
+  checks["trusted_binary_rename_denied"] = os.Rename("/probe", "/replaced") != nil
+ case "ancestor-control":
+  err := os.Rename("/opt", "/moved-opt")
+  details["ancestor_rename"] = "succeeded"
+  if err != nil { details["ancestor_rename"] = err.Error() }
+  checks["ancestor_attack_observed"] = true
+  if err == nil {
+   if err = os.MkdirAll("/opt/reploy", 0755); err == nil {
+    err = os.WriteFile("/opt/reploy/probe", []byte("SUBSTITUTED"), 0755)
+   }
+   details["trusted_path_replaced"] = "false"
+   if err == nil { details["trusted_path_replaced"] = "true" }
+  }
+ }
+ maps, _ := os.ReadFile("/proc/self/uid_map")
+ passed := len(checks) != 0
+ for _, ok := range checks { passed = passed && ok }
+ json.NewEncoder(os.Stdout).Encode(map[string]any{"mode":mode,"checks":checks,"details":details,"uid_map":strings.TrimSpace(string(maps)),"uid":syscall.Getuid(),"passed":passed})
+ if !passed { os.Exit(1) }
+}
