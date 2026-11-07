@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/omry/reploy/internal/canonical"
 )
 
 const workloadLifecycleFilenameV1 = "workload-lifecycle.json"
@@ -17,15 +19,20 @@ const workloadLifecycleFilenameV1 = "workload-lifecycle.json"
 // process startup. A transfer claim is durable before the first payload byte.
 // This file is masked from applications together with all .reploy metadata.
 type WorkloadLifecycleV1 struct {
-	Schema          string `json:"schema"`
-	State           string `json:"state"`
-	Endpoint        string `json:"endpoint"`
-	Runtime         string `json:"runtime"`
-	ContainerID     string `json:"container_id"`
-	StartedAt       string `json:"started_at"`
-	TransferClaimed bool   `json:"transfer_claimed"`
-	StartupComplete bool   `json:"startup_complete"`
-	HandoffComplete bool   `json:"handoff_complete"`
+	// RetirementOwner binds the durable inhibition to one kernel-backed control
+	// lease. RecoveryOwners binds the complete trusted restart-owner inventory.
+	// Neither field is an admission or successful-retirement assertion.
+	RetirementOwner string           `json:"retirement_owner,omitempty"`
+	RecoveryOwners  canonical.Digest `json:"recovery_owners,omitempty"`
+	Schema          string           `json:"schema"`
+	State           string           `json:"state"`
+	Endpoint        string           `json:"endpoint"`
+	Runtime         string           `json:"runtime"`
+	ContainerID     string           `json:"container_id"`
+	StartedAt       string           `json:"started_at"`
+	TransferClaimed bool             `json:"transfer_claimed"`
+	StartupComplete bool             `json:"startup_complete"`
+	HandoffComplete bool             `json:"handoff_complete"`
 }
 
 func (record WorkloadLifecycleV1) Validate() error {
@@ -64,6 +71,12 @@ func (record WorkloadLifecycleV1) Validate() error {
 	}
 	if record.TransferClaimed && record.ContainerID == "" || record.HandoffComplete && !record.TransferClaimed {
 		return fmt.Errorf("invalid workload lifecycle transfer evidence")
+	}
+	if record.RetirementOwner != "" || record.RecoveryOwners != "" {
+		if ValidateControlMarkerIDV1(record.RetirementOwner) != nil || record.RecoveryOwners.Validate() != nil ||
+			record.ContainerID == "" || (record.State != "stopping" && record.State != "down") {
+			return fmt.Errorf("invalid workload retirement ownership")
+		}
 	}
 	return nil
 }

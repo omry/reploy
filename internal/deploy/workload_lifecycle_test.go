@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/omry/reploy/internal/canonical"
 )
 
 func TestWorkloadLifecycleDurablePrivateEvidenceV1(t *testing.T) {
@@ -95,5 +97,49 @@ func TestWorkloadLifecycleRejectsUntrustedEvidenceV1(t *testing.T) {
 	}
 	if _, _, err := lock.ReadWorkloadLifecycleV1(); err == nil {
 		t.Fatal("hard link accepted")
+	}
+}
+
+func TestWorkloadLifecycleRetirementBindingV1(t *testing.T) {
+	record := WorkloadLifecycleV1{Schema: "workload-lifecycle-v1", State: "stopping", Endpoint: strings.Repeat("a", 64), Runtime: strings.Repeat("b", 64), ContainerID: strings.Repeat("c", 64), StartedAt: "2026-10-22T00:00:00Z", RetirementOwner: "control-0123456789abcdef", RecoveryOwners: canonical.Digest("sha256:" + strings.Repeat("d", 64))}
+	for _, name := range []string{"valid", "down", "missing lease", "missing inventory", "invalid lease", "invalid inventory", "no process", "up", "starting"} {
+		t.Run(name, func(t *testing.T) {
+			r := record
+			switch name {
+			case "down":
+				r.State = "down"
+			case "missing lease":
+				r.RetirementOwner = ""
+			case "missing inventory":
+				r.RecoveryOwners = ""
+			case "invalid lease":
+				r.RetirementOwner = "foreign"
+			case "invalid inventory":
+				r.RecoveryOwners = "not-a-digest"
+			case "no process":
+				r.ContainerID = ""
+				r.StartedAt = ""
+			case "up":
+				r.State = "up"
+				r.StartupComplete = true
+			case "starting":
+				r.State = "starting"
+			}
+			valid := name == "valid" || name == "down"
+			dir := t.TempDir()
+			lock, err := AcquireOperationLock(t.Context(), dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lock.Unlock()
+			err = lock.WriteWorkloadLifecycleV1(r)
+			if (err == nil) != valid {
+				t.Fatal("retirement binding validity", name, err)
+			}
+			got, found, readErr := lock.ReadWorkloadLifecycleV1()
+			if readErr != nil || found != valid || valid && got != r {
+				t.Fatal("retirement binding persistence", got, found, readErr)
+			}
+		})
 	}
 }
