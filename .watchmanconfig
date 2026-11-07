@@ -1,0 +1,14 @@
+{
+  "ignore_dirs": [
+    ".nox",
+    ".pytest_cache",
+    ".venv",
+    "__pycache__",
+    "dist",
+    "reploy-staging",
+    "temp",
+    "website/.docusaurus",
+    "website/build",
+    "website/node_modules"
+  ]
+}

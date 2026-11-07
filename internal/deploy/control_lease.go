@@ -123,6 +123,40 @@ func validateQueueEntryLeaseIDV1(id string) error {
 	return fmt.Errorf("queue-entry lease ID must be a live-run or control-marker ID")
 }
 
+// RequireHeld verifies this lease instance and its original filesystem identity.
+// Observing some other holder through RequireQueueEntryLeaseHeldV1 cannot prove
+// that this caller still owns retirement across an unlocked manager stop.
+func (lease *QueueEntryLeaseV1) RequireHeld() error {
+	if lease == nil {
+		return fmt.Errorf("queue-entry lease is not held")
+	}
+	lease.mutex.Lock()
+	defer lease.mutex.Unlock()
+	if lease.released || lease.file == nil {
+		return fmt.Errorf("queue-entry lease is not held")
+	}
+	held, err := lease.file.Stat()
+	if err != nil {
+		return err
+	}
+	if err := requireControlLeasePathV1(lease.path, false); err != nil {
+		return err
+	}
+	current, err := os.Open(lease.path)
+	if err != nil {
+		return err
+	}
+	defer current.Close()
+	actual, err := current.Stat()
+	if err != nil {
+		return fmt.Errorf("stat queue-entry lease path: %w", err)
+	}
+	if !os.SameFile(held, actual) {
+		return fmt.Errorf("queue-entry lease identity changed")
+	}
+	return nil
+}
+
 // Release drops the ownership lease and removes its deployment-local file.
 // Repeated calls are harmless so error cleanup can use it freely.
 func (lease *QueueEntryLeaseV1) Release() error {

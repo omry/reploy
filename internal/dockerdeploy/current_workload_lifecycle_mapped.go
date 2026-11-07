@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -15,18 +18,35 @@ import (
 
 // F/G's trusted effect owner supplies these observations, never an operator,
 // application marker or engine-running assertion. Retire stops the exact owned
-// instance and proves its retirement, including an already absent instance.
+// instance, including an already absent instance.
 // A detached observation must follow qualified stream detachment and freshly
 // observe the same live instance. E supplies no production provider.
-// Calls retain the operation lock. Detach retains the waiter's ownership fence:
-// it detaches streams, not the lifetime owner, and must not recursively close it.
+// MappedRecoveryOwners enumerates every registered engine/controller restart
+// fence from trusted host state, including the bound engine fence after runtime
+// removal. These are retained fence identities, not the live-container list;
+// each remains registered and effective until an explicitly authorized new start.
+// Unknown or incomplete discovery is an error. Retirement
+// fences that entire inventory and stops/removes only the exact owned runtime,
+// preserving retained data. It runs WITHOUT the operation lock so manager
+// cleanup can acquire it. Command completion is not effect authority.
+// MappedWorkload observes the complete current inventory and durable inhibition
+// afresh under the reacquired lock. Retirement FencedOwners contains only actual
+// fences that remain effective until a later explicitly authorized new start.
+// Detach retains the waiter's ownership fence and must not recursively close it.
+// Concrete controller transport/registration belongs to later G adapters.
 type mappedWorkloadEvidenceV1 interface {
-	RetireMappedWorkload(context.Context, deploy.StateV1, mappedWorkloadRequestV1) (mappedWorkloadProofV1, error)
+	MappedRecoveryOwners(context.Context, deploy.StateV1, mappedWorkloadRequestV1) ([]mappedRecoveryOwnerV1, error)
+	RetireMappedWorkload(context.Context, deploy.StateV1, mappedWorkloadRequestV1) error
 	DetachMappedWorkload(context.Context, deploy.StateV1, mappedWorkloadRequestV1) error
 	MappedWorkload(context.Context, deploy.StateV1, mappedWorkloadRequestV1) (mappedWorkloadProofV1, error)
 }
 
+type mappedRecoveryOwnerV1 struct {
+	Kind, ID, Revision string
+}
+
 type mappedWorkloadRequestV1 struct {
+	RecoveryOwners                             []mappedRecoveryOwnerV1
 	Phase, Installation, Revision, Engine, Run string
 	Generation                                 canonical.Digest
 	Record                                     deploy.WorkloadLifecycleV1
@@ -35,6 +55,7 @@ type mappedWorkloadRequestV1 struct {
 }
 
 type mappedWorkloadProofV1 struct {
+	FencedOwners                                []mappedRecoveryOwnerV1
 	Request                                     canonical.Digest
 	Container, StartedAt                        string
 	Running, Retired, StartupComplete, Detached bool
@@ -80,7 +101,7 @@ func verifyMappedWorkloadProofV1(ctx context.Context, request mappedWorkloadRequ
 		return fmt.Errorf("mapped workload start identity changed")
 	}
 	if request.Phase == "retirement" {
-		if proof.Running || !proof.Retired {
+		if proof.Running || !proof.Retired || len(request.RecoveryOwners) == 0 || !slices.Equal(proof.FencedOwners, request.RecoveryOwners) {
 			return fmt.Errorf("mapped workload exact retirement is unverified")
 		}
 	} else if !proof.Running || proof.Retired || !proof.StartupComplete || proof.Detached != (request.Phase == "detached") {
@@ -89,13 +110,173 @@ func verifyMappedWorkloadProofV1(ctx context.Context, request mappedWorkloadRequ
 	return nil
 }
 
+// Capture real file identities while the original lock is held. A new lock at
+// the same spelling is not continuation of an installation that was replaced.
+type mappedOperationLockIdentityV1 struct {
+	path  string
+	files [3]os.FileInfo
+}
+
+func captureMappedOperationLockV1(lock *deploy.OperationLock) (mappedOperationLockIdentityV1, error) {
+	var identity mappedOperationLockIdentityV1
+	if err := lock.RequireWritable(); err != nil {
+		return identity, err
+	}
+	identity.path = lock.Path()
+	paths := []string{filepath.Dir(filepath.Dir(identity.path)), filepath.Dir(identity.path), identity.path}
+	for index, path := range paths {
+		file, err := os.Open(path)
+		if err != nil {
+			return identity, err
+		}
+		info, statErr := file.Stat()
+		err = errors.Join(statErr, file.Close())
+		if err != nil {
+			return identity, err
+		}
+		identity.files[index] = info
+	}
+	return identity, nil
+}
+
+func validateMappedRecoveryOwnersV1(request mappedWorkloadRequestV1, owners []mappedRecoveryOwnerV1) error {
+	previous, engine := "", false
+	for _, owner := range owners {
+		key := owner.Kind + "/" + owner.ID
+		if owner.ID == "" || owner.Revision == "" || key <= previous {
+			return fmt.Errorf("restart-owner inventory is incomplete, duplicated or unordered")
+		}
+		previous = key
+		switch owner.Kind {
+		case "engine":
+			if engine || owner.ID != request.Container || owner.Revision != request.Record.StartedAt {
+				return fmt.Errorf("restart-owner engine identity differs")
+			}
+			engine = true
+		case "controller":
+			// The trusted adapter owns the exact system/user manager identity and its
+			// revision. Names alone or an empty engine listing cannot supply inventory.
+		default:
+			return fmt.Errorf("unknown restart-owner kind")
+		}
+	}
+	if !engine {
+		return fmt.Errorf("restart-owner inventory lacks the exact engine object")
+	}
+	return nil
+}
+
+func retireMappedWorkloadOwnersV1(ctx context.Context, ops *deploy.IdentityMappingOperationsV1, owner mappedWorkloadEvidenceV1, state deploy.StateV1, request *mappedWorkloadRequestV1) error {
+	identity, err := captureMappedOperationLockV1(ops.Operation)
+	if err != nil {
+		return err
+	}
+	owners, err := owner.MappedRecoveryOwners(ctx, state, *request)
+	if err != nil {
+		return fmt.Errorf("discover complete restart owners: %w", err)
+	}
+	if err := validateMappedRecoveryOwnersV1(*request, owners); err != nil {
+		return err
+	}
+	request.RecoveryOwners = slices.Clone(owners)
+	inventory, err := canonical.Sum("mapped-recovery-owners", "v1", owners)
+	if err != nil {
+		return err
+	}
+	old := request.Record
+	retainedOwner, retainedInventory := old.RetirementOwner, old.RecoveryOwners
+	old.State, old.RetirementOwner, old.RecoveryOwners = "stopping", "", inventory
+	request.Record = old
+	transaction, err := canonical.Sum("mapped-workload-retirement", "v1", *request)
+	if err != nil {
+		return err
+	}
+	controlID := "control-" + strings.TrimPrefix(string(transaction), "sha256:")[:16]
+	if retainedOwner != "" && (retainedOwner != controlID || retainedInventory != inventory) {
+		return fmt.Errorf("retained restart-owner inventory changed")
+	}
+	old.RetirementOwner = controlID
+	request.Record = old
+	lease, err := ops.Operation.AcquireControlLeaseV1(controlID)
+	if err != nil {
+		return err
+	}
+	// Ambiguous retirement retains the lease file and durable inhibition. A
+	// later explicit retry must reacquire ownership and reobserve every fence.
+	defer lease.Close()
+	if err := ops.Operation.WriteWorkloadLifecycleV1(old); err != nil {
+		return err
+	}
+	held := ops.Operation
+	ops.Operation = nil // the caller must never reuse the released lock
+	if err := held.Unlock(); err != nil {
+		return err
+	}
+	stopErr := owner.RetireMappedWorkload(ctx, state, *request)
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), privateWorkloadEnvironmentTimeoutV1)
+	defer cancel()
+	currentLock, reacquireErr := deploy.AcquireExistingOperationLock(cleanupCtx, filepath.Dir(filepath.Dir(identity.path)))
+	if reacquireErr != nil {
+		return errors.Join(stopErr, fmt.Errorf("reacquire after mapped retirement: %w", reacquireErr))
+	}
+	ops.Operation = currentLock // transfer even on refusal, for caller cleanup
+	currentIdentity, err := captureMappedOperationLockV1(currentLock)
+	if err != nil {
+		return err
+	}
+	for index, original := range identity.files {
+		if !os.SameFile(original, currentIdentity.files[index]) {
+			return fmt.Errorf("mapped retirement operation-lock identity changed")
+		}
+	}
+	if err := lease.RequireHeld(); err != nil {
+		return err
+	}
+	if err := errors.Join(stopErr, ctx.Err()); err != nil {
+		return fmt.Errorf("mapped retirement remains uncertain: %w", err)
+	}
+	actual, err := ops.Status()
+	if err != nil || !reflect.DeepEqual(actual.State, state) {
+		return fmt.Errorf("mapped retirement state changed: %v", err)
+	}
+	record, found, err := currentLock.ReadWorkloadLifecycleV1()
+	if err != nil || !found || record != old {
+		return fmt.Errorf("mapped retirement lost durable inhibition: %v", err)
+	}
+	currentOwners, err := owner.MappedRecoveryOwners(ctx, actual.State, *request)
+	if err != nil || !slices.Equal(currentOwners, request.RecoveryOwners) {
+		return fmt.Errorf("mapped retirement owner inventory changed: %v", err)
+	}
+	proof, err := owner.MappedWorkload(ctx, actual.State, *request)
+	if err != nil {
+		return fmt.Errorf("fresh mapped retirement observation: %w", err)
+	}
+	if err := verifyMappedWorkloadProofV1(ctx, *request, proof); err != nil {
+		return err
+	}
+	// The observer is trusted to read facts, but a lost lock/context or changed
+	// local state during that call still cannot authorize preparation.
+	after, err := ops.Status()
+	record, found, readErr := currentLock.ReadWorkloadLifecycleV1()
+	if err != nil || readErr != nil || !found || record != old || !reflect.DeepEqual(after.State, state) || ctx.Err() != nil {
+		return fmt.Errorf("mapped retirement observation lost its exact owner")
+	}
+	if err := lease.RequireHeld(); err != nil {
+		return err
+	}
+	return lease.Release()
+}
+
 // reload is the existing trusted held-lock admission reader/writer: it reloads
 // current generation, host principal/delegation and policy, then prepares a new
 // inhibited native operation. It runs only after exact old retirement. The
 // returned plan still requires E3.1.1's owned-waiter gate; it is no admission token.
-func prepareMappedWorkloadReplacementV1(ctx context.Context, ops deploy.IdentityMappingOperationsV1, reload func(context.Context, deploy.IdentityMappingOperationsV1) (mappedEntryInputV1, error)) (mappedEntryPlanV1, error) {
+func prepareMappedWorkloadReplacementV1(ctx context.Context, ops *deploy.IdentityMappingOperationsV1, reload func(context.Context, deploy.IdentityMappingOperationsV1) (mappedEntryInputV1, error)) (mappedEntryPlanV1, error) {
 	var empty mappedEntryPlanV1
-	owner, err := requireMappedWorkloadOwnerV1(ctx, ops)
+	if ops == nil {
+		return empty, fmt.Errorf("mapped replacement requires caller-owned operations")
+	}
+	owner, err := requireMappedWorkloadOwnerV1(ctx, *ops)
 	if err != nil || reload == nil {
 		return empty, errors.Join(err, fmt.Errorf("mapped replacement requires a fresh trusted admission reader"))
 	}
@@ -127,33 +308,30 @@ func prepareMappedWorkloadReplacementV1(ctx context.Context, ops deploy.Identity
 		if err != nil || endpoint != old.Endpoint {
 			return empty, fmt.Errorf("mapped replacement old endpoint differs")
 		}
-		old.State = "stopping"
+		request := mappedWorkloadRequestV1{Phase: "retirement", Installation: m.InstallationID, Revision: m.Revision,
+			Engine: *m.Engine, Run: oldRun, Generation: m.AdmittedGeneration.BuildLockDigest, Record: old, Container: old.ContainerID}
+		if err := retireMappedWorkloadOwnersV1(ctx, ops, owner, state, &request); err != nil {
+			return empty, err
+		}
+		old = request.Record
+		// Exact retirement completed before native recovery can advance its
+		// mapping revision. Keep durable inhibition and the old instance identity,
+		// but do not carry a completed revision-bound transaction into a retry.
+		old.State, old.RetirementOwner, old.RecoveryOwners = "down", "", ""
 		if err := ops.Operation.WriteWorkloadLifecycleV1(old); err != nil {
 			return empty, err
 		}
-		request := mappedWorkloadRequestV1{Phase: "retirement", Installation: m.InstallationID, Revision: m.Revision,
-			Engine: *m.Engine, Run: oldRun, Generation: m.AdmittedGeneration.BuildLockDigest, Record: old, Container: old.ContainerID}
-		proof, err := owner.RetireMappedWorkload(ctx, state, request)
-		if err != nil {
-			return empty, fmt.Errorf("mapped replacement retirement requires recovery: %w", err)
-		}
-		if err := verifyMappedWorkloadProofV1(ctx, request, proof); err != nil {
-			return empty, err
-		}
+
 		if oldOperation != "" {
 			state, err = ops.Recover(ctx, state, oldOperation, false)
 			if err != nil || state.IdentityMapping == nil || state.IdentityMapping.PendingOperation != nil {
 				return empty, errors.Join(err, fmt.Errorf("mapped replacement native retirement remains uncertain"))
 			}
 		}
-		old.State = "down"
-		if err := ops.Operation.WriteWorkloadLifecycleV1(old); err != nil {
-			return empty, err
-		}
-	} else if found && old.State != "down" {
+	} else if oldRun != "" || found && old.State != "down" {
 		return empty, fmt.Errorf("mapped replacement has unbound startup uncertainty")
 	}
-	input, err := reload(ctx, ops)
+	input, err := reload(ctx, *ops)
 	if err != nil || ctx.Err() != nil {
 		return empty, errors.Join(err, ctx.Err())
 	}
