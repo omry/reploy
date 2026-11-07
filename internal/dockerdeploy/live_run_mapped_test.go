@@ -105,7 +105,7 @@ func newMappedLiveFixtureV1(t *testing.T, profile string, kind mappedEntryKindV1
 			if f.beforeStart != nil {
 				f.beforeStart()
 			}
-			if err := operation.RequireHeld(); err != nil {
+			if err := ops.Operation.RequireHeld(); err != nil {
 				return nil, err
 			}
 			w.prepared.ops, w.prepared.state = ops, state
