@@ -3,7 +3,10 @@ package dockerdeploy
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,6 +21,11 @@ import (
 // retained acknowledged native history. Engine, admission and F/G observations are injected;
 // no live-engine startup or detachment qualification is claimed.
 type mappedWorkloadFixtureV1 struct {
+	owners       []mappedRecoveryOwnerV1
+	inventories  int
+	inventoryErr error
+	changeOwners func(int, []mappedRecoveryOwnerV1) []mappedRecoveryOwnerV1
+	duringRetire func(*deploy.OperationLock, mappedWorkloadRequestV1)
 	*waiterEffectFixtureV1
 	t              *testing.T
 	live           *mappedLiveFixtureV1
@@ -52,6 +60,11 @@ func newMappedWorkloadFixtureV1(t *testing.T, profile string) *mappedWorkloadFix
 	live := newMappedLiveFixtureV1(t, profile, mappedHostReplacementV1)
 	f := &mappedWorkloadFixtureV1{waiterEffectFixtureV1: live.waiter.effect, t: t, live: live, ops: live.waiter.prepared.ops}
 	f.ops.Evidence = f
+	t.Cleanup(func() {
+		if f.ops.Operation != nil {
+			_ = f.ops.Operation.Unlock()
+		}
+	})
 	live.waiter.prepared.ops = f.ops
 	state := cloneMappedWorkloadStateFixtureV1(t, live.input.Current.State)
 	m := state.IdentityMapping
@@ -73,6 +86,7 @@ func newMappedWorkloadFixtureV1(t *testing.T, profile string) *mappedWorkloadFix
 	}
 	f.old = deploy.WorkloadLifecycleV1{Schema: "workload-lifecycle-v1", State: "up", Endpoint: endpoint,
 		Runtime: strings.Repeat("1", 64), ContainerID: strings.Repeat("a", 64), StartedAt: "2026-01-01T00:00:00Z", StartupComplete: true}
+	f.owners = []mappedRecoveryOwnerV1{{Kind: "controller", ID: "user/reploy-fixture", Revision: "manager-generation-1"}, {Kind: "engine", ID: f.old.ContainerID, Revision: f.old.StartedAt}}
 	if err := f.ops.Operation.WriteWorkloadLifecycleV1(f.old); err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +103,7 @@ func (f *mappedWorkloadFixtureV1) proof(request mappedWorkloadRequestV1) mappedW
 	if started == "" {
 		started = "2026-01-02T00:00:00Z"
 	}
-	proof := mappedWorkloadProofV1{Request: digest, Container: request.Container, StartedAt: started, RestartPolicy: "no",
+	proof := mappedWorkloadProofV1{FencedOwners: slices.Clone(request.RecoveryOwners), Request: digest, Container: request.Container, StartedAt: started, RestartPolicy: "no",
 		Running: request.Phase != "retirement", Retired: request.Phase == "retirement", StartupComplete: request.Phase != "retirement", Detached: request.Phase == "detached"}
 	if f.changeProof != nil {
 		f.changeProof(request, &proof)
@@ -97,21 +111,49 @@ func (f *mappedWorkloadFixtureV1) proof(request mappedWorkloadRequestV1) mappedW
 	return proof
 }
 
-func (f *mappedWorkloadFixtureV1) RetireMappedWorkload(ctx context.Context, state deploy.StateV1, request mappedWorkloadRequestV1) (mappedWorkloadProofV1, error) {
+func (f *mappedWorkloadFixtureV1) MappedRecoveryOwners(ctx context.Context, _ deploy.StateV1, _ mappedWorkloadRequestV1) ([]mappedRecoveryOwnerV1, error) {
 	f.t.Helper()
-	if err := f.ops.Operation.RequireHeld(); err != nil || ctx.Err() != nil {
-		f.t.Fatalf("retirement lost its lock/context: %v", err)
+	if f.ops.Operation.RequireHeld() != nil || ctx.Err() != nil {
+		f.t.Fatal("owner inventory lost its held lock/context")
 	}
-	record, found, err := f.ops.Operation.ReadWorkloadLifecycleV1()
+	f.inventories++
+	owners := slices.Clone(f.owners)
+	if f.changeOwners != nil {
+		owners = f.changeOwners(f.inventories, owners)
+	}
+	return owners, f.inventoryErr
+}
+
+func (f *mappedWorkloadFixtureV1) RetireMappedWorkload(ctx context.Context, state deploy.StateV1, request mappedWorkloadRequestV1) error {
+	f.t.Helper()
+	if f.ops.Operation != nil || ctx.Err() != nil {
+		f.t.Fatal("manager stop retained the operation lock or lost context")
+	}
+	// This is a real cleanup worker acquiring the deployment lock during the
+	// external manager stop. Holding the original lock deadlocks this boundary.
+	workerCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	worker, err := deploy.AcquireExistingOperationLock(workerCtx, f.live.directory)
+	if err != nil {
+		f.t.Fatalf("manager cleanup could not acquire operation lock: %v", err)
+	}
+	defer worker.Unlock()
+	record, found, err := worker.ReadWorkloadLifecycleV1()
 	if err != nil || !found || record.State != "stopping" || record.ContainerID != f.old.ContainerID || request.Container != f.old.ContainerID ||
-		request.Record != record || request.Engine != *state.IdentityMapping.Engine || request.Run != *state.IdentityMapping.NativeProcess {
-		f.t.Fatal("retirement did not select the persisted exact owner")
+		request.Record != record || record.RetirementOwner == "" || record.RecoveryOwners == "" || request.Engine != *state.IdentityMapping.Engine || request.Run != *state.IdentityMapping.NativeProcess {
+		f.t.Fatal("retirement did not select the persisted exact inhibited owner")
+	}
+	if err := worker.RequireQueueEntryLeaseHeldV1(record.RetirementOwner); err != nil {
+		f.t.Fatal("retirement lost exclusive lease", err)
 	}
 	f.trace = append(f.trace, "retire")
+	if f.duringRetire != nil {
+		f.duringRetire(worker, request)
+	}
 	if f.cancelOnRetire != nil {
 		f.cancelOnRetire()
 	}
-	return f.proof(request), f.retireErr
+	return f.retireErr
 }
 
 func (f *mappedWorkloadFixtureV1) MappedWorkload(_ context.Context, _ deploy.StateV1, request mappedWorkloadRequestV1) (mappedWorkloadProofV1, error) {
@@ -163,12 +205,13 @@ func (f *mappedWorkloadFixtureV1) reload(ctx context.Context, ops deploy.Identit
 }
 
 func (f *mappedWorkloadFixtureV1) prepare() (mappedEntryPlanV1, error) {
-	return prepareMappedWorkloadReplacementV1(f.live.waiter.ctx, f.ops, f.reload)
+	return prepareMappedWorkloadReplacementV1(f.live.waiter.ctx, &f.ops, f.reload)
 }
 
 func (f *mappedWorkloadFixtureV1) released(plan mappedEntryPlanV1) *ownedMappedWaiterV1 {
 	f.t.Helper()
 	w := f.live.waiter
+	w.prepared.ops = f.ops
 	facts, err := plan.facts()
 	if err != nil {
 		f.t.Fatal(err)
@@ -224,7 +267,7 @@ func TestMappedWorkloadReplacementOrdersRetirementAndFreshAdmissionV1(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !slices.Equal(f.trace, []string{"retire", "reload"}) || f.live.waiter.created != 0 {
+			if !slices.Equal(f.trace, []string{"retire", "retirement", "reload"}) || f.live.waiter.created != 0 {
 				t.Fatal("replacement bypassed ordered trusted retirement or created early")
 			}
 			record, _, err := f.ops.Operation.ReadWorkloadLifecycleV1()
@@ -274,7 +317,11 @@ func TestMappedWorkloadRetirementUncertaintyBlocksReloadV1(t *testing.T) {
 						}
 					}
 				}
-				if _, err := f.prepare(); err == nil || !slices.Equal(f.trace, []string{"retire"}) {
+				want := []string{"retire", "retirement"}
+				if name == "stop error" {
+					want = []string{"retire"}
+				}
+				if _, err := f.prepare(); err == nil || !slices.Equal(f.trace, want) {
 					t.Fatal("uncertain retirement reached fresh admission")
 				}
 				r, _, _ := f.ops.Operation.ReadWorkloadLifecycleV1()
@@ -346,7 +393,7 @@ func TestMappedWorkloadRequiresTrustedBoundedOwnerBeforeEffectsV1(t *testing.T) 
 					t.Fatal(err)
 				}
 			}
-			if _, err := prepareMappedWorkloadReplacementV1(ctx, f.ops, reload); err == nil || len(f.trace) != 0 {
+			if _, err := prepareMappedWorkloadReplacementV1(ctx, &f.ops, reload); err == nil || len(f.trace) != 0 {
 				t.Fatal("unqualified owner reached lifecycle effects")
 			}
 		})
@@ -370,7 +417,7 @@ func TestMappedWorkloadStartupAndQualifiedHandoffV1(t *testing.T) {
 				if record.State != "up" || !record.StartupComplete || record.ContainerID != waiter.container || record.StartedAt == f.old.StartedAt || record.HandoffComplete != detached || record.TransferClaimed != detached {
 					t.Fatal("lifecycle did not preserve exact startup/handoff identity")
 				}
-				want := []string{"retire", "reload", "attached"}
+				want := []string{"retire", "retirement", "reload", "attached"}
 				if detached {
 					want = append(want, "detach", "detached")
 				}
@@ -505,7 +552,7 @@ func TestMappedWorkloadCancellationCannotRetireOrReloadV1(t *testing.T) {
 	ctx, cancel := context.WithTimeout(f.live.waiter.ctx, time.Second)
 	defer cancel()
 	f.cancelOnRetire = cancel
-	if _, err := prepareMappedWorkloadReplacementV1(ctx, f.ops, f.reload); err == nil || !slices.Equal(f.trace, []string{"retire"}) {
+	if _, err := prepareMappedWorkloadReplacementV1(ctx, &f.ops, f.reload); err == nil || !slices.Equal(f.trace, []string{"retire"}) {
 		t.Fatal("cancelled retirement reached fresh admission")
 	}
 	record, _, err := f.ops.Operation.ReadWorkloadLifecycleV1()
@@ -560,7 +607,7 @@ func TestMappedWorkloadOwnerLossBeforeDetachHasNoTransferEffectsV1(t *testing.T)
 			if err := confirmMappedWorkloadStartupV1(f.live.waiter.ctx, f.ops, plan, waiter, true); err == nil {
 				t.Fatal("lost foreground owner completed detached startup")
 			}
-			if !slices.Equal(f.trace, []string{"retire", "reload", "attached"}) {
+			if !slices.Equal(f.trace, []string{"retire", "retirement", "reload", "attached"}) {
 				t.Fatalf("lost foreground owner reached detach effects: %v", f.trace)
 			}
 			record, _, err := f.ops.Operation.ReadWorkloadLifecycleV1()
@@ -568,5 +615,382 @@ func TestMappedWorkloadOwnerLossBeforeDetachHasNoTransferEffectsV1(t *testing.T)
 				t.Fatal("lost foreground owner persisted a transfer claim")
 			}
 		})
+	}
+}
+
+func TestMappedWorkloadOwnerInventoryMustBeCompleteBeforeInhibitionV1(t *testing.T) {
+	for _, name := range []string{"unknown inventory", "empty", "missing engine", "duplicate", "wrong engine", "wrong engine revision", "unknown owner", "unordered", "unversioned controller"} {
+		t.Run(name, func(t *testing.T) {
+			f := newMappedWorkloadFixtureV1(t, "exact")
+			before, _ := f.ops.Status()
+			switch name {
+			case "unknown inventory":
+				f.inventoryErr = errors.New("manager enumeration unavailable")
+			case "empty":
+				f.owners = nil
+			case "missing engine":
+				f.owners = f.owners[:1]
+			case "duplicate":
+				f.owners = append(f.owners, f.owners[1])
+			case "wrong engine":
+				f.owners[1].ID = strings.Repeat("b", 64)
+			case "wrong engine revision":
+				f.owners[1].Revision = "2026-01-03T00:00:00Z"
+			case "unknown owner":
+				f.owners[0].Kind = "daemon"
+			case "unordered":
+				slices.Reverse(f.owners)
+			case "unversioned controller":
+				f.owners[0].Revision = ""
+			}
+			if _, err := f.prepare(); err == nil || len(f.trace) != 0 {
+				t.Fatal("incomplete inventory reached retirement or admission")
+			}
+			record, found, err := f.ops.Operation.ReadWorkloadLifecycleV1()
+			after, stateErr := f.ops.Status()
+			if err != nil || stateErr != nil || !found || record != f.old || !reflect.DeepEqual(before.State, after.State) {
+				t.Fatal("inventory refusal changed retained state")
+			}
+		})
+	}
+}
+
+func TestMappedWorkloadFreshRetirementRequiresEveryOwnerFenceV1(t *testing.T) {
+	for _, profile := range []string{"exact", "bounded"} {
+		for _, name := range []string{"missing controller fence", "changed controller fence", "inventory changed", "inventory lost", "fresh observation lost", "observer changed lifecycle"} {
+			t.Run(profile+"/"+name, func(t *testing.T) {
+				f := newMappedWorkloadFixtureV1(t, profile)
+				before, _ := f.ops.Status()
+				data := filepath.Join(f.live.directory, "retained-data")
+				if err := os.WriteFile(data, []byte("application sentinel"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				switch name {
+				case "missing controller fence", "changed controller fence":
+					f.changeProof = func(r mappedWorkloadRequestV1, p *mappedWorkloadProofV1) {
+						if r.Phase != "retirement" {
+							return
+						}
+						if name == "missing controller fence" {
+							p.FencedOwners = p.FencedOwners[1:]
+						} else {
+							p.FencedOwners[0].Revision = "stale-manager"
+						}
+					}
+				case "inventory changed":
+					f.changeOwners = func(n int, o []mappedRecoveryOwnerV1) []mappedRecoveryOwnerV1 {
+						if n > 1 {
+							o[0].Revision = "replacement-manager"
+						}
+						return o
+					}
+				case "inventory lost":
+					f.duringRetire = func(*deploy.OperationLock, mappedWorkloadRequestV1) {
+						f.inventoryErr = errors.New("manager inventory lost")
+					}
+				case "fresh observation lost":
+					f.observeErr = errors.New("engine observation lost after successful stop")
+				case "observer changed lifecycle":
+					f.afterObserve = func(r mappedWorkloadRequestV1) {
+						if r.Phase == "retirement" {
+							old := r.Record
+							old.Runtime = strings.Repeat("f", 64)
+							if err := f.ops.Operation.WriteWorkloadLifecycleV1(old); err != nil {
+								t.Fatal(err)
+							}
+						}
+					}
+				}
+				if _, err := f.prepare(); err == nil || slices.Contains(f.trace, "reload") {
+					t.Fatal("unproved complete fence reached preparation")
+				}
+				after, err := f.ops.Status()
+				got, readErr := os.ReadFile(data)
+				if err != nil || readErr != nil || string(got) != "application sentinel" || !reflect.DeepEqual(before.State, after.State) {
+					t.Fatal("fence refusal lost data or reservations")
+				}
+				r, found, err := f.ops.Operation.ReadWorkloadLifecycleV1()
+				if err != nil || !found || r.State != "stopping" || r.RetirementOwner == "" || r.RecoveryOwners == "" {
+					t.Fatal("fence refusal lost durable inhibition")
+				}
+				if _, err := os.Stat(filepath.Join(f.live.directory, ".reploy", r.RetirementOwner+".lease")); err != nil {
+					t.Fatal("uncertain retirement lost retained lease file", err)
+				}
+			})
+		}
+	}
+}
+
+func TestMappedWorkloadStopSuccessIsNotFreshRetirementProofV1(t *testing.T) {
+	f := newMappedWorkloadFixtureV1(t, "bounded")
+	f.observeErr = errors.New("fresh observation unavailable")
+	if _, err := f.prepare(); err == nil || !slices.Equal(f.trace, []string{"retire", "retirement"}) {
+		t.Fatal("successful stop substituted for fresh observation")
+	}
+}
+
+func TestMappedWorkloadCompetingRetirementCannotPassHeldLeaseV1(t *testing.T) {
+	f := newMappedWorkloadFixtureV1(t, "exact")
+	original := f.ops.Operation
+	f.duringRetire = func(worker *deploy.OperationLock, request mappedWorkloadRequestV1) {
+		competing := *f
+		competing.trace = nil
+		competing.ops.Operation = worker
+		competing.ops.Evidence = &competing
+		competing.duringRetire = nil
+		if _, err := competing.prepare(); err == nil || len(competing.trace) != 0 {
+			t.Fatal("concurrent retirement bypassed exact control lease")
+		}
+		retained, _, err := worker.ReadWorkloadLifecycleV1()
+		if err != nil || retained != request.Record {
+			t.Fatal("competing owner changed inhibition")
+		}
+	}
+	if _, err := f.prepare(); err != nil {
+		t.Fatal(err)
+	}
+	if f.ops.Operation == original || original.RequireHeld() == nil || f.ops.Operation.RequireHeld() != nil {
+		t.Fatal("caller did not receive exclusively reacquired lock")
+	}
+}
+
+func TestMappedWorkloadUncertainRetirementRetriesSameDurableOwnerV1(t *testing.T) {
+	f := newMappedWorkloadFixtureV1(t, "bounded")
+	f.retireErr = errors.New("stop response lost")
+	if _, err := f.prepare(); err == nil {
+		t.Fatal("lost response accepted")
+	}
+	first, _, err := f.ops.Operation.ReadWorkloadLifecycleV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.retireErr = nil
+	f.trace = nil
+	f.duringRetire = func(_ *deploy.OperationLock, r mappedWorkloadRequestV1) {
+		if r.Record != first {
+			t.Fatal("retry replaced retained retirement owner")
+		}
+	}
+	if _, err := f.prepare(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(f.live.directory, ".reploy", first.RetirementOwner+".lease")); !os.IsNotExist(err) {
+		t.Fatal("completed retirement retained an active transaction lease")
+	}
+}
+
+func TestMappedWorkloadRejectsStateChangedDuringUnlockedStopV1(t *testing.T) {
+	for _, name := range []string{"mapping revision", "native owner", "lifecycle owner", "lock file", "lease file"} {
+		t.Run(name, func(t *testing.T) {
+			if runtime.GOOS == "windows" && (name == "lock file" || name == "lease file") {
+				t.Skip("Windows denies renaming an open locked file; covered by kernel sharing refusal")
+			}
+			f := newMappedWorkloadFixtureV1(t, "exact")
+			f.duringRetire = func(worker *deploy.OperationLock, r mappedWorkloadRequestV1) {
+				switch name {
+				case "mapping revision", "native owner":
+					ops := f.ops
+					ops.Operation = worker
+					actual, err := ops.Status()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if name == "mapping revision" {
+						actual.State.IdentityMapping.Revision = "3"
+					} else {
+						*actual.State.IdentityMapping.NativeProcess = "replacement-process"
+					}
+					writeMappedLiveStateFixtureV1(t, worker, actual.State)
+				case "lifecycle owner":
+					record := r.Record
+					record.Runtime = strings.Repeat("e", 64)
+					if err := worker.WriteWorkloadLifecycleV1(record); err != nil {
+						t.Fatal(err)
+					}
+				case "lock file", "lease file":
+					path := worker.Path()
+					if name == "lease file" {
+						path = filepath.Join(filepath.Dir(path), r.Record.RetirementOwner+".lease")
+					}
+					if err := os.Rename(path, path+".retained"); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(path, []byte("foreign replacement"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if _, err := f.prepare(); err == nil || !slices.Equal(f.trace, []string{"retire"}) {
+				t.Fatal("changed owner reached fresh proof or admission")
+			}
+			if name == "lease file" {
+				entries, err := filepath.Glob(filepath.Join(f.live.directory, ".reploy", "control-*.lease"))
+				if err != nil || len(entries) != 1 {
+					t.Fatal(entries, err)
+				}
+				content, err := os.ReadFile(entries[0])
+				if err != nil || string(content) != "foreign replacement" {
+					t.Fatal("refusal removed a foreign replacement lease")
+				}
+			}
+		})
+	}
+}
+
+func TestMappedWorkloadStopRequiresSeparateFreshObservationV1(t *testing.T) {
+	f := newMappedWorkloadFixtureV1(t, "exact")
+	stopped, observations := false, 0
+	f.duringRetire = func(*deploy.OperationLock, mappedWorkloadRequestV1) { stopped = true }
+	f.changeProof = func(r mappedWorkloadRequestV1, _ *mappedWorkloadProofV1) {
+		if r.Phase == "retirement" {
+			observations++
+			if !stopped || f.ops.Operation.RequireHeld() != nil {
+				t.Fatal("fresh observation preceded unlocked stop and lock reacquisition")
+			}
+		}
+	}
+	if _, err := f.prepare(); err != nil || observations != 1 || !slices.Equal(f.trace, []string{"retire", "retirement", "reload"}) {
+		t.Fatal("retirement command substituted for separate fresh observation", err, observations)
+	}
+}
+
+func TestMappedWorkloadReplacedDirectoriesCannotAcquireContinuationV1(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows sharing refuses replacement of open lock directories")
+	}
+	for _, kind := range []string{"deployment", "state directory"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newMappedWorkloadFixtureV1(t, "bounded")
+			f.duringRetire = func(worker *deploy.OperationLock, r mappedWorkloadRequestV1) {
+				original := f.live.directory
+				if kind == "state directory" {
+					original = filepath.Join(original, ".reploy")
+				}
+				retained := original + ".retained"
+				if err := os.Rename(original, retained); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					_ = os.RemoveAll(original)
+					if err := os.Rename(retained, original); err != nil {
+						t.Error(err)
+					}
+				})
+				destination := original
+				source := retained
+				if kind == "deployment" {
+					source = filepath.Join(retained, ".reploy")
+					destination = filepath.Join(original, ".reploy")
+				}
+				if err := os.MkdirAll(destination, 0700); err != nil {
+					t.Fatal(err)
+				}
+				// The foreign deployment deliberately has identical logical state. Only
+				// original directory identity can distinguish it from this transaction.
+				for _, name := range []string{"operation.lock", "state.json", "workload-lifecycle.json"} {
+					data, err := os.ReadFile(filepath.Join(source, name))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(destination, name), data, 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if _, err := f.prepare(); err == nil || !slices.Equal(f.trace, []string{"retire"}) {
+				t.Fatal("foreign directory accepted as retirement continuation")
+			}
+		})
+	}
+}
+
+func TestMappedWorkloadRetirementObservationLossKeepsDataAndReservationsV1(t *testing.T) {
+	f := newMappedWorkloadFixtureV1(t, "bounded")
+	before, _ := f.ops.Status()
+	data := filepath.Join(f.live.directory, "application-data")
+	if err := os.WriteFile(data, []byte("retained"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(f.live.waiter.ctx, time.Second)
+	defer cancel()
+	original := f.ops.Operation
+	f.cancelOnRetire = cancel
+	if _, err := prepareMappedWorkloadReplacementV1(ctx, &f.ops, f.reload); err == nil {
+		t.Fatal("cancelled manager stop authorized preparation")
+	}
+	if f.ops.Operation == nil || f.ops.Operation == original || f.ops.Operation.RequireHeld() != nil {
+		t.Fatal("bounded cancellation cleanup did not return the current lock")
+	}
+	after, err := f.ops.Status()
+	contents, readErr := os.ReadFile(data)
+	if err != nil || readErr != nil || string(contents) != "retained" || !reflect.DeepEqual(before.State, after.State) {
+		t.Fatal("cancelled retirement lost retained data or mapping reservations")
+	}
+	record, found, err := f.ops.Operation.ReadWorkloadLifecycleV1()
+	if err != nil || !found || record.State != "stopping" || record.RetirementOwner == "" {
+		t.Fatal("cancelled retirement lost durable inhibition")
+	}
+}
+
+func TestMappedWorkloadRetainedInventoryCannotBeSilentlyReboundV1(t *testing.T) {
+	f := newMappedWorkloadFixtureV1(t, "exact")
+	f.retireErr = errors.New("uncertain manager stop")
+	if _, err := f.prepare(); err == nil {
+		t.Fatal("fixture should retain uncertain retirement")
+	}
+	retained, _, err := f.ops.Operation.ReadWorkloadLifecycleV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.trace = nil
+	f.retireErr = nil
+	f.owners[0].Revision = "new-registration"
+	if _, err := f.prepare(); err == nil || len(f.trace) != 0 {
+		t.Fatal("new owner inventory rebound a retained retirement")
+	}
+	current, _, err := f.ops.Operation.ReadWorkloadLifecycleV1()
+	if err != nil || current != retained {
+		t.Fatal("rejected inventory changed original durable owner")
+	}
+}
+
+func TestMappedWorkloadMissingOriginalAuthorityCannotPrepareV1(t *testing.T) {
+	f := newMappedWorkloadFixtureV1(t, "exact")
+	if _, err := prepareMappedWorkloadReplacementV1(f.live.waiter.ctx, nil, f.reload); err == nil {
+		t.Fatal("nil caller authority accepted")
+	}
+	path := filepath.Join(f.live.directory, ".reploy", "workload-lifecycle.json")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.prepare(); err == nil || len(f.trace) != 0 {
+		t.Fatal("unbound old native process bypassed retirement")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("missing old lifecycle was fabricated")
+	}
+}
+
+func TestMappedWorkloadFailedReacquireRetainsInhibitionV1(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows sharing prevents removing the cleanup worker's open lock file")
+	}
+	f := newMappedWorkloadFixtureV1(t, "bounded")
+	var owner string
+	f.duringRetire = func(worker *deploy.OperationLock, r mappedWorkloadRequestV1) {
+		owner = r.Record.RetirementOwner
+		if err := os.Remove(worker.Path()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.prepare(); err == nil || f.ops.Operation != nil || !slices.Equal(f.trace, []string{"retire"}) {
+		t.Fatal("failed reacquisition reached admission or returned a stale lock")
+	}
+	contents, err := os.ReadFile(filepath.Join(f.live.directory, ".reploy", "workload-lifecycle.json"))
+	if err != nil || !strings.Contains(string(contents), owner) || !strings.Contains(string(contents), "stopping") {
+		t.Fatal("failed reacquisition lost original inhibition")
+	}
+	if _, err := os.Stat(filepath.Join(f.live.directory, ".reploy", owner+".lease")); err != nil {
+		t.Fatal("failed reacquisition deleted retained lease evidence", err)
 	}
 }
