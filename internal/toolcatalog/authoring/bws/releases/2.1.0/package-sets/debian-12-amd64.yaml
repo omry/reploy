@@ -1,0 +1,14 @@
+{
+  "kind": "portable-tool-package-set-v1",
+  "fields": {
+    "id": "tool:bws/releases/2.1.0/package-sets/debian-12-amd64",
+    "manager": "apt",
+    "requirements": [
+      "ca-certificates",
+      "libc6",
+      "libssl3"
+    ],
+    "repositories": [],
+    "validation_metadata": []
+  }
+}

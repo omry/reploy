@@ -1,0 +1,30 @@
+{
+  "kind": "portable-tool-package-set-v1",
+  "fields": {
+    "id": "tool:anydesk/releases/8.1.0/package-sets/debian-12-amd64",
+    "manager": "apt",
+    "requirements": [
+      "libasound2",
+      "libcairo2",
+      "libevdev2",
+      "libgl1",
+      "libgtk-3-0",
+      "libice6",
+      "libpango-1.0-0",
+      "libpolkit-gobject-1-0",
+      "libpulse0",
+      "libsm6",
+      "libx11-6",
+      "libx11-xcb1",
+      "libxcb-shm0",
+      "libxcb1",
+      "libxdamage1",
+      "libxfixes3",
+      "libxkbfile1",
+      "libxrandr2",
+      "libxtst6"
+    ],
+    "repositories": [],
+    "validation_metadata": []
+  }
+}

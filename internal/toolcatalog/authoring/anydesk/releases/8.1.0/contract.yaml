@@ -1,0 +1,33 @@
+{
+  "kind": "portable-tool-release-contract-v1",
+  "fields": {
+    "id": "tool:anydesk/releases/8.1.0/contract",
+    "contexts": [
+      "runtime"
+    ],
+    "supported_reploy": ">=0.0.0",
+    "binding": {
+      "options": []
+    },
+    "selections": {
+      "dimensions": [],
+      "combinations": []
+    },
+    "runtime": {
+      "install_root": "/opt/reploy/tools/anydesk",
+      "environment": []
+    },
+    "exports": [
+      {
+        "name": "anydesk",
+        "path": "/opt/reploy/tools/anydesk/anydesk-8.1.0/anydesk"
+      }
+    ],
+    "resolver_primitives": [
+      "https-sha256"
+    ],
+    "compatibility_constraints": [
+      "portable-archive-v1"
+    ]
+  }
+}

@@ -130,3 +130,20 @@ documentation and hygiene checks, a clean current-chat review plus fresh
 independent review, and all eight `ci.yml` jobs successful at its exact PR head.
 The predecessor evidence above qualifies unchanged tool definitions; it does
 not substitute for those new-head approval checks.
+
+## AnyDesk and BWS executable archives
+
+The candidate catalog adds AnyDesk 8.1.0 and Bitwarden Secrets Manager CLI
+(BWS) 2.1.0 for the Debian 12 Linux AMD64 runtime target. Both use the generic
+`executable-archive` payload kind and the existing bounded, checksum-verified
+archive materializer. No vendor installer script, author Dockerfile or host
+package installation is used. Archive inventory, exported executable and native
+package requirements are pinned in their release records. Unsupported targets
+(including ARM64), versions and build-only contexts are rejected before acquisition.
+
+AnyDesk is proprietary; acquisition does not grant a license or provision an
+account. See its [terms](https://anydesk.com/en/terms-and-conditions). BWS
+acquisition does not configure a vault, project, machine account or token.
+Both definitions are embedded in the Reploy binary and require a containing
+Reploy release before consumers can use them. These source additions do not
+publish or install a release.
