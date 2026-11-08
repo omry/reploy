@@ -1,1 +1,0 @@
-{"id":"tool:bws/releases/2.1.0/validation/profiles/default","probes":[{"args":["--version"],"path":"/opt/reploy/tools/bws/bws-2.1.0/bws"}],"schema":"portable-tool-validation-profile-v1","tool":"bws","version":"2.1.0"}
