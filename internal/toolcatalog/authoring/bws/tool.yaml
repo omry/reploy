@@ -1,0 +1,19 @@
+{
+  "kind": "portable-tool-v1",
+  "fields": {
+    "id": "tool:bws",
+    "name": "bws",
+    "version_scheme": "semver",
+    "summary": "Bitwarden Secrets Manager CLI",
+    "upstream": "https://bitwarden.com/help/secrets-manager-cli/",
+    "source": "https://github.com/bitwarden/sdk-sm/releases/tag/bws-v2.1.0",
+    "license": "https://github.com/bitwarden/sdk-sm/blob/main/LICENSE",
+    "documentation": "https://bitwarden.com/help/secrets-manager-cli/",
+    "releases": [
+      {
+        "id": "tool:bws/releases/2.1.0/revisions/1/manifest",
+        "digest": ""
+      }
+    ]
+  }
+}

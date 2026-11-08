@@ -1,0 +1,42 @@
+{
+  "kind": "portable-tool-release-manifest-v1",
+  "fields": {
+    "id": "tool:anydesk/releases/8.1.0/revisions/1/manifest",
+    "tool": "anydesk",
+    "version": "8.1.0",
+    "aliases": [],
+    "revision": "1",
+    "contract": {
+      "id": "tool:anydesk/releases/8.1.0/contract",
+      "digest": ""
+    },
+    "targets": [
+      {
+        "id": "tool:anydesk/releases/8.1.0/targets/debian/12/amd64",
+        "digest": ""
+      }
+    ],
+    "artifact_sources": [
+      {
+        "artifact_sha256": "sha256:cd2e4fd9ec931d963b7015bc990d90e8cd255dcc7d559653b691b705beaeec84",
+        "artifact": {
+          "id": "tool:anydesk/releases/8.1.0/payloads/anydesk-linux-amd64",
+          "digest": ""
+        },
+        "source": {
+          "id": "tool:anydesk/releases/8.1.0/revisions/1/sources/linux-amd64",
+          "digest": ""
+        }
+      }
+    ],
+    "provenance": [
+      "https://anydesk.com/en/downloads/linux"
+    ],
+    "validation_profiles": [
+      {
+        "id": "tool:anydesk/releases/8.1.0/validation/profiles/default",
+        "digest": ""
+      }
+    ]
+  }
+}

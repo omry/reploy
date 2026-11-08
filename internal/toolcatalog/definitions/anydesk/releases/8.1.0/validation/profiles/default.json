@@ -1,0 +1,1 @@
+{"id":"tool:anydesk/releases/8.1.0/validation/profiles/default","probes":[{"args":["--version"],"path":"/opt/reploy/tools/anydesk/anydesk-8.1.0/anydesk"}],"schema":"portable-tool-validation-profile-v1","tool":"anydesk","version":"8.1.0"}

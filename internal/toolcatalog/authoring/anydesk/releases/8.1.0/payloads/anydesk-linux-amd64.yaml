@@ -1,0 +1,23 @@
+{
+  "kind": "portable-tool-payload-v1",
+  "fields": {
+    "id": "tool:anydesk/releases/8.1.0/payloads/anydesk-linux-amd64",
+    "name": "anydesk",
+    "revision": "1",
+    "upstream_version": "8.1.0",
+    "platform": "linux/amd64",
+    "logical_path": "tools/anydesk/8.1.0/anydesk-8.1.0-amd64.tar.gz",
+    "kind": "executable-archive",
+    "size": "16826846",
+    "sha256": "sha256:cd2e4fd9ec931d963b7015bc990d90e8cd255dcc7d559653b691b705beaeec84",
+    "resolver": "https-sha256",
+    "entries": "32",
+    "unpacked_size": "44406545",
+    "install_directory": "anydesk-8.1.0",
+    "archive_root": "anydesk-8.1.0",
+    "symbolic_link_policy": "reject",
+    "executables": [
+      "anydesk-8.1.0/anydesk"
+    ]
+  }
+}
