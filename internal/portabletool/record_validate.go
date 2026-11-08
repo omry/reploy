@@ -855,7 +855,7 @@ func portableToolCatalogPlatformV1(value string) bool {
 }
 
 func portableToolCatalogPayloadKindV1(value string) bool {
-	return value == "executable-archive" || value == "jdk-archive" || value == "playwright-browser-archive" || value == "raw-executable"
+	return value == "jdk-archive" || value == "playwright-browser-archive" || value == "raw-executable"
 }
 
 func portableToolCatalogWheelDistributionV1(value string) bool {

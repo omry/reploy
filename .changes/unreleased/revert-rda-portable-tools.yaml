@@ -1,0 +1,2 @@
+kind: Removed
+body: Remove the AnyDesk and BWS portable tool definitions introduced in PR 334; RDA uses application-owned dependencies instead.
