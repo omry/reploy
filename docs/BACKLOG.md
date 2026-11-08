@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-10-30
+updated: 2026-11-01
 summary: Active planning surface for Reploy design and implementation gaps.
 ---
 
@@ -33,6 +33,14 @@ This file is the day-to-day queue for design and implementation gaps.
   user action.
 
 ## Pre-release
+
+- [ ] Deliver the RDA graceful launcher-cancellation hotfix after F/G design
+      and slice finalization, before implementing milestones F and G.
+      Follow [the consumer request and acceptance checks](consumers/rda.md).
+      Diagnose signal delivery and teardown ordering; retain application output
+      during bounded cleanup, then force containment when necessary. Use an
+      independent hotfix PR and complete its review/check gates before returning
+      to milestone delivery. Delivery is active; the F/G design PR is approved.
 
 - [ ] `P2` Evaluate an operator-authorized host-session service profile for Flux
       packaged SSH. Follow [the consumer requirements and evidence](consumers/flux-ssh.md).

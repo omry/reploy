@@ -2,6 +2,7 @@ package dockerdeploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -182,7 +183,13 @@ func runTemporaryContainerCommandWithCleanupHookV1(
 	if parent == nil {
 		parent = context.Background()
 	}
-	ctx, cancel := context.WithCancel(parent)
+	// A native application's attached CLI must survive host cancellation long
+	// enough for the engine to stop its init and the app to finalize output.
+	attachedParent := parent
+	if runOptions.gracefulCancellation {
+		attachedParent = context.WithoutCancel(parent)
+	}
+	ctx, cancel := context.WithCancel(attachedParent)
 	defer cancel()
 	temporaryRunOptions := runOptions
 	temporaryRunOptions.Context = ctx
@@ -192,15 +199,31 @@ func runTemporaryContainerCommandWithCleanupHookV1(
 	done := make(chan error, 1)
 	go func() { done <- run(runSpec, temporaryRunOptions) }()
 	var runErr error
+	parentDone := parent.Done()
+	if !runOptions.gracefulCancellation {
+		parentDone = nil
+	}
 	select {
 	case runErr = <-done:
-	case sig := <-signals:
-		cancel()
-		if err := <-done; err != nil {
-			runErr = fmt.Errorf("interrupted by %s: %w", sig, err)
-		} else {
-			runErr = fmt.Errorf("interrupted by %s", sig)
+		// The attached engine CLI can also receive a terminal's process-group
+		// signal, or fail before the host cancellation notification is handled.
+		// Its failure does not prove that the container has stopped.
+		if runErr != nil && runOptions.gracefulCancellation {
+			runErr = errors.Join(runErr, stopNativeCommandContainerV1(run, cleanupSpec, runOptions, parent))
 		}
+	case sig := <-signals:
+		if runOptions.gracefulCancellation {
+			runErr = stopInterruptedNativeCommandV1(run, cleanupSpec, runOptions, parent, cancel, done)
+		} else {
+			cancel()
+			if err := <-done; err != nil {
+				runErr = fmt.Errorf("interrupted by %s: %w", sig, err)
+			} else {
+				runErr = fmt.Errorf("interrupted by %s", sig)
+			}
+		}
+	case <-parentDone:
+		runErr = stopInterruptedNativeCommandV1(run, cleanupSpec, runOptions, parent, cancel, done)
 	}
 	var cleanupErr error
 	var cleanup func(context.Context) error
@@ -217,7 +240,13 @@ func runTemporaryContainerCommandWithCleanupHookV1(
 		if beforeCleanup != nil {
 			beforeCleanup(runErr, cleanup)
 		} else {
-			cleanupErr = cleanup(context.Background())
+			cleanupContext := context.Background()
+			if runOptions.gracefulCancellation {
+				var stop context.CancelFunc
+				cleanupContext, stop = context.WithTimeout(context.WithoutCancel(parent), defaultDockerPreflightTimeout)
+				defer stop()
+			}
+			cleanupErr = cleanup(cleanupContext)
 		}
 	}
 	if runErr != nil && cleanupErr != nil {
@@ -227,6 +256,35 @@ func runTemporaryContainerCommandWithCleanupHookV1(
 		return runErr
 	}
 	return cleanupErr
+}
+
+// Use the existing engine stop policy (including its configured signal and
+// grace), capped by a host deadline if the engine does not respond. Forced
+// removal still follows, and its failures retain normal live-run recovery.
+func stopInterruptedNativeCommandV1(run temporaryCommandRunner, cleanupSpec CommandSpec, options RunOptions, parent context.Context, cancel context.CancelFunc, done <-chan error) error {
+	stopErr := stopNativeCommandContainerV1(run, cleanupSpec, options, parent)
+	cancel()
+	attachedErr := <-done
+	return errors.Join(errors.New("native app command interrupted"), stopErr, attachedErr)
+}
+
+func stopNativeCommandContainerV1(run temporaryCommandRunner, cleanupSpec CommandSpec, options RunOptions, parent context.Context) error {
+	var stopErr error
+	if len(cleanupSpec.Args) > 0 && reflectDockerCleanupCommandV1(cleanupSpec, cleanupSpec.Args[len(cleanupSpec.Args)-1]) {
+		stopSpec := cleanupSpec
+		stopSpec.Args = TemporaryContainerStopCommand(cleanupSpec.Args[len(cleanupSpec.Args)-1]).Args
+		stopContext, stop := context.WithTimeout(context.WithoutCancel(parent), 30*time.Second)
+		options.Context, options.Stdin, options.Stdout, options.Stderr = stopContext, nil, nil, nil
+		stopErr = run(stopSpec, options)
+		stop()
+		if stopErr != nil && isMissingContainerCleanupError(stopErr) {
+			stopErr = nil
+		}
+	}
+	if stopErr != nil {
+		stopErr = fmt.Errorf("graceful native command stop: %w", stopErr)
+	}
+	return stopErr
 }
 
 func AppCommandList(options AppCommandListOptions) (AppCommandListResult, error) {

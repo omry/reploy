@@ -1,0 +1,2 @@
+kind: Fixed
+body: Give interrupted native app commands a bounded graceful container stop before forced cleanup, so applications can finish cleanup and retain results in the output directory.
