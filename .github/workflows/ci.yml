@@ -1,246 +1,29 @@
-name: CI
-
+name: PR339 DNS diagnostic
 on:
-  pull_request:
-  push:
-    branches:
-      - main
   workflow_dispatch:
-  workflow_call:
-
-concurrency:
-  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
-
 jobs:
-  ci:
-    name: Linux CI checks
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Select shared Go build cache
-        shell: bash
-        run: echo "GOCACHE=$RUNNER_TEMP/reploy-go-cache" >> "$GITHUB_ENV"
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.25.x"
-          cache: true
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: website/package-lock.json
-
-      - run: npm install --global npm@11.9.0
-      - name: Install maintainer tooling
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install nox
-
-      - name: Install pinned controlled-session browser fixtures
-        run: |
-          fixture=testdata/controlled-session/controlled-session-contract-v1.json
-          playwright_url=$(jq -r '.packages[] | select(.name == "playwright") | .url' "$fixture")
-          playwright_sha256=$(jq -r '.packages[] | select(.name == "playwright") | .sha256' "$fixture")
-          playwright_core_url=$(jq -r '.packages[] | select(.name == "playwright-core") | .url' "$fixture")
-          playwright_core_sha256=$(jq -r '.packages[] | select(.name == "playwright-core") | .sha256' "$fixture")
-          curl --fail --location --silent --show-error "$playwright_url" --output "$RUNNER_TEMP/playwright.tgz"
-          curl --fail --location --silent --show-error "$playwright_core_url" --output "$RUNNER_TEMP/playwright-core.tgz"
-          echo "$playwright_sha256  $RUNNER_TEMP/playwright.tgz" | sha256sum --check --strict
-          echo "$playwright_core_sha256  $RUNNER_TEMP/playwright-core.tgz" | sha256sum --check --strict
-          echo "REPLOY_PLAYWRIGHT_FIXTURE=$RUNNER_TEMP/playwright.tgz" >> "$GITHUB_ENV"
-          echo "REPLOY_PLAYWRIGHT_CORE_FIXTURE=$RUNNER_TEMP/playwright-core.tgz" >> "$GITHUB_ENV"
-
-      - name: Run CI checks
-        env:
-          NO_UPDATE_NOTIFIER: "1"
-        run: nox -s ci
-
-      - name: Prove command-only installed updates preserve operator config
-        env:
-          REPLOY_DOCKER_INTEGRATION: "1"
-        run: |
-          python tools/build_reploy --target linux-amd64 --outdir "$RUNNER_TEMP/command-only-update-bin"
-          REPLOY_TEST_BINARY="$RUNNER_TEMP/command-only-update-bin/linux-amd64/reploy" \
-            go test -v -count=1 -timeout 5m ./internal/dockerdeploy \
-            -run '^TestProviderCommandOnlyUpdateDockerIntegration$'
-
-      - name: Prove complete Java, Playwright and Bash amd64 cases and current evidence
-        env:
-          REPLOY_DOCKER_INTEGRATION: "1"
-          REPLOY_PORTABLE_TOOL_EVIDENCE_DIR: ${{ runner.temp }}/portable-tool-evidence
-        run: >-
-          go test -v -count=1 -timeout 30m ./internal/dockerdeploy
-          -run '^(TestPortableToolJavaMatrixDockerIntegration|TestPortableToolPlaywrightMatrixDockerIntegration|TestPortableToolBashAMD64MatrixDockerIntegration)$'
-
-      - name: Prove the direct controlled-session terminal and browser contract
-        env:
-          REPLOY_DOCKER_INTEGRATION: "1"
-        run: >-
-          go test -v -count=1 -timeout 15m ./internal/dockerdeploy
-          -run '^TestReployControlledSessionContractDockerIntegration$'
-
-      - name: Prove native launcher cancellation and stdin through the packaged CLI
-        run: |
-          python tools/build_reploy --target linux-amd64 --outdir "$RUNNER_TEMP/native-cancellation-bin"
-          python tools/e2e/native_cancellation.py --reploy "$RUNNER_TEMP/native-cancellation-bin/linux-amd64/reploy" --output-dir "$RUNNER_TEMP/native-cancellation-evidence"
-
-      - name: Retain native launcher cancellation evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-cancellation-${{ github.sha }}
-          if-no-files-found: ignore
-          path: ${{ runner.temp }}/native-cancellation-evidence/
-
-      - name: Retain external portable-tool observations
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: portable-tool-evidence-ci-${{ github.sha }}
-          overwrite: true
-          include-hidden-files: true
-          if-no-files-found: ignore
-          path: |
-            ${{ runner.temp }}/portable-tool-evidence/*.json
-            ${{ runner.temp }}/portable-tool-evidence/.reploy/provider-store/validation/
-
-  target-smoke:
-    name: ${{ matrix.job_name }} (${{ matrix.target }})
+  dns:
+    name: DNS diagnostic (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: linux-amd64
+          - arch: amd64
             runner: ubuntu-latest
-            job_name: Target smoke
-            smoke_args: --docker-mode optional
-          - target: linux-arm64
+          - arch: arm64
             runner: ubuntu-24.04-arm
-            job_name: Target smoke
-            smoke_args: --docker-mode optional
-          - target: darwin-arm64
-            runner: macos-15
-            job_name: Target smoke
-            smoke_args: --docker-mode optional
-          - target: darwin-amd64
-            runner: macos-15-intel
-            job_name: Target smoke
-            smoke_args: --docker-mode optional
-          - target: windows-amd64
-            runner: windows-2025
-            job_name: Windows host smoke
-            smoke_args: --docker-mode skip
-          - target: windows-arm64
-            runner: windows-11-arm
-            job_name: Windows host smoke
-            smoke_args: --docker-mode skip
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Select shared Go build cache
-        shell: bash
-        run: echo "GOCACHE=$RUNNER_TEMP/reploy-go-cache" >> "$GITHUB_ENV"
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.25.x"
-          cache: true
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install maintainer tooling
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install nox
-
-      - name: Run Go tests
-        env:
-          NO_UPDATE_NOTIFIER: "1"
-          TMPDIR: ${{ runner.temp }}/
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
-        run: nox -s go-test
-
-      - name: Run host smoke
-        env:
-          NO_UPDATE_NOTIFIER: "1"
-        run: nox -s cli-smoke -- ${{ matrix.smoke_args }}
-
-      - name: Prove complete native Bash ARM64 cases and current evidence
-        if: matrix.target == 'linux-arm64'
-        env:
-          REPLOY_DOCKER_INTEGRATION: "1"
-          REPLOY_PORTABLE_TOOL_EVIDENCE_DIR: ${{ runner.temp }}/portable-tool-evidence
-        run: >-
-          go test -v -count=1 -timeout 30m ./internal/dockerdeploy
-          -run '^TestPortableToolBashARM64MatrixDockerIntegration$'
-
-      - name: Retain external native Bash ARM64 observations
-        if: always() && matrix.target == 'linux-arm64'
+      - uses: actions/checkout@v4
+      - name: Inspect pinned-image DNS and APT behavior
+        run: python3 tools/ci/pr339_dns_diagnostic.py
+      - name: Retain diagnostic observations
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: portable-tool-evidence-arm64-${{ github.sha }}
-          overwrite: true
-          include-hidden-files: true
+          name: pr339-dns-diagnostic-${{ matrix.arch }}
+          path: ${{ runner.temp }}/pr339-dns-diagnostic/commands.json
           if-no-files-found: error
-          path: |
-            ${{ runner.temp }}/portable-tool-evidence/*.json
-            ${{ runner.temp }}/portable-tool-evidence/.reploy/provider-store/validation/
-
-  bash-native-evidence:
-    name: Bash native evidence checks
-    needs: [ci, target-smoke]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.25.x"
-          cache: true
-
-      - name: Download original AMD64 observations
-        uses: actions/download-artifact@v4
-        with:
-          name: portable-tool-evidence-ci-${{ github.sha }}
-          path: ${{ runner.temp }}/bash-amd64-evidence
-
-      - name: Download original ARM64 observations
-        uses: actions/download-artifact@v4
-        with:
-          name: portable-tool-evidence-arm64-${{ github.sha }}
-          path: ${{ runner.temp }}/bash-arm64-evidence
-
-      - name: Require all twelve current Bash cases and both native runner contexts
-        env:
-          REPLOY_BASH_AMD64_EVIDENCE_DIR: ${{ runner.temp }}/bash-amd64-evidence
-          REPLOY_BASH_ARM64_EVIDENCE_DIR: ${{ runner.temp }}/bash-arm64-evidence
-        run: >-
-          go test -v -count=1 -timeout 3m ./internal/dockerdeploy
-          -run '^TestPortableToolBashCompleteRetainedEvidenceIntegration$'
