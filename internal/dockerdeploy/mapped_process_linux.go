@@ -71,10 +71,21 @@ func (p *mappedProcessV1) fresh() error {
 	return err
 }
 
+func mappedProcessPollV1(poll []unix.PollFd, pollOnce func([]unix.PollFd, int) (int, error)) (int, error) {
+	for {
+		n, err := pollOnce(poll, 0)
+		// Signals, including Go's asynchronous preemption, can interrupt poll
+		// without changing process liveness. The timeout is always zero.
+		if err != unix.EINTR {
+			return n, err
+		}
+	}
+}
+
 func (p *mappedProcessV1) observe() (mappedProcessSnapshotV1, error) {
 	var result mappedProcessSnapshotV1
 	poll := []unix.PollFd{{Fd: int32(p.pidfd), Events: unix.POLLIN}}
-	if n, err := unix.Poll(poll, 0); err != nil || n != 0 {
+	if n, err := mappedProcessPollV1(poll, unix.Poll); err != nil || n != 0 {
 		return result, fmt.Errorf("mapped waiter exited or its process pin is unavailable")
 	}
 	root := "/proc/self/fd/" + strconv.FormatUint(uint64(p.directory.Fd()), 10)
@@ -146,7 +157,7 @@ func (p *mappedProcessV1) observe() (mappedProcessSnapshotV1, error) {
 	if err != nil || parseErr != nil || start != result.start {
 		return result, fmt.Errorf("mapped waiter process changed during observation")
 	}
-	if n, err := unix.Poll(poll, 0); err != nil || n != 0 {
+	if n, err := mappedProcessPollV1(poll, unix.Poll); err != nil || n != 0 {
 		return result, fmt.Errorf("mapped waiter exited during observation")
 	}
 	return result, nil
