@@ -1,0 +1,2 @@
+kind: Fixed
+body: Keep mapped processes available when a signal interrupts a process-liveness check.

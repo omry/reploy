@@ -11,7 +11,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -183,10 +185,13 @@ func TestMappedProcessChangesDuringObservationV1(t *testing.T) {
 			go func() { done <- p.fresh() }()
 			// Opening the FIFO writer synchronizes after the first stat/maps/ns
 			// reads and before the final stat/liveness fences.
-			writer, err := os.OpenFile(name, os.O_WRONLY, 0600)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			writer, err := openMappedObservationWriterV1(ctx, name, done)
 			if err != nil {
 				t.Fatal(err)
 			}
+			defer writer.Close()
 			if mode == "start changed" {
 				data, err := os.ReadFile(filepath.Join(root, "stat"))
 				if err != nil {
@@ -203,10 +208,128 @@ func TestMappedProcessChangesDuringObservationV1(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := <-done; err == nil {
-				t.Fatal("process changed during observation accepted")
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("process changed during observation accepted")
+				}
+			case <-ctx.Done():
+				t.Fatal("observer did not finish:", ctx.Err())
 			}
 		})
+	}
+}
+
+func openMappedObservationWriterV1(ctx context.Context, name string, done <-chan error) (*os.File, error) {
+	for {
+		select {
+		case err := <-done:
+			return nil, fmt.Errorf("observer finished before FIFO synchronization: %v", err)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		writer, err := openFIFORescueWriter(name)
+		if err == nil {
+			return writer, nil
+		}
+		if !errors.Is(err, unix.ENXIO) && !errors.Is(err, unix.EINTR) {
+			return nil, err
+		}
+		select {
+		case err := <-done:
+			return nil, fmt.Errorf("observer finished before FIFO synchronization: %v", err)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+func TestMappedProcessFIFOHandshakeReportsEarlyFailureV1(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "cmdline")
+	if err := unix.Mkfifo(name, 0600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	done <- errors.New("injected observation failure")
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if writer, err := openMappedObservationWriterV1(ctx, name, done); writer != nil || err == nil || !strings.Contains(err.Error(), "injected observation failure") {
+		t.Fatalf("early observer result: writer=%v err=%v", writer, err)
+	}
+	cancel()
+	if writer, err := openMappedObservationWriterV1(ctx, name, done); writer != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled handshake: writer=%v err=%v", writer, err)
+	}
+}
+
+func TestMappedProcessPollRetriesOnlyInterruptionsV1(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		interrupts int
+		ready      int
+		revents    int16
+		err        error
+	}{
+		{name: "idle after interruptions", interrupts: 2},
+		{name: "exited after interruption", interrupts: 1, ready: 1, revents: unix.POLLIN},
+		{name: "invalid pin after interruption", interrupts: 1, ready: 1, revents: unix.POLLNVAL},
+		{name: "terminal error after interruption", interrupts: 1, ready: -1, err: unix.EBADF},
+		{name: "terminal error without interruption", ready: -1, err: unix.EBADF},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			poll := []unix.PollFd{{Fd: 123, Events: unix.POLLIN}}
+			calls := 0
+			n, err := mappedProcessPollV1(poll, func(fds []unix.PollFd, timeout int) (int, error) {
+				calls++
+				if calls > tc.interrupts+1 {
+					t.Fatal("retried a non-interruption result")
+				}
+				if len(fds) != 1 || &fds[0] != &poll[0] || fds[0].Fd != 123 || fds[0].Events != unix.POLLIN || timeout != 0 {
+					t.Fatalf("changed poll request: %+v timeout=%d", fds, timeout)
+				}
+				if calls <= tc.interrupts {
+					return -1, unix.EINTR
+				}
+				fds[0].Revents = tc.revents
+				return tc.ready, tc.err
+			})
+			if n != tc.ready || !errors.Is(err, tc.err) || calls != tc.interrupts+1 || poll[0].Revents != tc.revents {
+				t.Fatalf("poll result: n=%d err=%v calls=%d revents=%d", n, err, calls, poll[0].Revents)
+			}
+		})
+	}
+}
+
+func TestMappedProcessObservationSurvivesSignalsV1(t *testing.T) {
+	if os.Getuid() == 0 || os.Getgid() == 0 {
+		t.Skip("mapped host observations require non-root owner")
+	}
+	p, _ := mappedProcessFixtureV1(t)
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	tid := unix.Gettid()
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_ = unix.Tgkill(os.Getpid(), tid, unix.SIGURG)
+			runtime.Gosched()
+		}
+	}()
+	defer func() { close(stop); wg.Wait() }()
+	for i := 0; i < 1000; i++ {
+		if err := p.fresh(); err != nil {
+			t.Fatalf("unchanged live process rejected on observation %d: %v", i, err)
+		}
 	}
 }
 
