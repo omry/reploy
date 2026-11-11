@@ -38,7 +38,7 @@ def _go_test(session: nox.Session) -> None:
     env = {"GOCACHE": os.environ.get("GOCACHE", str(default_go_cache))}
     # Windows ARM64 and Intel macOS have slower filesystem-heavy fixture setup; this
     # bounds the whole package suite, independently of individual probe limits.
-    timeout = "5m" if _current_target_label() in {"windows-arm64", "darwin-amd64"} else "3m"
+    timeout = "10m" if _current_target_label() in {"windows-arm64", "darwin-amd64"} else "3m"
     session.run("go", "test", "-timeout", timeout, "./...", env=env, external=True)
 
 
