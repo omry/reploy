@@ -117,31 +117,50 @@ func TestProtectedRuntimeHostFilesystemV1RecognizesKernelFilesystems(t *testing.
 	}
 }
 
-func TestProtectedRuntimeHostFilesystemV1DoesNotRejectOrdinaryTmpfs(t *testing.T) {
-	for _, candidate := range []string{"/run", "/tmp"} {
-		if _, err := os.Stat(candidate); err != nil {
-			continue
-		}
-		kind, err := runtimeHostMountFilesystemV1(candidate)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if kind != "tmpfs" {
-			continue
-		}
-		protected, err := protectedRuntimeHostFilesystemV1(candidate)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if protected == "protected nested host submount" {
-			continue
-		}
-		if protected != "" {
-			t.Fatalf("ordinary tmpfs %q classified as %q", candidate, protected)
-		}
-		return
+func TestRuntimeHostTmpfsMountProtectionV1(t *testing.T) {
+	// A tmpfs mount is not necessarily ordinary: WSL can bind a file from
+	// /run into /proc. Use explicit layouts instead of assuming the host's
+	// /run or /tmp is independent of protected trees.
+	base := "41 41 0:1 / / rw - ext4 /dev/root rw\n" +
+		"42 41 0:2 / /proc rw - proc proc rw\n" +
+		"43 41 0:3 / /dev rw - tmpfs tmpfs rw\n" +
+		"44 41 0:4 / /sys rw - sysfs sysfs rw\n" +
+		"45 41 0:5 / /run rw - tmpfs tmpfs rw\n"
+	for _, test := range []struct {
+		name  string
+		extra string
+		path  string
+		want  bool
+	}{
+		{name: "ordinary tmpfs", path: "/run"},
+		{
+			name: "WSL binfmt status alias", path: "/run", want: true,
+			extra: "46 42 0:5 /wsl/binfmt-status-lock /proc/sys/fs/binfmt_misc/status rw - tmpfs tmpfs rw\n",
+		},
+		{
+			name: "ordinary directory beside WSL alias", path: "/run/ordinary",
+			extra: "46 42 0:5 /wsl/binfmt-status-lock /proc/sys/fs/binfmt_misc/status rw - tmpfs tmpfs rw\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			data := []byte(base + test.extra)
+			kind, found, err := runtimeHostMountFilesystemByIDV1(data, 45)
+			if err != nil || !found || kind != "tmpfs" {
+				t.Fatalf("candidate filesystem = %q, %t, %v", kind, found, err)
+			}
+			protected := false
+			for _, tree := range []string{"/proc", "/dev", "/sys"} {
+				shares, err := runtimeHostMountSharesProtectedTreeV1(data, 45, test.path, tree)
+				if err != nil {
+					t.Fatal(err)
+				}
+				protected = protected || shares
+			}
+			if protected != test.want {
+				t.Fatalf("protected tmpfs backing path = %t, want %t", protected, test.want)
+			}
+		})
 	}
-	t.Skip("host has no ordinary tmpfs candidate")
 }
 
 func TestProtectedRuntimeHostFilesystemKindV1RecognizesKernelControlFilesystems(t *testing.T) {

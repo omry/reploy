@@ -1,0 +1,2 @@
+kind: Fixed
+body: Preserve the selected target platform when inspecting Docker base images and cached multi-platform references, while retaining compatibility with older Docker engines.

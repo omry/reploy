@@ -33,6 +33,7 @@ type CommandSpec struct {
 
 type RunOptions struct {
 	workloadLifecycle      *workloadLifecycleV1
+	gracefulCancellation   bool
 	Context                context.Context
 	Stdin                  io.Reader
 	Stdout                 io.Writer

@@ -212,7 +212,7 @@ func TestNativePodmanBaseCacheReusesExactConfigIDAndRejectsChange(t *testing.T) 
 				output = strings.ReplaceAll(output, strings.Repeat("3", 64), strings.Repeat("4", 64))
 			}
 			run := func(_ context.Context, args ...string) (string, error) {
-				if !reflect.DeepEqual(args, []string{"image", "inspect", "debian:13"}) {
+				if !reflect.DeepEqual(args, []string{"image", "inspect", "--platform", platform.Canonical, "debian:13"}) {
 					t.Fatalf("registry access or immutable cache lookup: %v", args)
 				}
 				return output, nil

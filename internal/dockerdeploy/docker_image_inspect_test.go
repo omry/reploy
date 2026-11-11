@@ -77,7 +77,7 @@ func TestResolveBaseInspectsLocalImageIDWithoutPulling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(calls, [][]string{{"image", "inspect", configID}}) {
+	if !reflect.DeepEqual(calls, [][]string{{"image", "inspect", "--platform", platform.Canonical, configID}}) {
 		t.Fatalf("calls = %#v", calls)
 	}
 	if descriptor.ImmutableReference != configID || descriptor.ManifestDigest != "" || descriptor.ConfigDigest != canonical.Digest(configID) {
@@ -113,7 +113,7 @@ func TestInspectCachedBaseUsesMutableLocalReferenceWithoutPulling(t *testing.T) 
 	if err != nil || !found {
 		t.Fatalf("cached base = %#v, found=%v, error=%v", descriptor, found, err)
 	}
-	if !reflect.DeepEqual(calls, [][]string{{"image", "inspect", "python:3.11-slim"}}) {
+	if !reflect.DeepEqual(calls, [][]string{{"image", "inspect", "--platform", platform.Canonical, "python:3.11-slim"}}) {
 		t.Fatalf("calls = %#v", calls)
 	}
 	if descriptor.ManifestDigest != canonical.Digest(manifestID) {
@@ -163,7 +163,7 @@ func TestResolveBaseInspectsCachedDigestReferenceWithoutPulling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(calls, [][]string{{"image", "inspect", reference}}) {
+	if !reflect.DeepEqual(calls, [][]string{{"image", "inspect", "--platform", platform.Canonical, reference}}) {
 		t.Fatalf("calls = %#v", calls)
 	}
 	if descriptor.ImmutableReference != reference ||
@@ -204,9 +204,9 @@ func TestResolveBasePullsDigestReferenceWhenItIsNotCached(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := [][]string{
-		{"image", "inspect", reference},
+		{"image", "inspect", "--platform", platform.Canonical, reference},
 		{"pull", "--platform", "linux/amd64", reference},
-		{"image", "inspect", reference},
+		{"image", "inspect", "--platform", platform.Canonical, reference},
 	}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %#v, want %#v", calls, want)
@@ -250,9 +250,9 @@ func TestResolveBasePullsDigestReferenceWhenCachedPlatformDoesNotMatch(t *testin
 		t.Fatal(err)
 	}
 	want := [][]string{
-		{"image", "inspect", reference},
+		{"image", "inspect", "--platform", platform.Canonical, reference},
 		{"pull", "--platform", "linux/amd64", reference},
-		{"image", "inspect", reference},
+		{"image", "inspect", "--platform", platform.Canonical, reference},
 	}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %#v, want %#v", calls, want)
@@ -324,7 +324,7 @@ func TestResolveBaseUsesExplicitPlatformAndRejectsUnsafeBaseConfig(t *testing.T)
 		t.Fatalf("error = %v", err)
 	}
 	wantPull := []string{"pull", "--platform", "linux/amd64", "ubuntu:24.04"}
-	if len(calls) != 2 || !reflect.DeepEqual(calls[0], wantPull) || !reflect.DeepEqual(calls[1], []string{"image", "inspect", "ubuntu:24.04"}) {
+	if len(calls) != 2 || !reflect.DeepEqual(calls[0], wantPull) || !reflect.DeepEqual(calls[1], []string{"image", "inspect", "--platform", platform.Canonical, "ubuntu:24.04"}) {
 		t.Fatalf("calls = %#v", calls)
 	}
 }
@@ -353,7 +353,7 @@ func TestResolveBaseUsesConfigDigestWhenPlatformPullOmitsRepoDigests(t *testing.
 	if descriptor.ImmutableReference != configID || descriptor.ManifestDigest != "" || descriptor.Platform != platform {
 		t.Fatalf("descriptor = %#v", descriptor)
 	}
-	if len(calls) != 2 || !reflect.DeepEqual(calls[1], []string{"image", "inspect", "debian:12-slim"}) {
+	if len(calls) != 2 || !reflect.DeepEqual(calls[1], []string{"image", "inspect", "--platform", platform.Canonical, "debian:12-slim"}) {
 		t.Fatalf("calls = %#v", calls)
 	}
 }
