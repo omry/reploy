@@ -100,7 +100,7 @@ func inspectCachedBase(
 	if err := platform.Validate(); err != nil {
 		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, fmt.Errorf("inspect cached Docker base platform: %w", err)
 	}
-	output, err := run(ctx, "image", "inspect", authorReference)
+	output, err := inspectDockerBaseForPlatform(ctx, authorReference, platform, run)
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, contextErr
@@ -153,7 +153,7 @@ func resolveBaseWithNativePull(ctx context.Context, authorReference string, plat
 	inspectionReference := authorReference
 	if !isDockerLocalImageID(authorReference) {
 		if pinnedDigest, pinned := dockerPinnedManifestDigest(authorReference); pinned {
-			if output, inspectErr := run(ctx, "image", "inspect", inspectionReference); inspectErr == nil {
+			if output, inspectErr := inspectDockerBaseForPlatform(ctx, inspectionReference, platform, run); inspectErr == nil {
 				if descriptor, config, parseErr := parseResolvedDockerBase(
 					authorReference,
 					platform,
@@ -182,11 +182,30 @@ func resolveBaseWithNativePull(ctx context.Context, authorReference string, plat
 			return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("pull Docker base image %s for %s: Docker did not report an immutable manifest digest", authorReference, platform.Canonical)
 		}
 	}
-	output, err := run(ctx, "image", "inspect", inspectionReference)
+	output, err := inspectDockerBaseForPlatform(ctx, inspectionReference, platform, run)
 	if err != nil {
 		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("inspect Docker base image %s: %w", authorReference, err)
 	}
 	return parseResolvedDockerBase(authorReference, platform, []byte(output), pulledDigest)
+}
+
+// inspectDockerBaseForPlatform selects the concrete image in a containerd-backed
+// multi-platform reference. Older clients/APIs cannot select during inspection;
+// keep their previous inspection path and validate its actual metadata as usual.
+func inspectDockerBaseForPlatform(ctx context.Context, reference string, platform blueprint.Platform, run dockerOutputRunner) (string, error) {
+	output, err := run(ctx, "image", "inspect", "--platform", platform.Canonical, reference)
+	if err == nil {
+		return output, nil
+	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return "", contextErr
+	}
+	message := err.Error()
+	if !strings.Contains(message, "unknown flag: --platform") &&
+		!strings.Contains(message, `"--platform" requires API version 1.49, but the Docker daemon API version is`) {
+		return output, err
+	}
+	return run(ctx, "image", "inspect", reference)
 }
 
 func parseResolvedDockerBase(
