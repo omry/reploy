@@ -38,7 +38,7 @@ func TestCachedBasePreservesLockedManifestAlias(t *testing.T) {
 			calls := 0
 			run := func(_ context.Context, args ...string) (string, error) {
 				calls++
-				if strings.Join(args, " ") != "image inspect python:3.11-slim" {
+				if strings.Join(args, " ") != "image inspect --platform linux/amd64 python:3.11-slim" {
 					t.Fatalf("unexpected registry access: %v", args)
 				}
 				return test.data, nil
