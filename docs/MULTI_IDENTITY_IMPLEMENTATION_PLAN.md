@@ -2341,7 +2341,9 @@ Finish affected LLD review and stamps, checkpoint/publish the reviewed design
 and complete its PR cycle before dependent implementation. The separately
 authorized RDA cancellation hotfix remains an independent delivery after F/G
 design and before F/G implementation. Do not merge, release or resume completed
-E work. Later H–K are not part of this delivery selection.
+E work as part of that historical design-preparation pass. The milestone-landing
+amendment below governs subsequent landing; it does not reopen completed work.
+Later H–K are not part of this delivery selection.
 
 <!-- FG-CONTROLLER-LLD-END -->
 
@@ -2368,6 +2370,58 @@ approve a later change to the reviewed contract. Routine implementation choices
 within the approved contract do not require another maintainer gate.
 
 ### Group delivery sequence
+
+#### Milestone landing amendment — 2026-11-12
+
+The maintainer authorized landing at completed milestone boundaries so that
+unfinished later milestones do not hold the entire multi-identity stack open.
+Treat each lettered delivery group as one milestone. Keep decimal slice PRs
+for implementation and review; they are not separate permission to land an
+incomplete milestone.
+
+At a milestone boundary:
+
+1. Require every slice and design prerequisite owned by that milestone to be
+   complete. Preserve its actual validation, independent review, applicable
+   native qualification and negative-gate evidence. An unavailable required
+   review or proof keeps that milestone unready.
+2. Identify the bottom-to-top prerequisite PR prefix needed to land it.
+   Require current approval and every exact-head job produced by `ci.yml`,
+   plus every other applicable produced check, for each PR before merging.
+   Missing, pending, cancelled or failed checks block landing. Private
+   acceptance, an earlier approval or a byte-equal rewrite does not replace
+   current remote approval.
+3. Land that approved prefix in dependency order through the supported
+   checkpoint, stack and delivery operations. Preserve native ownership,
+   accepted history, review budgets and the remaining stack. If a base or head
+   changes, refresh the affected checks, reviews and approval before its merge.
+   An unrelated hotfix does not authorize a blind whole-stack rebase.
+4. Run the applicable post-merge regression checks and record the exact merged
+   source and evidence. Preserve ordinary single-identity behavior and every
+   refusal required for unfinished mapped execution. If the boundary needs
+   later code to remain safe, it is not ready to land; correct its boundary
+   before proceeding.
+5. Record the landed milestone separately from public feature readiness and
+   release publication. Later milestones retain their own prerequisites and
+   reviews. Landing alone does not authorize a release or enable a public
+   mapped entry point.
+
+| Boundary | Landing condition and retained limitation |
+| --- | --- |
+| A–E | Reuse completed delivery evidence and verify the actual merged state. Any remaining unmerged prerequisite prefix must pass the checks above; do not repeat completed implementation or infer that it has already landed. Public mapped execution remains inhibited. |
+| F | Complete F4.2 and all preceding F slices and F-owned qualification. G-owned controller integration, revocation and crash-recovery obligations remain open. F may land with public mapped execution inhibited; it must not claim complete public storage/restart lifecycle support. |
+| G | Complete G3.2 and every required generic-launch positive, negative and native proof. Public mapped execution may open only under those existing gates and within the approved cohort. H–K capabilities remain separately gated. |
+| H–K | Each later milestone may land after its own complete prerequisite and acceptance gates. These milestones do not block a safe earlier landing and are not selected for implementation by this amendment. |
+
+This changes delivery granularity, not the security contract, runtime scope or
+acceptance ownership. Existing design stamps and campaign approvals still bind
+their original bytes. Review and stamp this amendment, complete its design
+PR-cycle, and admit any affected plan authority through the supported campaign
+replan before implementation or landing relies on it. Preserve accepted
+prefixes and spent budgets; do not initialize a replacement campaign or edit
+state by hand. The maintainer selected formal design stamping and preparation
+for continued Milestone F delivery on 2026-11-12. Implementation remains paused
+until the required review, publication and campaign-adoption gates pass.
 
 LLD preparation is required work inside each remaining group's delivery. The
 operator selects the implementation slices; the delivery run includes their
