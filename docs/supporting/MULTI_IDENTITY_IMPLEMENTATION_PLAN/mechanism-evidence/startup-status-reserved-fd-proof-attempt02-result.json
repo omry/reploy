@@ -1,0 +1,25 @@
+{
+  "scope": "Linux private status FIFO + raw nonleader exec/CLOEXEC mechanism only; no production tail change, credential/capability qualification, engine transport or public startup claim",
+  "cases": [],
+  "mechanism": "existing close_range/UNSHARE + raw dup3(O_CLOEXEC) + immediate close_range4; raw nonblocking descriptor ownership; fd3 and higher-source layouts",
+  "compiler": "go version go1.26.8 linux/amd64",
+  "binary_sha256": "eb48ef0d3325558c0040bfe3700a96347d2c7c0b771125508cd45fb6b55b8911",
+  "compiled_tail": {
+    "raw_call_count": 6,
+    "no_runtime_calls": true,
+    "disassembly_sha256": "d8c13a403e89051a7af3e6c4644acaaf96f87affdfdb40f0c6e0514fb29dd021"
+  },
+  "early_child_failure": {
+    "mode": "success",
+    "exit_code": 2,
+    "stderr": "panic: fixture requires reserved fd3\n\ngoroutine 1 [running]:\nmain.main()\n\t/home/omry/dev/reploy/temp/reviews/fg-finalization-20261101/startup_status_reservedfd_probe.go:20 +0x998\n",
+    "stdout": ""
+  },
+  "error": "TimeoutError('bounded read')",
+  "private_root_removed": true,
+  "elapsed_seconds": 10.518018136000023,
+  "source_sha256": {
+    "run_startup_status_reservedfd_probe.py": "bb714b059cde46c16f609b96dce3a673f268b189618814667227653f3cd5e302",
+    "startup_status_reservedfd_probe.go": "a0d5a37e999b5de5b3bd6f2b51782ac3c20c989d7950dac4c8cd70d05bca29e5"
+  }
+}

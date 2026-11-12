@@ -1,0 +1,15 @@
+{
+  "private_root": "/tmp/reploy-fg-container-status-zjnvjx6j",
+  "original_receipt_retained": true,
+  "removed": [
+    {
+      "pid": 15887,
+      "start": "38274",
+      "command": "catatonit -P ",
+      "pidfd_exit_observed": true
+    }
+  ],
+  "remaining": [],
+  "private_root_absent": false,
+  "passed": false
+}
