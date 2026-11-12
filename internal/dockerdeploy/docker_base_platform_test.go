@@ -144,3 +144,277 @@ func TestBasePlatformInspectionCancellationPreventsFallback(t *testing.T) {
 		t.Fatalf("err=%v calls=%d", err, calls)
 	}
 }
+
+func TestPinnedTagBaseKeepsLockedRepositoryReference(t *testing.T) {
+	platform, _ := blueprint.ParsePlatform("linux/amd64")
+	index := "sha256:" + strings.Repeat("1", 64)
+	child := "sha256:" + strings.Repeat("2", 64)
+	output := fmt.Sprintf(`[{"Id":%q,"RepoDigests":[%q],"Os":"linux","Architecture":"amd64","RootFS":{"Layers":[%q]},"Config":{}}]`, child, "python@"+index, child)
+	descriptor, _, err := parseResolvedDockerBase("python:3.14-slim-bookworm@"+index, platform, []byte(output), canonical.Digest(index))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptor.ImmutableReference != "python@"+index || descriptor.ManifestDigest != canonical.Digest(index) {
+		t.Fatalf("pinned tag discarded its runnable repository identity: %#v", descriptor)
+	}
+}
+
+func TestResolveBaseRegistersSelectedManifestBeforeReturning(t *testing.T) {
+	platform, _ := blueprint.ParsePlatform("linux/amd64")
+	index := "sha256:" + strings.Repeat("1", 64)
+	child := "sha256:" + strings.Repeat("2", 64)
+	layer := "sha256:" + strings.Repeat("3", 64)
+	reference := "python@" + index
+	indexOutput := dockerPlatformInspectionFixture(child, index, layer, "application/vnd.oci.image.manifest.v1+json")
+	childOutput := dockerLocalInspectionFixture(child, layer)
+	var calls [][]string
+	run := func(_ context.Context, args ...string) (string, error) {
+		calls = append(calls, append([]string(nil), args...))
+		switch {
+		case reflect.DeepEqual(args, []string{"image", "inspect", "--platform", platform.Canonical, reference}):
+			return indexOutput, nil
+		case reflect.DeepEqual(args, []string{"image", "inspect", "--platform", platform.Canonical, child}):
+			if countCalls(calls, "pull") == 0 {
+				return "", fmt.Errorf("No such image: %s", child)
+			}
+			return childOutput, nil
+		case len(args) == 4 && args[0] == "pull":
+			return "Digest: " + child + "\n", nil
+		default:
+			return "", fmt.Errorf("unexpected Docker call: %#v", args)
+		}
+	}
+	descriptor, config, err := resolveBase(t.Context(), reference, platform, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptor.ConfigDigest != canonical.Digest(child) || descriptor.ImmutableReference != reference || descriptor.Platform != platform {
+		t.Fatalf("descriptor = %#v", descriptor)
+	}
+	if len(config.Environment) != 1 || config.Environment[0].Name != "SELECTED" || config.Environment[0].Value != "amd64" {
+		t.Fatalf("config = %#v", config)
+	}
+	want := [][]string{
+		{"image", "inspect", "--platform", platform.Canonical, reference},
+		{"image", "inspect", "--platform", platform.Canonical, child},
+		{"pull", "--platform", platform.Canonical, "python@" + child},
+		{"image", "inspect", "--platform", platform.Canonical, child},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestResolveBaseSkipsPullWhenSelectedManifestIsAlreadyRegistered(t *testing.T) {
+	platform, _ := blueprint.ParsePlatform("linux/amd64")
+	index := "sha256:" + strings.Repeat("4", 64)
+	child := "sha256:" + strings.Repeat("5", 64)
+	layer := "sha256:" + strings.Repeat("6", 64)
+	reference := "python@" + index
+	indexOutput := dockerPlatformInspectionFixture(child, index, layer, "application/vnd.docker.distribution.manifest.v2+json")
+	childOutput := dockerLocalInspectionFixture(child, layer)
+	var calls [][]string
+	run := func(_ context.Context, args ...string) (string, error) {
+		calls = append(calls, append([]string(nil), args...))
+		if reflect.DeepEqual(args, []string{"image", "inspect", "--platform", platform.Canonical, reference}) {
+			return indexOutput, nil
+		}
+		if reflect.DeepEqual(args, []string{"image", "inspect", "--platform", platform.Canonical, child}) {
+			return childOutput, nil
+		}
+		if args[0] == "pull" {
+			t.Fatal("selected child was pulled despite exact local registration")
+		}
+		return "", fmt.Errorf("unexpected Docker call: %#v", args)
+	}
+	if _, _, err := resolveBase(t.Context(), reference, platform, run); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("calls = %#v", calls)
+	}
+}
+
+func TestResolveBaseDoesNotRegisterWithoutMatchingImageDescriptor(t *testing.T) {
+	platform, _ := blueprint.ParsePlatform("linux/amd64")
+	index := "sha256:" + strings.Repeat("7", 64)
+	child := "sha256:" + strings.Repeat("8", 64)
+	layer := "sha256:" + strings.Repeat("9", 64)
+	reference := "python@" + index
+	for _, test := range []struct {
+		name, mediaType, descriptorDigest string
+	}{
+		{name: "missing", mediaType: "", descriptorDigest: ""},
+		{name: "index descriptor", mediaType: "application/vnd.oci.image.index.v1+json", descriptorDigest: child},
+		{name: "wrong digest", mediaType: "application/vnd.oci.image.manifest.v1+json", descriptorDigest: index},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			output := dockerPlatformInspectionFixture(child, index, layer, test.mediaType)
+			if test.descriptorDigest == "" {
+				output = strings.Replace(output, `,"Descriptor":{"mediaType":"`+test.mediaType+`","digest":"`+child+`"}`, "", 1)
+			} else {
+				output = strings.Replace(output, `"digest":"`+child+`"`, `"digest":"`+test.descriptorDigest+`"`, 1)
+			}
+			calls := 0
+			run := func(_ context.Context, args ...string) (string, error) {
+				calls++
+				if args[0] == "pull" {
+					t.Fatal("unexpected selected-child pull")
+				}
+				return output, nil
+			}
+			if _, _, err := resolveBase(t.Context(), reference, platform, run); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 1 {
+				t.Fatalf("Docker calls = %d, want one inspection", calls)
+			}
+		})
+	}
+}
+
+func TestInspectCachedBaseTreatsUnregisteredSelectedManifestAsCacheMiss(t *testing.T) {
+	platform, _ := blueprint.ParsePlatform("linux/amd64")
+	index := "sha256:" + strings.Repeat("a", 64)
+	child := "sha256:" + strings.Repeat("b", 64)
+	layer := "sha256:" + strings.Repeat("c", 64)
+	reference := "python@" + index
+	output := dockerPlatformInspectionFixture(child, index, layer, "application/vnd.oci.image.manifest.v1+json")
+	var calls [][]string
+	run := func(_ context.Context, args ...string) (string, error) {
+		calls = append(calls, append([]string(nil), args...))
+		if args[0] == "pull" {
+			t.Fatal("cached inspection attempted a pull")
+		}
+		if len(args) == 5 && args[4] == child {
+			return "", fmt.Errorf("No such image: %s", child)
+		}
+		return output, nil
+	}
+	_, _, found, err := inspectCachedBase(t.Context(), reference, platform, run, nil)
+	if err != nil || found {
+		t.Fatalf("found=%v err=%v", found, err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("calls = %#v", calls)
+	}
+}
+
+func TestResolveBaseRejectsSelectedRegistrationDrift(t *testing.T) {
+	platform, _ := blueprint.ParsePlatform("linux/amd64")
+	index := "sha256:" + strings.Repeat("d", 64)
+	child := "sha256:" + strings.Repeat("e", 64)
+	layer := "sha256:" + strings.Repeat("f", 64)
+	reference := "python@" + index
+	indexOutput := dockerPlatformInspectionFixture(child, index, layer, "application/vnd.oci.image.manifest.v1+json")
+	wrongLayer := "sha256:" + strings.Repeat("1", 64)
+	wrongOutput := dockerLocalInspectionFixture(child, wrongLayer)
+	var calls [][]string
+	run := func(_ context.Context, args ...string) (string, error) {
+		calls = append(calls, append([]string(nil), args...))
+		if len(args) == 5 && args[4] == reference {
+			return indexOutput, nil
+		}
+		if len(args) == 5 && args[4] == child {
+			if countCalls(calls, "pull") == 0 {
+				return "", fmt.Errorf("No such image: %s", child)
+			}
+			return wrongOutput, nil
+		}
+		if args[0] == "pull" {
+			return "Digest: " + child + "\n", nil
+		}
+		return "", fmt.Errorf("unexpected Docker call: %#v", args)
+	}
+	if _, _, err := resolveBase(t.Context(), reference, platform, run); err == nil || !strings.Contains(err.Error(), "rootfs layers") {
+		t.Fatalf("error = %v, want post-pull layer drift", err)
+	}
+}
+
+func TestResolveBaseRejectsSelectedRegistrationPullFailures(t *testing.T) {
+	platform, _ := blueprint.ParsePlatform("linux/amd64")
+	index := "sha256:" + strings.Repeat("1", 64)
+	child := "sha256:" + strings.Repeat("2", 64)
+	layer := "sha256:" + strings.Repeat("3", 64)
+	reference := "python@" + index
+	for _, test := range []struct {
+		name, pullOutput, pullError, want string
+	}{
+		{name: "pull failure", pullError: "registry connection failed", want: "registry connection failed"},
+		{name: "digest mismatch", pullOutput: "Digest: sha256:" + strings.Repeat("4", 64) + "\n", want: "reported digest"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			indexOutput := dockerPlatformInspectionFixture(child, index, layer, "application/vnd.oci.image.manifest.v1+json")
+			run := func(_ context.Context, args ...string) (string, error) {
+				if len(args) == 5 && args[4] == reference {
+					return indexOutput, nil
+				}
+				if len(args) == 5 && args[4] == child {
+					return "", fmt.Errorf("No such image: %s", child)
+				}
+				if args[0] == "pull" {
+					if test.pullError != "" {
+						return test.pullOutput, fmt.Errorf("%s", test.pullError)
+					}
+					return test.pullOutput, nil
+				}
+				return "", fmt.Errorf("unexpected Docker call: %#v", args)
+			}
+			if _, _, err := resolveBase(t.Context(), reference, platform, run); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestResolveBasePreservesSelectedRegistrationDaemonErrors(t *testing.T) {
+	platform, _ := blueprint.ParsePlatform("linux/amd64")
+	index := "sha256:" + strings.Repeat("5", 64)
+	child := "sha256:" + strings.Repeat("6", 64)
+	layer := "sha256:" + strings.Repeat("7", 64)
+	reference := "python@" + index
+	indexOutput := dockerPlatformInspectionFixture(child, index, layer, "application/vnd.oci.image.manifest.v1+json")
+	run := func(_ context.Context, args ...string) (string, error) {
+		if len(args) == 5 && args[4] == reference {
+			return indexOutput, nil
+		}
+		if len(args) == 5 && args[4] == child {
+			return "", fmt.Errorf("Cannot connect to the Docker daemon")
+		}
+		if args[0] == "pull" {
+			t.Fatal("daemon failure was mistaken for an unregistered child")
+		}
+		return "", fmt.Errorf("unexpected Docker call: %#v", args)
+	}
+	if _, _, err := resolveBase(t.Context(), reference, platform, run); err == nil || !strings.Contains(err.Error(), "Cannot connect to the Docker daemon") {
+		t.Fatalf("error = %v, want daemon failure", err)
+	}
+}
+
+func dockerPlatformInspectionFixture(child, index, layer, mediaType string) string {
+	descriptor := ""
+	if mediaType != "" {
+		descriptor = fmt.Sprintf(`,"Descriptor":{"mediaType":%q,"digest":%q}`, mediaType, child)
+	}
+	return fmt.Sprintf(`[{
+		"Id":%q,"RepoDigests":[%q],"Os":"linux","Architecture":"amd64",
+		"RootFS":{"Layers":[%q]},"Config":{"Env":["SELECTED=amd64"]}%s
+	}]`, child, "python@"+index, layer, descriptor)
+}
+
+func dockerLocalInspectionFixture(child, layer string) string {
+	return fmt.Sprintf(`[{
+		"Id":%q,"RepoDigests":[],"Os":"linux","Architecture":"amd64",
+		"RootFS":{"Layers":[%q]},"Config":{"Env":["SELECTED=amd64"]}
+	}]`, child, layer)
+}
+
+func countCalls(calls [][]string, command string) int {
+	count := 0
+	for _, args := range calls {
+		if len(args) > 0 && args[0] == command {
+			count++
+		}
+	}
+	return count
+}

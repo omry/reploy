@@ -15,15 +15,24 @@ import (
 )
 
 type dockerImageInspectRecord struct {
-	ID           string   `json:"Id"`
-	RepoDigests  []string `json:"RepoDigests"`
-	OS           string   `json:"Os"`
-	Architecture string   `json:"Architecture"`
-	Variant      string   `json:"Variant"`
+	ID           string                 `json:"Id"`
+	RepoDigests  []string               `json:"RepoDigests"`
+	Descriptor   *dockerImageDescriptor `json:"Descriptor"`
+	OS           string                 `json:"Os"`
+	Architecture string                 `json:"Architecture"`
+	Variant      string                 `json:"Variant"`
 	RootFS       struct {
 		Layers []string `json:"Layers"`
 	} `json:"RootFS"`
 	Config *dockerImageConfig `json:"Config"`
+}
+
+// Docker's containerd-backed image store reports the selected child manifest
+// in this optional descriptor. Classic Docker stores and native Podman do not
+// reliably report it, so an absent or non-image descriptor remains a no-op.
+type dockerImageDescriptor struct {
+	MediaType string `json:"mediaType"`
+	Digest    string `json:"digest"`
 }
 
 type dockerImageConfig struct {
@@ -58,9 +67,10 @@ type canonicalDockerHealthcheck struct {
 }
 
 type parsedDockerImageInspection struct {
-	Descriptor deploy.ImageDescriptor
-	Config     deploy.BaseConfig
-	Labels     map[string]string
+	Descriptor             deploy.ImageDescriptor
+	Config                 deploy.BaseConfig
+	Labels                 map[string]string
+	SelectedManifestDigest canonical.Digest
 }
 
 // ResolveBase pulls the requested platform, captures its immutable identity,
@@ -112,19 +122,37 @@ func inspectCachedBase(
 	// not require RepoDigests; Docker locks may instead name an index/manifest.
 	if expected != nil && expected.AuthorReference == authorReference &&
 		(expected.ManifestDigest != "" || isDockerLocalImageID(expected.ImmutableReference)) {
-		locked, config, lockedErr := parseResolvedDockerBase(expected.ImmutableReference, platform, []byte(output), "")
+		locked, lockedErr := parseResolvedDockerBaseDetails(expected.ImmutableReference, platform, []byte(output), "")
 		if lockedErr == nil {
-			locked.AuthorReference = authorReference
-			if reflect.DeepEqual(locked, *expected) {
-				return locked, config, true, nil
+			locked.Descriptor.AuthorReference = authorReference
+			if reflect.DeepEqual(locked.Descriptor, *expected) {
+				if locked.SelectedManifestDigest != "" {
+					registered, registrationErr := inspectDockerSelectedImage(ctx, locked.Descriptor, locked.Config, run)
+					if registrationErr != nil {
+						return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, registrationErr
+					}
+					if !registered {
+						return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, nil
+					}
+				}
+				return locked.Descriptor, locked.Config, true, nil
 			}
 		}
 	}
-	descriptor, config, err := parseResolvedDockerBase(authorReference, platform, []byte(output), "")
+	locked, err := parseResolvedDockerBaseDetails(authorReference, platform, []byte(output), "")
 	if err != nil {
 		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, nil
 	}
-	return descriptor, config, true, nil
+	if locked.SelectedManifestDigest != "" {
+		registered, registrationErr := inspectDockerSelectedImage(ctx, locked.Descriptor, locked.Config, run)
+		if registrationErr != nil {
+			return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, registrationErr
+		}
+		if !registered {
+			return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, nil
+		}
+	}
+	return locked.Descriptor, locked.Config, true, nil
 }
 
 func resolveBase(ctx context.Context, authorReference string, platform blueprint.Platform, run dockerOutputRunner) (deploy.ImageDescriptor, deploy.BaseConfig, error) {
@@ -154,13 +182,16 @@ func resolveBaseWithNativePull(ctx context.Context, authorReference string, plat
 	if !isDockerLocalImageID(authorReference) {
 		if pinnedDigest, pinned := dockerPinnedManifestDigest(authorReference); pinned {
 			if output, inspectErr := inspectDockerBaseForPlatform(ctx, inspectionReference, platform, run); inspectErr == nil {
-				if descriptor, config, parseErr := parseResolvedDockerBase(
+				if inspection, parseErr := parseResolvedDockerBaseDetails(
 					authorReference,
 					platform,
 					[]byte(output),
 					pinnedDigest,
 				); parseErr == nil {
-					return descriptor, config, nil
+					if registerErr := ensureDockerSelectedImageRegistered(ctx, inspection, run); registerErr != nil {
+						return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("register Docker base image %s for %s: %w", authorReference, platform.Canonical, registerErr)
+					}
+					return inspection.Descriptor, inspection.Config, nil
 				}
 			}
 		}
@@ -186,7 +217,14 @@ func resolveBaseWithNativePull(ctx context.Context, authorReference string, plat
 	if err != nil {
 		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("inspect Docker base image %s: %w", authorReference, err)
 	}
-	return parseResolvedDockerBase(authorReference, platform, []byte(output), pulledDigest)
+	inspection, err := parseResolvedDockerBaseDetails(authorReference, platform, []byte(output), pulledDigest)
+	if err != nil {
+		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, err
+	}
+	if err := ensureDockerSelectedImageRegistered(ctx, inspection, run); err != nil {
+		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("register Docker base image %s for %s: %w", authorReference, platform.Canonical, err)
+	}
+	return inspection.Descriptor, inspection.Config, nil
 }
 
 // inspectDockerBaseForPlatform selects the concrete image in a containerd-backed
@@ -214,17 +252,30 @@ func parseResolvedDockerBase(
 	output []byte,
 	pulledDigest canonical.Digest,
 ) (deploy.ImageDescriptor, deploy.BaseConfig, error) {
-	descriptor, config, err := parseDockerImageInspectionWithPullDigest(authorReference, platform, output, pulledDigest)
+	inspection, err := parseResolvedDockerBaseDetails(authorReference, platform, output, pulledDigest)
 	if err != nil {
 		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, err
 	}
-	if len(config.OnBuild) != 0 {
-		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("Docker base image %s declares unsupported OnBuild instructions", authorReference)
+	return inspection.Descriptor, inspection.Config, nil
+}
+
+func parseResolvedDockerBaseDetails(
+	authorReference string,
+	platform blueprint.Platform,
+	output []byte,
+	pulledDigest canonical.Digest,
+) (parsedDockerImageInspection, error) {
+	inspection, err := parseDockerImageInspectionDetailsWithPullDigest(authorReference, platform, output, pulledDigest)
+	if err != nil {
+		return parsedDockerImageInspection{}, err
 	}
-	if len(config.Volumes) != 0 {
-		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("Docker base image %s declares unsupported volumes", authorReference)
+	if len(inspection.Config.OnBuild) != 0 {
+		return parsedDockerImageInspection{}, fmt.Errorf("Docker base image %s declares unsupported OnBuild instructions", authorReference)
 	}
-	return descriptor, config, nil
+	if len(inspection.Config.Volumes) != 0 {
+		return parsedDockerImageInspection{}, fmt.Errorf("Docker base image %s declares unsupported volumes", authorReference)
+	}
+	return inspection, nil
 }
 
 func dockerPinnedManifestDigest(reference string) (canonical.Digest, bool) {
@@ -321,7 +372,134 @@ func parseDockerImageInspectionDetailsWithPullDigest(authorReference string, exp
 	for name, value := range record.Config.Labels {
 		labels[name] = value
 	}
-	return parsedDockerImageInspection{Descriptor: descriptor, Config: config, Labels: labels}, nil
+	selectedManifestDigest := canonical.Digest("")
+	if record.Descriptor != nil && dockerImageManifestMediaType(record.Descriptor.MediaType) {
+		candidate := canonical.Digest(record.Descriptor.Digest)
+		if candidate.Validate() == nil && candidate == configDigest {
+			selectedManifestDigest = candidate
+		}
+	}
+	return parsedDockerImageInspection{
+		Descriptor: descriptor, Config: config, Labels: labels,
+		SelectedManifestDigest: selectedManifestDigest,
+	}, nil
+}
+
+func dockerImageManifestMediaType(mediaType string) bool {
+	switch mediaType {
+	case "application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.v2+json":
+		return true
+	default:
+		return false
+	}
+}
+
+// ensureDockerSelectedImageRegistered makes a platform-selected manifest ID
+// runnable in Docker's local image store. The descriptor is intentionally
+// optional: classic Docker and native Podman commonly expose only a config ID,
+// and those paths retain their historical behavior.
+func ensureDockerSelectedImageRegistered(
+	ctx context.Context,
+	inspection parsedDockerImageInspection,
+	run dockerOutputRunner,
+) error {
+	if inspection.SelectedManifestDigest == "" {
+		return nil
+	}
+	selected := inspection.Descriptor.ConfigDigest
+	if selected != inspection.SelectedManifestDigest {
+		return fmt.Errorf("selected manifest descriptor %s does not match inspected ID %s", inspection.SelectedManifestDigest, selected)
+	}
+	registered, err := inspectDockerSelectedImage(ctx, inspection.Descriptor, inspection.Config, run)
+	if err != nil {
+		return err
+	}
+	if registered {
+		return nil
+	}
+	repository := dockerRepositoryName(inspection.Descriptor.ImmutableReference)
+	if repository == "" || isDockerLocalImageID(inspection.Descriptor.ImmutableReference) {
+		repository = dockerRepositoryName(inspection.Descriptor.AuthorReference)
+	}
+	if repository == "" || isDockerLocalImageID(repository) {
+		return fmt.Errorf("selected image has no repository identity")
+	}
+	childReference := repository + "@" + string(selected)
+	pullOutput, err := pullDockerBaseWithRetry(ctx, run, inspection.Descriptor.Platform.Canonical, childReference)
+	if err != nil {
+		return fmt.Errorf("pull selected image %s: %w", childReference, err)
+	}
+	reportedDigest, err := dockerPullManifestDigest(pullOutput)
+	if err != nil {
+		return fmt.Errorf("pull selected image %s: %w", childReference, err)
+	}
+	if reportedDigest != selected {
+		return fmt.Errorf("pull selected image %s reported digest %s, want %s", childReference, reportedDigest, selected)
+	}
+	output, err := inspectDockerBaseForPlatform(ctx, string(selected), inspection.Descriptor.Platform, run)
+	if err != nil {
+		return fmt.Errorf("inspect registered selected image %s: %w", selected, err)
+	}
+	verified, err := parseResolvedDockerBaseDetails(string(selected), inspection.Descriptor.Platform, []byte(output), "")
+	if err != nil {
+		return fmt.Errorf("parse registered selected image %s: %w", selected, err)
+	}
+	if err := verifyDockerSelectedImage(inspection, verified); err != nil {
+		return fmt.Errorf("verify registered selected image %s: %w", selected, err)
+	}
+	return nil
+}
+
+// inspectDockerSelectedImage is deliberately read-only. A missing or
+// mismatched selected child is a normal resolution miss; daemon failures are
+// preserved for the caller instead of being mistaken for cache absence.
+func inspectDockerSelectedImage(
+	ctx context.Context,
+	want deploy.ImageDescriptor,
+	wantConfig deploy.BaseConfig,
+	run dockerOutputRunner,
+) (bool, error) {
+	output, err := inspectDockerBaseForPlatform(ctx, string(want.ConfigDigest), want.Platform, run)
+	if err != nil {
+		if isDockerMissingImageError(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect selected image %s: %w", want.ConfigDigest, err)
+	}
+	got, err := parseResolvedDockerBaseDetails(string(want.ConfigDigest), want.Platform, []byte(output), "")
+	if err != nil {
+		return false, nil
+	}
+	if err := verifyDockerSelectedImage(
+		parsedDockerImageInspection{Descriptor: want, Config: wantConfig}, got,
+	); err != nil {
+		return false, nil
+	}
+	return true, nil
+}
+
+func verifyDockerSelectedImage(want, got parsedDockerImageInspection) error {
+	if got.Descriptor.ConfigDigest != want.Descriptor.ConfigDigest {
+		return fmt.Errorf("config ID %s does not match selected ID %s", got.Descriptor.ConfigDigest, want.Descriptor.ConfigDigest)
+	}
+	if got.Descriptor.Platform != want.Descriptor.Platform {
+		return fmt.Errorf("platform %s does not match selected platform %s", got.Descriptor.Platform.Canonical, want.Descriptor.Platform.Canonical)
+	}
+	if !reflect.DeepEqual(got.Descriptor.RootFSDiffIDs, want.Descriptor.RootFSDiffIDs) {
+		return fmt.Errorf("rootfs layers do not match selected image")
+	}
+	if !reflect.DeepEqual(got.Config, want.Config) {
+		return fmt.Errorf("normalized config does not match selected image")
+	}
+	return nil
+}
+
+func isDockerMissingImageError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no such image") || strings.Contains(message, "image does not exist")
 }
 
 func dockerPullManifestDigest(output string) (canonical.Digest, error) {
@@ -418,7 +596,7 @@ func dockerRepositoryName(reference string) string {
 }
 
 func canonicalDockerRepository(reference string) string {
-	repository := dockerRepositoryName(reference)
+	repository := dockerRepositoryWithoutTag(dockerRepositoryName(reference))
 	repository = strings.TrimPrefix(repository, "docker.io/")
 	repository = strings.TrimPrefix(repository, "index.docker.io/")
 	if strings.HasPrefix(repository, "library/") && strings.Count(repository, "/") == 1 {

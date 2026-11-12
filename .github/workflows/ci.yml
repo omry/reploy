@@ -120,6 +120,78 @@ jobs:
             ${{ runner.temp }}/portable-tool-evidence/*.json
             ${{ runner.temp }}/portable-tool-evidence/.reploy/provider-store/validation/
 
+  docker-image-store:
+    name: Docker image store smoke (${{ matrix.store }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        store: [classic, containerd]
+    env:
+      REPLOY_BASE_PLATFORM_INTEGRATION: "1"
+      REPLOY_EXPECTED_IMAGE_STORE: ${{ matrix.store }}
+      REPLOY_EXPECTED_DOCKER_VERSION: "29.5.2"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: Start isolated pinned Docker store
+        shell: bash
+        run: |
+          set -euo pipefail
+          scope="$RUNNER_TEMP/reploy-image-store"
+          mkdir -p "$scope/tmp"
+          if [ "$REPLOY_EXPECTED_IMAGE_STORE" = containerd ]; then
+            echo '{"features":{"containerd-snapshotter":true}}' > "$scope/daemon.json"
+          else
+            echo '{"features":{"containerd-snapshotter":false},"storage-driver":"overlay2"}' > "$scope/daemon.json"
+          fi
+          docker --host unix:///var/run/docker.sock run --detach --privileged \
+            --name reploy-image-store-smoke --env DOCKER_TLS_CERTDIR= \
+            --mount "type=bind,source=$scope,target=$scope" \
+            docker:29.5.2-dind@sha256:6b9cd914eb9c6b342c040a49a27a5eb3804453bae6ecc90f7ff96133595a95e8 \
+            dockerd --host "unix://$scope/docker.sock" --config-file "$scope/daemon.json"
+          for attempt in $(seq 1 30); do
+            if sudo docker --host "unix://$scope/docker.sock" info > "$scope/info.txt" 2>&1; then
+              sudo chown "$(id -u):$(id -g)" "$scope/docker.sock"
+              mkdir -p "$scope/bin"
+              docker --host unix:///var/run/docker.sock cp reploy-image-store-smoke:/usr/local/bin/docker "$scope/bin/docker"
+              chmod +x "$scope/bin/docker"
+              echo "$scope/bin" >> "$GITHUB_PATH"
+              echo "DOCKER_HOST=unix://$scope/docker.sock" >> "$GITHUB_ENV"
+              echo "TMPDIR=$scope/tmp" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 1
+          done
+          docker --host unix:///var/run/docker.sock logs reploy-image-store-smoke
+          exit 1
+
+      - name: Resolve and validate actual pinned platform images
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -v -count=1 -timeout 10m ./internal/dockerdeploy \
+            -run '^TestDockerBasePlatformIntegration$' 2>&1 | tee "$RUNNER_TEMP/reploy-image-store/test.log"
+
+      - name: Retain store and test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image-store-${{ matrix.store }}-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/reploy-image-store/info.txt
+            ${{ runner.temp }}/reploy-image-store/test.log
+
+      - name: Remove only the disposable daemon and its volumes
+        if: always()
+        run: docker --host unix:///var/run/docker.sock rm --force --volumes reploy-image-store-smoke
+
   target-smoke:
     name: ${{ matrix.job_name }} (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
