@@ -1,0 +1,2 @@
+kind: Fixed
+body: Register Docker's selected platform image through its immutable repository reference during base resolution so validation, resolver sessions, and temporary base tagging work across classic and containerd image stores.
