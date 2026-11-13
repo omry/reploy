@@ -237,6 +237,9 @@ func reusablePythonWheels(
 ) []providerstore.ArtifactDescriptor {
 	current := make(map[string]providers.ResolvedSourceInput, len(currentSources))
 	for _, source := range currentSources {
+		if !pythonprovider.SourceUsesCurrentBuilderV1(source) {
+			continue
+		}
 		current[source.Component+"\x00"+source.LogicalPackage] = source
 	}
 	oldLocal := make(map[string][]providers.ResolvedSourceInput, len(bundle.Sources))
@@ -245,6 +248,9 @@ func reusablePythonWheels(
 	}
 	wheelsByDigest := make(map[canonical.Digest]providerstore.ArtifactDescriptor, len(bundle.Wheels)+len(currentSources))
 	for _, source := range currentSources {
+		if !pythonprovider.SourceUsesCurrentBuilderV1(source) {
+			continue
+		}
 		wheelsByDigest[source.OutputArtifactDigest] = currentSourceWheels[source.OutputArtifactDigest]
 	}
 	for _, wheel := range bundle.Wheels {
@@ -354,7 +360,7 @@ func sourceWheelsForNode(
 	result := make([]providerstore.ArtifactDescriptor, 0, len(sources))
 	seen := map[canonical.Digest]bool{}
 	for _, source := range sources {
-		if !seen[source.OutputArtifactDigest] {
+		if pythonprovider.SourceUsesCurrentBuilderV1(source) && !seen[source.OutputArtifactDigest] {
 			result = append(result, wheels[source.OutputArtifactDigest])
 			seen[source.OutputArtifactDigest] = true
 		}
