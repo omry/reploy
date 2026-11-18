@@ -482,7 +482,7 @@ func TestAPTResolverRefreshForwardsDiagnosticsWithoutAmbientCommandCapture(t *te
 	}
 	t.Cleanup(func() { session.runDocker = prior })
 	err = session.RefreshIndexes(ctx)
-	if err == nil || !strings.Contains(err.Error(), "apt.resolve.update") || !strings.Contains(err.Error(), "apt.update_failed") || !strings.Contains(err.Error(), "select or rebuild a base image") || strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "example.invalid") {
+	if err == nil || !strings.Contains(err.Error(), "apt.resolve.archive-update") || !strings.Contains(err.Error(), "apt.update_failed") || !strings.Contains(err.Error(), "select or rebuild a base image") || strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "example.invalid") {
 		t.Fatalf("refresh err = %v", err)
 	}
 	var failure *providers.BuildErrorV1
@@ -801,4 +801,93 @@ func aptArchiveInspectionStream(t *testing.T, name string, version string, archi
 		t.Fatal(err)
 	}
 	return output.Bytes()
+}
+
+func TestAPTResolverRefreshFallsBackToOfficialDebianArchiveForBullseye(t *testing.T) {
+	for _, normalFails := range []bool{false, true} {
+		t.Run(fmt.Sprintf("normal-fails=%v", normalFails), func(t *testing.T) {
+			testAPTResolverBullseyeArchiveRefresh(t, normalFails)
+		})
+	}
+}
+
+func testAPTResolverBullseyeArchiveRefresh(t *testing.T, normalFails bool) {
+	descriptor := testProbeImageDescriptor(t, "linux/amd64")
+	probeWorkspace := testPreparedProbeWorkspace(t, descriptor.Platform, t.TempDir())
+	resolverWorkspace := testPreparedAPTResolverWorkspace(t)
+	outputs := [][]byte{
+		[]byte("ID\x00debian\x00VERSION_ID\x0011\x00VERSION_CODENAME\x00bullseye\x00"),
+		[]byte("apt 2.2.4 (amd64)\n"), []byte("dpkg 1\n"), []byte("dpkg-deb 1\n"), []byte("dpkg-query 1\n"),
+		[]byte("sha256sum 1\n"), []byte("amd64\n"), []byte{}, []byte("Reading package lists...\n"), []byte("Reading package lists...\n"),
+	}
+	commands, _ := stubAPTResolverCommands(t, mustCanonicalProbeResponse(t, aptBaseProbeResponse()), outputs, nil)
+	var stderr bytes.Buffer
+	session, err := OpenAPTResolverSession(context.Background(), descriptor, probeWorkspace, resolverWorkspace, RunOptions{Stderr: &stderr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close(context.Background()) })
+	if _, err := session.ProbeBaseProfile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	original := session.runDocker
+	updateAttempts := 0
+	session.runDocker = func(spec CommandSpec, options RunOptions) error {
+		joined := strings.Join(spec.Args, "\x00")
+		if strings.Contains(joined, "apt-get") && strings.Contains(joined, "\x00update\x00") {
+			updateAttempts++
+			if updateAttempts == 1 && normalFails {
+				return errors.New("normal repository unavailable")
+			}
+		}
+		return original(spec, options)
+	}
+	if err := session.RefreshIndexes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if updateAttempts != 2 {
+		t.Fatalf("update attempts = %d", updateAttempts)
+	}
+	if !strings.Contains(stderr.String(), "over HTTP for EOL release bullseye") || !normalFails && !strings.Contains(stderr.String(), "mechanically identified as EOL") {
+		t.Fatalf("missing accurate archive selection warning: %s", stderr.String())
+	}
+	if err := session.RefreshIndexes(context.Background()); err != nil || updateAttempts != 2 {
+		t.Fatalf("repeated refresh error=%v attempts=%d", err, updateAttempts)
+	}
+	source, err := os.ReadFile(filepath.Join(resolverWorkspace.HostDir, "sources", "archive.sources.list"))
+	wantSource := "deb http://archive.debian.org/debian bullseye main contrib non-free\n" +
+		"deb http://archive.debian.org/debian bullseye-updates main contrib non-free\n" +
+		"deb http://archive.debian.org/debian-security bullseye-security main contrib non-free\n"
+	if err != nil || string(source) != wantSource {
+		t.Fatalf("archive source = %q err=%v", source, err)
+	}
+	if err := validateAPTResolverArchiveDownloadWorkspace(resolverWorkspace, source); err != nil {
+		t.Fatalf("archive source was not accepted for download: %v", err)
+	}
+	archiveArgs := (*commands)[len(*commands)-1].Args
+	joined := strings.Join(archiveArgs, "\x00")
+	for _, expected := range []string{"Dir::Etc::sourcelist=/tmp/reploy-apt-resolve/sources/archive.sources.list", "Dir::Etc::sourceparts=-", "Acquire::Check-Valid-Until=true", "Acquire::AllowInsecureRepositories=false"} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("archive refresh args missing %q: %#v", expected, archiveArgs)
+		}
+	}
+}
+
+func TestWriteAPTArchiveSourceListRejectsSymlink(t *testing.T) {
+	prepared := testPreparedAPTResolverWorkspace(t)
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, []byte("unchanged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(prepared.HostDir, "sources", "archive.sources.list")
+	if err := os.Symlink(outside, path); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := writeAPTArchiveSourceList(prepared.HostDir, []byte("deb http://archive.debian.org/debian bullseye main\n")); err == nil {
+		t.Fatal("symlinked archive source list was accepted")
+	}
+	contents, err := os.ReadFile(outside)
+	if err != nil || string(contents) != "unchanged" {
+		t.Fatalf("outside target changed: %q err=%v", contents, err)
+	}
 }

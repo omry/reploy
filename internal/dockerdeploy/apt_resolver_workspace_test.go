@@ -27,7 +27,7 @@ func TestPrepareAPTResolverWorkspaceUsesDeploymentStoreAndCleansUp(t *testing.T)
 	if prepared.ContainerDir != aptprovider.ResolverScratchDirectory {
 		t.Fatalf("container directory = %s", prepared.ContainerDir)
 	}
-	for _, relative := range []string{"lists", "lists/partial", "archives", "archives/partial", "output"} {
+	for _, relative := range []string{"lists", "lists/partial", "archives", "archives/partial", "output", "sources"} {
 		info, err := os.Stat(filepath.Join(prepared.HostDir, relative))
 		if err != nil || !info.IsDir() || hasPOSIXPermissionBits() && info.Mode().Perm() != 0o700 {
 			t.Fatalf("layout %s: info=%v err=%v", relative, info, err)
@@ -312,5 +312,25 @@ func TestInventoryAPTResolverArchivesHonorsCancellation(t *testing.T) {
 	cancel()
 	if _, err := InventoryAPTResolverArchives(ctx, prepared); err != context.Canceled {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestAPTResolverArchiveDownloadAcceptsOnlySelectedSourceList(t *testing.T) {
+	prepared := testPreparedAPTResolverWorkspace(t)
+	source := []byte("deb https://archive.debian.org/debian bullseye main\n")
+	if err := writeAPTArchiveSourceList(prepared.HostDir, source); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateAPTResolverArchiveDownloadWorkspace(prepared, source); err != nil {
+		t.Fatalf("archive source rejected: %v", err)
+	}
+	if err := validateAPTResolverArchiveDownloadWorkspace(prepared, []byte("deb https://archive.debian.org/debian bullseye contrib\n")); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("mismatched archive source result = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(prepared.HostDir, "sources", "unexpected"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateAPTResolverArchiveDownloadWorkspace(prepared, source); err == nil || !strings.Contains(err.Error(), "unexpected entry") {
+		t.Fatalf("unexpected archive source result = %v", err)
 	}
 }

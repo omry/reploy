@@ -46,7 +46,7 @@ func TestInspectFinalizedImageCandidateAcceptsOnlyValidationLabelChange(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(gotArgs, []string{"image", "inspect", string(built.ImageID)}) {
+	if !reflect.DeepEqual(gotArgs, []string{"image", "inspect", "--platform", request.Source.Descriptor.Platform.Canonical, string(built.ImageID)}) {
 		t.Fatalf("Docker args = %v", gotArgs)
 	}
 	if result.Image.RootFSSubject != request.Source.Image.RootFSSubject {

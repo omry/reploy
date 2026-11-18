@@ -8,7 +8,7 @@ import (
 )
 
 // ResolveInstallParserV1 captures APT's concrete install transaction from the
-// simulation output. The dependency marker stream can omit upgrades pulled in
+// simulation output, including explicitly retained roots. The dependency marker stream can omit upgrades pulled in
 // to keep an already-installed dependency compatible with a selected package;
 // APT's Inst records contain those archive-producing changes.
 type ResolveInstallParserV1 struct {
@@ -88,7 +88,22 @@ func (parser *ResolveInstallParserV1) consumeLine(line []byte) error {
 	}
 	text := string(line)
 	if !strings.HasPrefix(text, "Inst ") {
-		return nil
+		packageToken, version, retained := strings.Cut(text, " is already the newest version (")
+		if !retained {
+			return nil
+		}
+		name, architecture, qualified := strings.Cut(packageToken, ":")
+		if !debianPackageNameV1.MatchString(name) || qualified && architecture != parser.nativeArchitecture || !strings.HasSuffix(version, ").") {
+			return fmt.Errorf("APT retained package record at line %d is invalid", parser.line)
+		}
+		version = strings.TrimSuffix(version, ").")
+		if !validDebianVersionTokenV1(version) {
+			return fmt.Errorf("APT retained package %q has invalid version evidence", name)
+		}
+		return parser.recordPackage(ResolvePlanPackageV1{
+			Name: name, ResolverArchitecture: parser.nativeArchitecture,
+			CurrentVersion: version, SelectedVersion: version,
+		})
 	}
 	packageToken, detail, found := strings.Cut(strings.TrimPrefix(text, "Inst "), " ")
 	if !found || packageToken == "" || detail == "" {
@@ -128,6 +143,11 @@ func (parser *ResolveInstallParserV1) consumeLine(line []byte) error {
 		Name: name, ResolverArchitecture: parser.nativeArchitecture,
 		CurrentVersion: current, SelectedVersion: selected,
 	}
+	return parser.recordPackage(pkg)
+}
+
+func (parser *ResolveInstallParserV1) recordPackage(pkg ResolvePlanPackageV1) error {
+	name := pkg.Name
 	if previous, exists := parser.packages[name]; exists && previous != pkg {
 		return fmt.Errorf("APT install transaction package %q has conflicting selections", name)
 	}
@@ -136,15 +156,24 @@ func (parser *ResolveInstallParserV1) consumeLine(line []byte) error {
 }
 
 // CompleteResolvePlanV1 reconciles the strict dependency-marker plan with the
-// concrete Inst records that identify every archive-producing selection.
+// concrete transaction records that identify archive-producing selections and
+// retained roots omitted by older APT marker implementations.
 func CompleteResolvePlanV1(marker ResolvePlanV1, changes []ResolvePlanPackageV1) (ResolvePlanV1, error) {
 	if _, err := ResolveBasePackageNamesV1(marker); err != nil {
 		return ResolvePlanV1{}, err
 	}
-	if len(marker.Packages) == 0 {
+	if len(marker.Packages) == 0 && len(changes) == 0 {
 		return ResolvePlanV1{}, fmt.Errorf("APT dependency plan has no packages")
 	}
-	nativeArchitecture := marker.Packages[0].ResolverArchitecture
+	nativeArchitecture := ""
+	if len(marker.Packages) != 0 {
+		nativeArchitecture = marker.Packages[0].ResolverArchitecture
+	} else {
+		nativeArchitecture = changes[0].ResolverArchitecture
+	}
+	if !validResolverArchitectureV1(nativeArchitecture) {
+		return ResolvePlanV1{}, fmt.Errorf("APT install transaction resolver architecture is invalid")
+	}
 	byName := make(map[string]ResolvePlanPackageV1, len(marker.Packages)+len(changes))
 	for _, pkg := range marker.Packages {
 		if pkg.ResolverArchitecture != nativeArchitecture {
@@ -156,14 +185,14 @@ func CompleteResolvePlanV1(marker ResolvePlanV1, changes []ResolvePlanPackageV1)
 	for _, pkg := range changes {
 		if !debianPackageNameV1.MatchString(pkg.Name) || pkg.ResolverArchitecture != nativeArchitecture ||
 			!validDebianVersionTokenV1(pkg.SelectedVersion) ||
-			pkg.CurrentVersion != "" && (!validDebianVersionTokenV1(pkg.CurrentVersion) || pkg.CurrentVersion == pkg.SelectedVersion) {
+			pkg.CurrentVersion != "" && !validDebianVersionTokenV1(pkg.CurrentVersion) {
 			return ResolvePlanV1{}, fmt.Errorf("APT install transaction package %q is invalid", pkg.Name)
 		}
 		if previous, found := byName[pkg.Name]; found && previous != pkg {
 			return ResolvePlanV1{}, fmt.Errorf("APT dependency and install plans disagree for package %q", pkg.Name)
 		}
 		byName[pkg.Name] = pkg
-		changed[pkg.Name] = true
+		changed[pkg.Name] = pkg.CurrentVersion != pkg.SelectedVersion
 	}
 	for _, pkg := range marker.Packages {
 		if (pkg.CurrentVersion == "" || pkg.CurrentVersion != pkg.SelectedVersion) && !changed[pkg.Name] {

@@ -110,6 +110,16 @@ func inspectCachedBase(
 	if err := platform.Validate(); err != nil {
 		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, fmt.Errorf("inspect cached Docker base platform: %w", err)
 	}
+	if isExplicitLocalOCIReference(authorReference) || isDockerLocalImageID(authorReference) {
+		descriptor, config, err := resolveDaemonLocalDockerBase(ctx, authorReference, platform, run)
+		if err != nil {
+			if ctx.Err() != nil {
+				return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, ctx.Err()
+			}
+			return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, nil
+		}
+		return descriptor, config, true, nil
+	}
 	output, err := inspectDockerBaseForPlatform(ctx, authorReference, platform, run)
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
@@ -179,39 +189,40 @@ func resolveBaseWithNativePull(ctx context.Context, authorReference string, plat
 	}
 	pulledDigest := canonical.Digest("")
 	inspectionReference := authorReference
-	if !isDockerLocalImageID(authorReference) {
-		if pinnedDigest, pinned := dockerPinnedManifestDigest(authorReference); pinned {
-			if output, inspectErr := inspectDockerBaseForPlatform(ctx, inspectionReference, platform, run); inspectErr == nil {
-				if inspection, parseErr := parseResolvedDockerBaseDetails(
-					authorReference,
-					platform,
-					[]byte(output),
-					pinnedDigest,
-				); parseErr == nil {
-					if registerErr := ensureDockerSelectedImageRegistered(ctx, inspection, run); registerErr != nil {
-						return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("register Docker base image %s for %s: %w", authorReference, platform.Canonical, registerErr)
-					}
-					return inspection.Descriptor, inspection.Config, nil
+	if isExplicitLocalOCIReference(authorReference) || isDockerLocalImageID(authorReference) {
+		return resolveDaemonLocalDockerBase(ctx, authorReference, platform, run)
+	}
+	if pinnedDigest, pinned := dockerPinnedManifestDigest(authorReference); pinned {
+		if output, inspectErr := inspectDockerBaseForPlatform(ctx, inspectionReference, platform, run); inspectErr == nil {
+			if inspection, parseErr := parseResolvedDockerBaseDetails(
+				authorReference,
+				platform,
+				[]byte(output),
+				pinnedDigest,
+			); parseErr == nil {
+				if registerErr := ensureDockerSelectedImageRegistered(ctx, inspection, run); registerErr != nil {
+					return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("register Docker base image %s for %s: %w", authorReference, platform.Canonical, registerErr)
 				}
+				return inspection.Descriptor, inspection.Config, nil
 			}
 		}
-		if native != nil {
-			descriptor, config, handled, err := native(ctx, authorReference, platform)
-			if handled || err != nil {
-				return descriptor, config, err
-			}
+	}
+	if native != nil {
+		descriptor, config, handled, err := native(ctx, authorReference, platform)
+		if handled || err != nil {
+			return descriptor, config, err
 		}
-		pullOutput, err := pullDockerBaseWithRetry(ctx, run, platform.Canonical, authorReference)
-		if err != nil {
-			return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("pull Docker base image %s for %s: %w", authorReference, platform.Canonical, err)
-		}
-		pulledDigest, err = dockerPullManifestDigest(pullOutput)
-		if err != nil {
-			return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("pull Docker base image %s for %s: %w", authorReference, platform.Canonical, err)
-		}
-		if pulledDigest == "" {
-			return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("pull Docker base image %s for %s: Docker did not report an immutable manifest digest", authorReference, platform.Canonical)
-		}
+	}
+	pullOutput, err := pullDockerBaseWithRetry(ctx, run, platform.Canonical, authorReference)
+	if err != nil {
+		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("pull Docker base image %s for %s: %w", authorReference, platform.Canonical, err)
+	}
+	pulledDigest, err = dockerPullManifestDigest(pullOutput)
+	if err != nil {
+		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("pull Docker base image %s for %s: %w", authorReference, platform.Canonical, err)
+	}
+	if pulledDigest == "" {
+		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("pull Docker base image %s for %s: Docker did not report an immutable manifest digest", authorReference, platform.Canonical)
 	}
 	output, err := inspectDockerBaseForPlatform(ctx, inspectionReference, platform, run)
 	if err != nil {
@@ -225,6 +236,53 @@ func resolveBaseWithNativePull(ctx context.Context, authorReference string, plat
 		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, fmt.Errorf("register Docker base image %s for %s: %w", authorReference, platform.Canonical, err)
 	}
 	return inspection.Descriptor, inspection.Config, nil
+}
+
+// resolveDaemonLocalDockerBase locks Docker's native immutable image handle.
+// On containerd stores that handle can be an index: inspecting a platform can
+// instead return a child manifest ID that Docker cannot create containers from.
+// Inspect the native handle first, then select and validate the platform from
+// that immutable handle so a mutable tag cannot change between inspections.
+func resolveDaemonLocalDockerBase(ctx context.Context, authorReference string, platform blueprint.Platform, run dockerOutputRunner) (deploy.ImageDescriptor, deploy.BaseConfig, error) {
+	inspection, err := inspectDaemonLocalDockerImage(ctx, authorReference, platform, run)
+	if err != nil {
+		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, err
+	}
+	if err := validateResolvedDockerBaseConfiguration(inspection); err != nil {
+		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, err
+	}
+	return inspection.Descriptor, inspection.Config, nil
+}
+
+func inspectDaemonLocalDockerImage(ctx context.Context, authorReference string, platform blueprint.Platform, run dockerOutputRunner) (parsedDockerImageInspection, error) {
+	nativeOutput, err := run(ctx, "image", "inspect", authorReference)
+	if err != nil {
+		return parsedDockerImageInspection{}, fmt.Errorf("inspect daemon-local Docker base %s: %w", authorReference, err)
+	}
+	var records []dockerImageInspectRecord
+	if err := json.Unmarshal([]byte(nativeOutput), &records); err != nil || len(records) != 1 {
+		return parsedDockerImageInspection{}, fmt.Errorf("daemon-local Docker base inspection requires one valid image record")
+	}
+	nativeID := canonical.Digest(records[0].ID)
+	if err := nativeID.Validate(); err != nil {
+		return parsedDockerImageInspection{}, fmt.Errorf("daemon-local Docker base identity: %w", err)
+	}
+	output, err := inspectDockerBaseForPlatform(ctx, string(nativeID), platform, run)
+	if err != nil {
+		return parsedDockerImageInspection{}, fmt.Errorf("inspect daemon-local Docker base %s for %s: %w", nativeID, platform.Canonical, err)
+	}
+	inspection, err := parseLocalDockerImageDetails(nativeID, platform, []byte(output))
+	if err != nil {
+		return parsedDockerImageInspection{}, err
+	}
+	inspection.Descriptor.AuthorReference = authorReference
+	inspection.Descriptor.ImmutableReference = string(nativeID)
+	inspection.Descriptor.ManifestDigest = ""
+	inspection.Descriptor.ConfigDigest = nativeID
+	if err := inspection.Descriptor.Validate(); err != nil {
+		return parsedDockerImageInspection{}, err
+	}
+	return inspection, nil
 }
 
 // inspectDockerBaseForPlatform selects the concrete image in a containerd-backed
@@ -244,6 +302,28 @@ func inspectDockerBaseForPlatform(ctx context.Context, reference string, platfor
 		return output, err
 	}
 	return run(ctx, "image", "inspect", reference)
+}
+
+// parseLocalDockerImageDetails validates the selected image returned by a
+// trusted immutable-handle lookup. The caller retains the runnable native handle.
+func parseLocalDockerImageDetails(nativeID canonical.Digest, platform blueprint.Platform, output []byte) (parsedDockerImageInspection, error) {
+	var records []dockerImageInspectRecord
+	if err := json.Unmarshal(output, &records); err != nil || len(records) != 1 {
+		return parseDockerImageInspectionDetails(string(nativeID), platform, output)
+	}
+	selectedID := canonical.Digest(records[0].ID)
+	if err := selectedID.Validate(); err != nil {
+		return parseDockerImageInspectionDetails(string(nativeID), platform, output)
+	}
+	inspection, err := parseDockerImageInspectionDetails(string(selectedID), platform, output)
+	if err != nil {
+		return parsedDockerImageInspection{}, err
+	}
+	inspection.Descriptor.AuthorReference = string(nativeID)
+	if err := inspection.Descriptor.Validate(); err != nil {
+		return parsedDockerImageInspection{}, err
+	}
+	return inspection, nil
 }
 
 func parseResolvedDockerBase(
@@ -269,13 +349,20 @@ func parseResolvedDockerBaseDetails(
 	if err != nil {
 		return parsedDockerImageInspection{}, err
 	}
-	if len(inspection.Config.OnBuild) != 0 {
-		return parsedDockerImageInspection{}, fmt.Errorf("Docker base image %s declares unsupported OnBuild instructions", authorReference)
-	}
-	if len(inspection.Config.Volumes) != 0 {
-		return parsedDockerImageInspection{}, fmt.Errorf("Docker base image %s declares unsupported volumes", authorReference)
+	if err := validateResolvedDockerBaseConfiguration(inspection); err != nil {
+		return parsedDockerImageInspection{}, err
 	}
 	return inspection, nil
+}
+
+func validateResolvedDockerBaseConfiguration(inspection parsedDockerImageInspection) error {
+	if len(inspection.Config.OnBuild) != 0 {
+		return fmt.Errorf("Docker base image %s declares unsupported OnBuild instructions", inspection.Descriptor.AuthorReference)
+	}
+	if len(inspection.Config.Volumes) != 0 {
+		return fmt.Errorf("Docker base image %s declares unsupported volumes", inspection.Descriptor.AuthorReference)
+	}
+	return nil
 }
 
 func dockerPinnedManifestDigest(reference string) (canonical.Digest, bool) {
@@ -417,6 +504,9 @@ func ensureDockerSelectedImageRegistered(
 	if registered {
 		return nil
 	}
+	if isDockerLocalImageID(inspection.Descriptor.AuthorReference) || isExplicitLocalOCIReference(inspection.Descriptor.AuthorReference) {
+		return fmt.Errorf("selected daemon-local image %s is not addressable", selected)
+	}
 	repository := dockerRepositoryName(inspection.Descriptor.ImmutableReference)
 	if repository == "" || isDockerLocalImageID(inspection.Descriptor.ImmutableReference) {
 		repository = dockerRepositoryName(inspection.Descriptor.AuthorReference)
@@ -536,6 +626,17 @@ func dockerImmutableReference(authorReference string, repoDigests []string, conf
 		}
 		return authorReference, "", nil
 	}
+	if isExplicitLocalOCIReference(authorReference) && pulledDigest == "" {
+		if strings.Contains(authorReference, "@") {
+			for _, candidate := range repoDigests {
+				if candidate == authorReference {
+					_, digest, _ := strings.Cut(candidate, "@")
+					return candidate, canonical.Digest(digest), nil
+				}
+			}
+		}
+		return string(configDigest), "", nil
+	}
 	if pulledDigest != "" {
 		repository := canonicalDockerRepository(authorReference)
 		for _, candidate := range repoDigests {
@@ -577,6 +678,14 @@ func dockerImmutableReference(authorReference string, repoDigests []string, conf
 
 func isDockerLocalImageID(reference string) bool {
 	return canonical.Digest(reference).Validate() == nil
+}
+
+// isExplicitLocalOCIReference identifies a daemon-local OCI name. The
+// localhost namespace is intentionally narrow: ordinary registry references
+// still use the configured pull and provenance path.
+func isExplicitLocalOCIReference(reference string) bool {
+	repository := dockerRepositoryName(reference)
+	return repository == "localhost" || strings.HasPrefix(repository, "localhost/")
 }
 
 func dockerRepositoryWithoutTag(reference string) string {

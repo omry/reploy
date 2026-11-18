@@ -97,3 +97,36 @@ func TestResolveAdditiveConfigV1IsFixed(t *testing.T) {
 		t.Fatal("read-only resolver operations must disable APT locking exactly once")
 	}
 }
+
+func TestResolveArchiveUpdateArgvV1KeepsAuthenticationAndFreshnessChecks(t *testing.T) {
+	argv := WithArchiveSourceOptionsV1(ResolveUpdateArgvV1())
+	joined := strings.Join(argv, "\x00")
+	for _, expected := range []string{
+		"Dir::Etc::sourcelist=" + ResolveArchiveSourceListPath,
+		"Dir::Etc::sourceparts=-",
+		"Acquire::Check-Valid-Until=true",
+		"Acquire::AllowInsecureRepositories=false",
+		"update\x00--error-on=any",
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("argv missing %q: %#v", expected, argv)
+		}
+	}
+}
+
+func TestWithArchiveSourceOptionsV1KeepsInstallOperandsPositional(t *testing.T) {
+	argv := WithArchiveSourceOptionsV1(append(ResolvePlanPrefixArgvV1(), "hello"))
+	install := 0
+	for index, argument := range argv {
+		if argument == "install" {
+			install = index
+			break
+		}
+	}
+	if install == 0 || argv[len(argv)-1] != "hello" {
+		t.Fatalf("argv = %#v", argv)
+	}
+	if !strings.Contains(strings.Join(argv[:install], "\x00"), "Dir::Etc::sourcelist="+ResolveArchiveSourceListPath) {
+		t.Fatalf("source options missing: %#v", argv)
+	}
+}

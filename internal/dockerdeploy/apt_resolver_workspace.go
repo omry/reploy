@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/omry/reploy/internal/canonical"
+	"github.com/omry/reploy/internal/fsowner"
 	aptprovider "github.com/omry/reploy/internal/providers/apt"
 	"github.com/omry/reploy/internal/providerstore"
 )
@@ -152,7 +153,7 @@ func PrepareAPTResolverWorkspace(store providerstore.Store) (PreparedAPTResolver
 		return PreparedAPTResolverWorkspace{}, func() {}, err
 	}
 	cleanup := func() { _ = os.RemoveAll(workspace) }
-	for _, relative := range []string{"lists", "lists/partial", "archives", "archives/partial", "output"} {
+	for _, relative := range []string{"lists", "lists/partial", "archives", "archives/partial", "output", "sources"} {
 		if err := os.Mkdir(filepath.Join(workspace, relative), 0o700); err != nil {
 			cleanup()
 			return PreparedAPTResolverWorkspace{}, func() {}, fmt.Errorf("create APT resolver %s directory: %w", relative, err)
@@ -174,14 +175,65 @@ func PrepareAPTResolverWorkspace(store providerstore.Store) (PreparedAPTResolver
 }
 
 func validatePreparedAPTResolverWorkspace(prepared PreparedAPTResolverWorkspace) error {
-	return validateAPTResolverWorkspaceState(prepared, true, false)
+	return validateAPTResolverWorkspaceState(prepared, true, false, nil)
 }
 
 func validateAPTResolverDownloadWorkspace(prepared PreparedAPTResolverWorkspace) error {
-	return validateAPTResolverWorkspaceState(prepared, false, true)
+	return validateAPTResolverWorkspaceState(prepared, false, true, nil)
 }
 
-func validateAPTResolverWorkspaceState(prepared PreparedAPTResolverWorkspace, requireEmptyLists bool, verifySeedDigests bool) error {
+func validateAPTResolverArchiveDownloadWorkspace(prepared PreparedAPTResolverWorkspace, source []byte) error {
+	if len(source) == 0 {
+		return fmt.Errorf("APT archive source is empty")
+	}
+	return validateAPTResolverWorkspaceState(prepared, false, true, source)
+}
+
+func validateAPTArchiveSourceList(hostDir string, expected []byte) error {
+	sourcesPath := filepath.Join(hostDir, "sources")
+	root, _, err := fsowner.OpenDirectory(sourcesPath)
+	if err != nil {
+		return fmt.Errorf("open APT archive source directory: %w", err)
+	}
+	defer root.Close()
+	directory, err := root.Open(".")
+	if err != nil {
+		return fmt.Errorf("open APT archive source directory entries: %w", err)
+	}
+	defer directory.Close()
+	entries, err := directory.ReadDir(-1)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "archive.sources.list" {
+		return fmt.Errorf("APT resolver sources directory contains an unexpected entry")
+	}
+	const name = "archive.sources.list"
+	before, err := root.Lstat(name)
+	if err != nil || before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() || !providerInstallFileModeMatches(before.Mode(), 0o600) {
+		return fmt.Errorf("APT resolver archive source list must be a private real regular file")
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return fmt.Errorf("open APT archive source list: %w", err)
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(before, opened) {
+		return fmt.Errorf("APT resolver archive source list changed during inspection")
+	}
+	contents, err := io.ReadAll(file)
+	if err != nil {
+		return fmt.Errorf("read APT archive source list: %w", err)
+	}
+	after, err := file.Stat()
+	if err != nil || !os.SameFile(before, after) || after.Size() != int64(len(contents)) {
+		return fmt.Errorf("APT resolver archive source list changed during inspection")
+	}
+	if !bytes.Equal(contents, expected) {
+		return fmt.Errorf("APT resolver archive source list does not match the selected archive")
+	}
+	return nil
+}
+
+func validateAPTResolverWorkspaceState(prepared PreparedAPTResolverWorkspace, requireEmptyLists bool, verifySeedDigests bool, archiveSource []byte) error {
 	if prepared.HostDir == "" || !filepath.IsAbs(prepared.HostDir) || filepath.Clean(prepared.HostDir) != prepared.HostDir {
 		return fmt.Errorf("APT resolver workspace host path must be absolute and clean")
 	}
@@ -195,7 +247,7 @@ func validateAPTResolverWorkspaceState(prepared PreparedAPTResolverWorkspace, re
 	if prepared.ContainerDir != aptprovider.ResolverScratchDirectory {
 		return fmt.Errorf("APT resolver workspace must use container path %q", aptprovider.ResolverScratchDirectory)
 	}
-	for _, relative := range []string{"lists", "lists/partial", "archives", "archives/partial", "output"} {
+	for _, relative := range []string{"lists", "lists/partial", "archives", "archives/partial", "output", "sources"} {
 		path := filepath.Join(prepared.HostDir, relative)
 		info, err := os.Lstat(path)
 		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !providerInstallFileModeMatches(info.Mode(), 0o700) {
@@ -203,6 +255,9 @@ func validateAPTResolverWorkspaceState(prepared PreparedAPTResolverWorkspace, re
 		}
 	}
 	emptyDirectories := []string{"archives/partial", "output"}
+	if archiveSource == nil {
+		emptyDirectories = append(emptyDirectories, "sources")
+	}
 	if requireEmptyLists {
 		emptyDirectories = append(emptyDirectories, "lists/partial")
 	}
@@ -211,6 +266,11 @@ func validateAPTResolverWorkspaceState(prepared PreparedAPTResolverWorkspace, re
 		entries, err := os.ReadDir(path)
 		if err != nil || len(entries) != 0 {
 			return fmt.Errorf("APT resolver %s directory must be initially empty", relative)
+		}
+	}
+	if archiveSource != nil {
+		if err := validateAPTArchiveSourceList(prepared.HostDir, archiveSource); err != nil {
+			return err
 		}
 	}
 	if err := validateAPTResolverSeededArchives(prepared, verifySeedDigests); err != nil {
@@ -235,7 +295,7 @@ func validateAPTResolverWorkspaceState(prepared PreparedAPTResolverWorkspace, re
 	if err != nil {
 		return fmt.Errorf("read APT resolver workspace: %w", err)
 	}
-	if len(rootEntries) != 4 {
+	if len(rootEntries) != 5 {
 		return fmt.Errorf("APT resolver workspace contains an unexpected entry")
 	}
 	return nil

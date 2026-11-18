@@ -105,6 +105,29 @@ func (parser *ResolvePlanMarkerParserV1) Write(input []byte) (int, error) {
 }
 
 func (parser *ResolvePlanMarkerParserV1) Finish() (ResolvePlanV1, error) {
+	plan, err := parser.finishMarkers()
+	if err != nil {
+		return ResolvePlanV1{}, err
+	}
+	return parser.validateRoots(plan)
+}
+
+// FinishWithInstallTransaction reconciles both outputs of the same successful
+// APT simulation before checking requested roots. Older APT versions omit
+// leaf and already-installed roots from their debug marker stream.
+func (parser *ResolvePlanMarkerParserV1) FinishWithInstallTransaction(transaction []ResolvePlanPackageV1) (ResolvePlanV1, error) {
+	marker, err := parser.finishMarkers()
+	if err != nil {
+		return ResolvePlanV1{}, err
+	}
+	plan, err := CompleteResolvePlanV1(marker, transaction)
+	if err != nil {
+		return ResolvePlanV1{}, err
+	}
+	return parser.validateRoots(plan)
+}
+
+func (parser *ResolvePlanMarkerParserV1) finishMarkers() (ResolvePlanV1, error) {
 	if parser == nil {
 		return ResolvePlanV1{}, fmt.Errorf("APT resolution plan parser is required")
 	}
@@ -124,6 +147,11 @@ func (parser *ResolvePlanMarkerParserV1) Finish() (ResolvePlanV1, error) {
 		}
 		return packages[left].ResolverArchitecture < packages[right].ResolverArchitecture
 	})
+	return ResolvePlanV1{Schema: ResolvePlanSchemaV1, Packages: packages}, nil
+}
+
+func (parser *ResolvePlanMarkerParserV1) validateRoots(plan ResolvePlanV1) (ResolvePlanV1, error) {
+	packages := plan.Packages
 	for _, root := range parser.roots {
 		name, version, _ := parseResolveRootV1(root)
 		index := sort.Search(len(packages), func(index int) bool { return packages[index].Name >= name })
@@ -134,7 +162,7 @@ func (parser *ResolvePlanMarkerParserV1) Finish() (ResolvePlanV1, error) {
 			return ResolvePlanV1{}, fmt.Errorf("APT selected version for requested package %q does not match its exact request", name)
 		}
 	}
-	return ResolvePlanV1{Schema: ResolvePlanSchemaV1, Packages: packages}, nil
+	return plan, nil
 }
 
 func (parser *ResolvePlanMarkerParserV1) consumeLine(line []byte) error {

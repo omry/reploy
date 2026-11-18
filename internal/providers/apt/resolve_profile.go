@@ -3,13 +3,15 @@ package apt
 import "github.com/omry/reploy/internal/providers"
 
 const (
-	ResolveProfileV1         = "apt-resolve-v1"
-	ResolveConfigPath        = ResolverScratchDirectory + "/apt.conf"
-	ResolveListsDirectory    = ResolverScratchDirectory + "/lists"
-	ResolveArchivesDirectory = ResolverScratchDirectory + "/archives"
-	ResolveOutputDirectory   = ResolverScratchDirectory + "/output"
-	ResolveProfileUmask      = "0022"
-	ResolveAdditiveConfigV1  = "Acquire::Languages \"none\";\nDebug::NoLocking \"1\";\nDpkg::Use-Pty \"0\";\n"
+	ResolveProfileV1             = "apt-resolve-v1"
+	ResolveConfigPath            = ResolverScratchDirectory + "/apt.conf"
+	ResolveListsDirectory        = ResolverScratchDirectory + "/lists"
+	ResolveArchivesDirectory     = ResolverScratchDirectory + "/archives"
+	ResolveOutputDirectory       = ResolverScratchDirectory + "/output"
+	ResolveSourcesDirectory      = ResolverScratchDirectory + "/sources"
+	ResolveArchiveSourceListPath = ResolveSourcesDirectory + "/archive.sources.list"
+	ResolveProfileUmask          = "0022"
+	ResolveAdditiveConfigV1      = "Acquire::Languages \"none\";\nDebug::NoLocking \"1\";\nDpkg::Use-Pty \"0\";\n"
 )
 
 // ResolveChildEnvironmentV1 returns the complete closed environment supplied
@@ -28,6 +30,19 @@ func ResolveChildEnvironmentV1() providers.ChildEnvironmentProfile {
 			{Name: "TMPDIR", Value: ResolverScratchDirectory},
 		},
 	}
+}
+
+// WithArchiveSourceOptionsV1 selects the authenticated archive sources for a
+// fixed apt-get command, leaving every command and package operand unchanged.
+func WithArchiveSourceOptionsV1(argv []string) []string {
+	result := []string{
+		argv[0],
+		"-o", "Dir::Etc::sourcelist=" + ResolveArchiveSourceListPath,
+		"-o", "Dir::Etc::sourceparts=-",
+		"-o", "Acquire::Check-Valid-Until=true",
+		"-o", "Acquire::AllowInsecureRepositories=false",
+	}
+	return append(result, argv[1:]...)
 }
 
 // ResolveUpdateArgvV1 is the fixed one-refresh command. It contains no

@@ -30,6 +30,8 @@ jobs:
     name: CLI runtime integration (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    env:
+      REDEPLOY_CI_DOCKER_SCOPE: /home/runner/ci
     strategy:
       fail-fast: false
       matrix:
@@ -96,6 +98,10 @@ jobs:
           docker buildx version
           docker compose version
           docker run --rm -v "$PWD:/workspace:ro" alpine:3.22 test -f /workspace/go.mod
+
+      - name: Start pinned Docker integration daemon
+        if: runner.os == 'Linux'
+        run: tools/ci/start_pinned_docker.sh "$REDEPLOY_CI_DOCKER_SCOPE"
 
       - name: Preload shared Docker integration fixture
         run: docker pull debian:bookworm-slim
@@ -204,15 +210,30 @@ jobs:
         if: ${{ matrix.persistent_install == false }}
         env:
           NO_UPDATE_NOTIFIER: "1"
-          TMPDIR: ${{ runner.temp }}/
+          TMPDIR: ${{ env.TMPDIR || format('{0}/', runner.temp) }}
         run: nox -s cli-integration
 
       - name: Run CLI runtime and persistent install integration
         if: ${{ matrix.persistent_install == true }}
         env:
           NO_UPDATE_NOTIFIER: "1"
-          TMPDIR: ${{ runner.temp }}/
+          TMPDIR: ${{ env.TMPDIR || format('{0}/', runner.temp) }}
         run: nox -s cli-integration -- --persistent-install
+
+      - name: Stop pinned Docker integration daemon
+        if: always() && runner.os == 'Linux'
+        run: tools/ci/stop_pinned_docker.sh "$REDEPLOY_CI_DOCKER_SCOPE"
+
+      - name: Retain pinned Docker integration diagnostics
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinned-docker-integration-${{ matrix.name }}-${{ github.sha }}
+          if-no-files-found: ignore
+          path: |
+            ${{ env.REDEPLOY_CI_DOCKER_SCOPE }}/info.txt
+            ${{ env.REDEPLOY_CI_DOCKER_SCOPE }}/daemon.log
+            ${{ env.REDEPLOY_CI_DOCKER_SCOPE }}/inspect.json
 
       - name: Dump macOS Docker runtime logs
         if: failure() && runner.os == 'macOS'
@@ -228,10 +249,16 @@ jobs:
     name: APT provider integration (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      REDEPLOY_CI_DOCKER_SCOPE: /home/runner/ci
     strategy:
       fail-fast: false
       matrix:
         include:
+          - name: Debian 11 EOL
+            image: debian:bullseye-slim
+            platform: linux/amd64
+            failures: "0"
           - name: Debian 12
             image: debian:bookworm-slim
             platform: linux/amd64
@@ -266,6 +293,9 @@ jobs:
           go-version: "1.25.x"
           cache: true
 
+      - name: Start pinned Docker integration daemon
+        run: tools/ci/start_pinned_docker.sh "$REDEPLOY_CI_DOCKER_SCOPE"
+
       - name: Set up emulation for non-native APT images
         if: matrix.platform != 'linux/amd64'
         uses: docker/setup-qemu-action@v3
@@ -284,3 +314,18 @@ jobs:
         run: >-
           go test -timeout 15m ./internal/dockerdeploy
           -run '^(TestAPTResolverBaseProfileDockerIntegration|TestAPTResolverRepositoryFailureDockerIntegration|TestAPTResolverUpgradeDockerIntegration)$'
+
+      - name: Stop pinned Docker integration daemon
+        if: always()
+        run: tools/ci/stop_pinned_docker.sh "$REDEPLOY_CI_DOCKER_SCOPE"
+
+      - name: Retain pinned Docker integration diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinned-docker-apt-${{ strategy.job-index }}-${{ github.sha }}
+          if-no-files-found: ignore
+          path: |
+            ${{ env.REDEPLOY_CI_DOCKER_SCOPE }}/info.txt
+            ${{ env.REDEPLOY_CI_DOCKER_SCOPE }}/daemon.log
+            ${{ env.REDEPLOY_CI_DOCKER_SCOPE }}/inspect.json

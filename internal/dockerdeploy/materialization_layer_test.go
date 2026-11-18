@@ -159,7 +159,7 @@ func TestInspectBuiltImageCandidateDerivesObservedIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(gotArgs, []string{"image", "inspect", string(imageID)}) {
+	if !reflect.DeepEqual(gotArgs, []string{"image", "inspect", "--platform", platform.Canonical, string(imageID)}) {
 		t.Fatalf("Docker args = %v", gotArgs)
 	}
 	if result.Descriptor.ImmutableReference != string(imageID) || result.Descriptor.ManifestDigest != "" {

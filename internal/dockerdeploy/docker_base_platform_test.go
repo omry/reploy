@@ -9,6 +9,7 @@ import (
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
+	"github.com/omry/reploy/internal/deploy"
 )
 
 func TestBaseInspectionSelectsTargetPlatform(t *testing.T) {
@@ -156,6 +157,32 @@ func TestPinnedTagBaseKeepsLockedRepositoryReference(t *testing.T) {
 	}
 	if descriptor.ImmutableReference != "python@"+index || descriptor.ManifestDigest != canonical.Digest(index) {
 		t.Fatalf("pinned tag discarded its runnable repository identity: %#v", descriptor)
+	}
+}
+
+func TestEnsureDockerSelectedImageRegisteredRejectsUnavailableLocalChild(t *testing.T) {
+	digest := canonical.Digest("sha256:" + strings.Repeat("1", 64))
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspection := parsedDockerImageInspection{
+		Descriptor: deploy.ImageDescriptor{
+			Schema: deploy.ImageDescriptorSchemaV1, Platform: platform,
+			AuthorReference: string(digest), ImmutableReference: string(digest), ConfigDigest: digest,
+		},
+		SelectedManifestDigest: digest,
+	}
+	var calls [][]string
+	err = ensureDockerSelectedImageRegistered(t.Context(), inspection, func(_ context.Context, args ...string) (string, error) {
+		calls = append(calls, append([]string(nil), args...))
+		return "", fmt.Errorf("No such image")
+	})
+	if err == nil || !strings.Contains(err.Error(), "not addressable") {
+		t.Fatalf("local selected image registration = %v", err)
+	}
+	if len(calls) != 1 || !reflect.DeepEqual(calls[0], []string{"image", "inspect", "--platform", "linux/amd64", string(digest)}) {
+		t.Fatalf("calls = %#v", calls)
 	}
 }
 

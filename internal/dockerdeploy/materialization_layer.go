@@ -229,7 +229,7 @@ func inspectBuiltImageCandidate(ctx context.Context, candidate BuiltImageCandida
 	if err := platform.Validate(); err != nil {
 		return InspectedImageCandidate{}, fmt.Errorf("inspect materialization candidate platform: %w", err)
 	}
-	output, err := run(ctx, "image", "inspect", string(candidate.ImageID))
+	inspection, err := inspectDaemonLocalDockerImage(ctx, string(candidate.ImageID), platform, run)
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return InspectedImageCandidate{}, contextErr
@@ -242,9 +242,8 @@ func inspectBuiltImageCandidate(ctx context.Context, candidate BuiltImageCandida
 		}
 		return InspectedImageCandidate{}, fmt.Errorf("inspect materialization candidate %s: %w", candidate.ImageID, err)
 	}
-	inspection, err := parseDockerImageInspectionDetails(string(candidate.ImageID), platform, []byte(output))
-	if err != nil {
-		return InspectedImageCandidate{}, fmt.Errorf("inspect materialization candidate %s: %w", candidate.ImageID, err)
+	if inspection.Descriptor.ConfigDigest != candidate.ImageID {
+		return InspectedImageCandidate{}, fmt.Errorf("inspect materialization candidate %s: observed native image ID %s does not match candidate", candidate.ImageID, inspection.Descriptor.ConfigDigest)
 	}
 	descriptor := inspection.Descriptor
 	rootFSSubject, err := deploy.RootFSSubject(descriptor.RootFSDiffIDs)
