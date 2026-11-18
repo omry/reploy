@@ -361,7 +361,7 @@ func TestProviderInstallAdaptationAllowsLegacyNilMarker(t *testing.T) {
 					t.Fatalf("legacy adaptation inspection binding = %#v / %#v", candidate, currentGeneratedImageBuilder(inspectCtx))
 				}
 				return inspectBuiltImageCandidate(inspectCtx, candidate, platform, func(runCtx context.Context, args ...string) (string, error) {
-					if currentGeneratedImageBuilder(runCtx) != selected || !reflect.DeepEqual(args, []string{"image", "inspect", string(candidate.ImageID)}) {
+					if currentGeneratedImageBuilder(runCtx) != selected || (!reflect.DeepEqual(args, []string{"image", "inspect", string(candidate.ImageID)}) && !reflect.DeepEqual(args, []string{"image", "inspect", "--platform", platform.Canonical, string(candidate.ImageID)})) {
 						t.Fatalf("legacy Docker inspection binding = %#v / %v", currentGeneratedImageBuilder(runCtx), args)
 					}
 					diffID := current.Lock.Base.RootFSDiffIDs[0]

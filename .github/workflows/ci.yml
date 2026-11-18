@@ -19,6 +19,9 @@ jobs:
   ci:
     name: Linux CI checks
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      REDEPLOY_CI_DOCKER_SCOPE: /home/runner/ci
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -66,6 +69,9 @@ jobs:
           echo "REPLOY_PLAYWRIGHT_FIXTURE=$RUNNER_TEMP/playwright.tgz" >> "$GITHUB_ENV"
           echo "REPLOY_PLAYWRIGHT_CORE_FIXTURE=$RUNNER_TEMP/playwright-core.tgz" >> "$GITHUB_ENV"
 
+      - name: Start pinned Docker integration daemon
+        run: tools/ci/start_pinned_docker.sh "$REDEPLOY_CI_DOCKER_SCOPE"
+
       - name: Run CI checks
         env:
           NO_UPDATE_NOTIFIER: "1"
@@ -98,7 +104,22 @@ jobs:
       - name: Prove native launcher cancellation and stdin through the packaged CLI
         run: |
           python tools/build_reploy --target linux-amd64 --outdir "$RUNNER_TEMP/native-cancellation-bin"
-          python tools/e2e/native_cancellation.py --reploy "$RUNNER_TEMP/native-cancellation-bin/linux-amd64/reploy" --output-dir "$RUNNER_TEMP/native-cancellation-evidence"
+          python tools/e2e/native_cancellation.py --reploy "$RUNNER_TEMP/native-cancellation-bin/linux-amd64/reploy" --output-dir "$REDEPLOY_CI_DOCKER_SCOPE/native-cancellation-evidence"
+
+      - name: Stop pinned Docker integration daemon
+        if: always()
+        run: tools/ci/stop_pinned_docker.sh "$REDEPLOY_CI_DOCKER_SCOPE"
+
+      - name: Retain pinned Docker integration diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinned-docker-ci-${{ github.sha }}
+          if-no-files-found: ignore
+          path: |
+            ${{ env.REDEPLOY_CI_DOCKER_SCOPE }}/info.txt
+            ${{ env.REDEPLOY_CI_DOCKER_SCOPE }}/daemon.log
+            ${{ env.REDEPLOY_CI_DOCKER_SCOPE }}/inspect.json
 
       - name: Retain native launcher cancellation evidence
         if: always()
@@ -106,7 +127,7 @@ jobs:
         with:
           name: native-cancellation-${{ github.sha }}
           if-no-files-found: ignore
-          path: ${{ runner.temp }}/native-cancellation-evidence/
+          path: ${{ env.REDEPLOY_CI_DOCKER_SCOPE }}/native-cancellation-evidence/
 
       - name: Retain external portable-tool observations
         if: always()

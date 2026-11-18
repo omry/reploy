@@ -77,7 +77,7 @@ func TestPortableChromiumUbuntu2604DockerIntegration(t *testing.T) {
 	graph, err := ExecutePreparedPythonGraph(ctx, PreparedPythonGraphExecutionInput{
 		Store: store, Plan: prepared.Plan, BaseDescriptor: prepared.Descriptor, BaseCatalog: prepared.Catalog,
 		Sources: request.Sources, SourceWheels: []providerstore.ArtifactDescriptor{},
-		FinalImageConfig: finalConfig, RunOptions: RunOptions{},
+		FinalImageConfig: finalConfig, RunOptions: RunOptions{Stdout: os.Stdout, Stderr: os.Stderr},
 	})
 	if err != nil {
 		t.Fatal(err)
