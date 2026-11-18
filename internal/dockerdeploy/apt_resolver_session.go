@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
 	"github.com/omry/reploy/internal/deploy"
+	"github.com/omry/reploy/internal/fsowner"
 	"github.com/omry/reploy/internal/probe"
 	"github.com/omry/reploy/internal/providers"
 	aptprovider "github.com/omry/reploy/internal/providers/apt"
@@ -27,6 +29,7 @@ const aptOSReleaseProbeScriptV1 = `set -eu
 if [ "${ID+x}" = x ]; then printf 'ID\000%s\000' "$ID"; fi
 if [ "${ID_LIKE+x}" = x ]; then printf 'ID_LIKE\000%s\000' "$ID_LIKE"; fi
 if [ "${VERSION_ID+x}" = x ]; then printf 'VERSION_ID\000%s\000' "$VERSION_ID"; fi
+if [ "${VERSION_CODENAME+x}" = x ]; then printf 'VERSION_CODENAME\000%s\000' "$VERSION_CODENAME"; fi
 `
 
 type APTBaseValidation struct {
@@ -45,6 +48,7 @@ type APTResolverSession struct {
 	observations         map[string]probe.ExecutableObservationV1
 	base                 *APTBaseValidation
 	refreshAttempted     bool
+	archiveSource        []byte
 	refreshed            bool
 	planAttempted        bool
 	planned              bool
@@ -520,18 +524,17 @@ func (session *APTResolverSession) PlanPackages(ctx context.Context, request pro
 	session.planRoots = append([]string{}, roots...)
 	session.planRequest = append([]byte{}, requestBytes...)
 	argv := append(aptprovider.ResolvePlanPrefixArgvV1(), roots...)
+	if len(session.archiveSource) != 0 {
+		argv = aptprovider.WithArchiveSourceOptionsV1(argv)
+	}
 	if err := session.runProfileArgvTo(ctx, "apt.resolve.plan", argv, io.MultiWriter(installParser, session.stdout), io.MultiWriter(parser, session.stderr)); err != nil {
 		return aptprovider.ResolvePlanV1{}, err
-	}
-	markerPlan, err := parser.Finish()
-	if err != nil {
-		return aptprovider.ResolvePlanV1{}, fmt.Errorf("APT package planning capability: %w", err)
 	}
 	changes, err := installParser.Finish()
 	if err != nil {
 		return aptprovider.ResolvePlanV1{}, fmt.Errorf("APT install transaction capability: %w", err)
 	}
-	plan, err := aptprovider.CompleteResolvePlanV1(markerPlan, changes)
+	plan, err := parser.FinishWithInstallTransaction(changes)
 	if err != nil {
 		return aptprovider.ResolvePlanV1{}, fmt.Errorf("APT package planning capability: %w", err)
 	}
@@ -579,12 +582,21 @@ func (session *APTResolverSession) DownloadPackages(ctx context.Context, request
 		}
 		return fmt.Errorf("APT package download already failed in this resolver session")
 	}
-	if err := validateAPTResolverDownloadWorkspace(session.resolver); err != nil {
-		return fmt.Errorf("APT package download workspace: %w", err)
+	var workspaceErr error
+	if len(session.archiveSource) != 0 {
+		workspaceErr = validateAPTResolverArchiveDownloadWorkspace(session.resolver, session.archiveSource)
+	} else {
+		workspaceErr = validateAPTResolverDownloadWorkspace(session.resolver)
+	}
+	if workspaceErr != nil {
+		return fmt.Errorf("APT package download workspace: %w", workspaceErr)
 	}
 	session.downloadAttempted = true
 	session.downloadRoots = append([]string{}, roots...)
 	argv := append(aptprovider.ResolveDownloadPrefixArgvV1(), roots...)
+	if len(session.archiveSource) != 0 {
+		argv = aptprovider.WithArchiveSourceOptionsV1(argv)
+	}
 	if err := session.runProfileArgvTo(ctx, "apt.resolve.download", argv, session.stdout, session.stderr); err != nil {
 		return fmt.Errorf("APT download transaction with %d root packages: %w", len(roots), err)
 	}
@@ -592,7 +604,8 @@ func (session *APTResolverSession) DownloadPackages(ctx context.Context, request
 	return nil
 }
 
-// RefreshIndexes runs the one apt-get update permitted for this resolver miss.
+// RefreshIndexes refreshes configured repositories, then selects the official
+// archive after a failure or mechanical EOL identification.
 // Successful repeated calls are idempotent; a failed refresh cannot be retried
 // in the same session under weaker or changed conditions.
 func (session *APTResolverSession) RefreshIndexes(ctx context.Context) error {
@@ -618,9 +631,35 @@ func (session *APTResolverSession) RefreshIndexes(ctx context.Context) error {
 		return fmt.Errorf("APT index refresh workspace: %w", err)
 	}
 	session.refreshAttempted = true
-	if err := session.runProfileArgvTo(ctx, "apt.resolve.update", aptprovider.ResolveUpdateArgvV1(), session.stdout, session.stderr); err != nil {
-		return err
+	updateErr := session.runProfileArgvTo(ctx, "apt.resolve.update", aptprovider.ResolveUpdateArgvV1(), session.stdout, session.stderr)
+	if updateErr != nil && ctx.Err() != nil {
+		return updateErr
 	}
+	suite, sourceList, eol, repositoryErr := aptprovider.DebianArchiveSourcesV1(session.base.Profile)
+	if updateErr == nil && (repositoryErr != nil || sourceList == "" || !eol) {
+		session.refreshed = true
+		return nil
+	}
+	if repositoryErr != nil || sourceList == "" {
+		return updateErr
+	}
+	archiveSource := []byte(sourceList)
+	if writeErr := writeAPTArchiveSourceList(session.resolver.HostDir, archiveSource); writeErr != nil {
+		return errors.Join(updateErr, writeErr)
+	}
+	if eol {
+		reason := "APT normal repository update failed; retrying"
+		if updateErr == nil {
+			reason = "APT release mechanically identified as EOL; selecting"
+		}
+		_, _ = fmt.Fprintf(session.stderr, "%s official Debian archive over HTTP for EOL release %s. Archived metadata may be stale and security support has ended. Signature and freshness checks remain enabled.\n", reason, suite)
+	} else {
+		_, _ = fmt.Fprintf(session.stderr, "APT normal repository update failed; retrying official Debian archive over HTTP for release %s. Signature and freshness checks remain enabled.\n", suite)
+	}
+	if archiveErr := session.runProfileArgvTo(ctx, "apt.resolve.archive-update", aptprovider.WithArchiveSourceOptionsV1(aptprovider.ResolveUpdateArgvV1()), session.stdout, session.stderr); archiveErr != nil {
+		return errors.Join(updateErr, archiveErr)
+	}
+	session.archiveSource = archiveSource
 	session.refreshed = true
 	return nil
 }
@@ -869,7 +908,7 @@ func parseAPTOSReleaseOutputV1(output []byte) (map[string]string, error) {
 	result := map[string]string{}
 	for index := 0; index+1 < len(parts); index += 2 {
 		name, value := string(parts[index]), string(parts[index+1])
-		if name != "ID" && name != "ID_LIKE" && name != "VERSION_ID" {
+		if name != "ID" && name != "ID_LIKE" && name != "VERSION_ID" && name != "VERSION_CODENAME" {
 			return nil, fmt.Errorf("APT OS release probe returned unexpected field %q", name)
 		}
 		if _, exists := result[name]; exists {
@@ -984,6 +1023,31 @@ func removeAPTResolverContainer(ctx context.Context, containerName string, runDo
 	return nil
 }
 
+func writeAPTArchiveSourceList(hostDir string, contents []byte) error {
+	sourcesPath := filepath.Join(hostDir, "sources")
+	root, _, err := fsowner.OpenDirectory(sourcesPath)
+	if err != nil {
+		return fmt.Errorf("open APT archive source directory: %w", err)
+	}
+	defer root.Close()
+	file, err := root.OpenFile("archive.sources.list", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("create APT archive source list: %w", err)
+	}
+	if _, err := file.Write(contents); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write APT archive source list: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("sync APT archive source list: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close APT archive source list: %w", err)
+	}
+	return nil
+}
+
 func aptResolverCommandError(operation string, platform string, baseDigest canonical.Digest, stderr string, err error) error {
 	output := trimmedCommandOutput(stderr)
 	var selectedPlatform *blueprint.Platform
@@ -1009,7 +1073,7 @@ func aptResolverCommandError(operation string, platform string, baseDigest canon
 	code := "backend.failed"
 	correction := "retry-after-backend-recovery"
 	switch operation {
-	case "apt.resolve.update":
+	case "apt.resolve.update", "apt.resolve.archive-update":
 		code = "apt.update_failed"
 		correction = "select-updatable-base"
 	case "apt.resolve.plan", "apt.resolve.base-state", "apt.resolve.download", "apt.resolve.archive-inspect":

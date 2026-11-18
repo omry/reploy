@@ -241,7 +241,11 @@ func TestResolveBaseNativeDispatchPreservesDockerAndPinnedCache(t *testing.T) {
 			t.Fatal("native pull for local immutable input")
 			return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, nil
 		})
-		if err != nil || calls != 1 {
+		wantCalls := 1
+		if isDockerLocalImageID(author) {
+			wantCalls = 2
+		}
+		if err != nil || calls != wantCalls {
 			t.Fatalf("calls=%d error=%v", calls, err)
 		}
 	}

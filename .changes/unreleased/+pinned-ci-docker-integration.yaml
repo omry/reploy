@@ -1,0 +1,2 @@
+kind: Changed
+body: Run blocking Docker integration checks against a pinned isolated Docker daemon and retain daemon diagnostics on failure.
