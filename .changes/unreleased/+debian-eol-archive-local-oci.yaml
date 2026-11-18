@@ -1,0 +1,2 @@
+kind: Fixed
+body: Fall back to authenticated Debian archives for EOL releases or repository failures, resolve older APT transaction output, and reuse explicitly local OCI bases through a runnable immutable Docker image identity.

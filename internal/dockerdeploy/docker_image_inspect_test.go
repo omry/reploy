@@ -11,6 +11,7 @@ import (
 
 	"github.com/omry/reploy/internal/blueprint"
 	"github.com/omry/reploy/internal/canonical"
+	"github.com/omry/reploy/internal/deploy"
 )
 
 func TestParseDockerImageInspectionNormalizesCompleteBaseRecord(t *testing.T) {
@@ -77,7 +78,7 @@ func TestResolveBaseInspectsLocalImageIDWithoutPulling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(calls, [][]string{{"image", "inspect", "--platform", platform.Canonical, configID}}) {
+	if !reflect.DeepEqual(calls, [][]string{{"image", "inspect", configID}, {"image", "inspect", "--platform", platform.Canonical, configID}}) {
 		t.Fatalf("calls = %#v", calls)
 	}
 	if descriptor.ImmutableReference != configID || descriptor.ManifestDigest != "" || descriptor.ConfigDigest != canonical.Digest(configID) {
@@ -492,5 +493,130 @@ func TestResolveBaseDockerIntegration(t *testing.T) {
 	}
 	if localDescriptor.ImmutableReference != string(descriptor.ConfigDigest) || localDescriptor.ManifestDigest != "" {
 		t.Fatalf("local descriptor = %#v", localDescriptor)
+	}
+}
+
+func TestResolveBaseInspectsExplicitLocalOCIReferenceWithoutPull(t *testing.T) {
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configID := "sha256:" + strings.Repeat("7", 64)
+	diffID := "sha256:" + strings.Repeat("8", 64)
+	inspection := fmt.Sprintf(
+		`[{"Id":%q,"RepoDigests":[],"Os":"linux","Architecture":"amd64","RootFS":{"Layers":[%q]},"Config":{}}]`,
+		configID, diffID,
+	)
+	var calls [][]string
+	descriptor, _, err := resolveBaseWithNativePull(t.Context(), "localhost/reploy-base:bullseye", platform, func(_ context.Context, args ...string) (string, error) {
+		calls = append(calls, append([]string{}, args...))
+		if args[0] == "pull" {
+			t.Fatal("explicit local OCI reference must not pull")
+		}
+		return inspection, nil
+	}, func(context.Context, string, blueprint.Platform) (deploy.ImageDescriptor, deploy.BaseConfig, bool, error) {
+		t.Fatal("explicit local OCI reference must not use native registry pull")
+		return deploy.ImageDescriptor{}, deploy.BaseConfig{}, false, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(calls, [][]string{{"image", "inspect", "localhost/reploy-base:bullseye"}, {"image", "inspect", "--platform", "linux/amd64", configID}}) {
+		t.Fatalf("calls = %#v", calls)
+	}
+	if descriptor.AuthorReference != "localhost/reploy-base:bullseye" || descriptor.ImmutableReference != configID || descriptor.ManifestDigest != "" {
+		t.Fatalf("descriptor = %#v", descriptor)
+	}
+}
+
+func TestExplicitLocalOCIReferenceDoesNotCaptureRegistryPort(t *testing.T) {
+	if isExplicitLocalOCIReference("localhost:5000/reploy-base:bullseye") {
+		t.Fatal("localhost registry reference was treated as a daemon-local image")
+	}
+	if !isExplicitLocalOCIReference("localhost/reploy-base:bullseye") {
+		t.Fatal("localhost namespace image was not treated as a daemon-local image")
+	}
+}
+
+func TestResolveBaseLocksNativeIdentityForLocalOCIIdentifier(t *testing.T) {
+	platform, err := blueprint.ParsePlatform("linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorID := "sha256:" + strings.Repeat("1", 64)
+	configID := "sha256:" + strings.Repeat("2", 64)
+	diffID := "sha256:" + strings.Repeat("3", 64)
+	inspection := fmt.Sprintf(
+		`[{"Id":%q,"RepoDigests":[],"Os":"linux","Architecture":"amd64","RootFS":{"Layers":[%q]},"Config":{}}]`,
+		configID, diffID,
+	)
+	descriptor, _, err := resolveBase(context.Background(), authorID, platform, func(context.Context, ...string) (string, error) {
+		return inspection, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptor.AuthorReference != authorID || descriptor.ImmutableReference != configID || descriptor.ConfigDigest != canonical.Digest(configID) {
+		t.Fatalf("descriptor = %#v", descriptor)
+	}
+}
+
+func TestResolveDaemonLocalBaseLocksAddressableIndexBeforePlatformSelection(t *testing.T) {
+	platform, _ := blueprint.ParsePlatform("linux/arm64")
+	nativeID := "sha256:" + strings.Repeat("1", 64)
+	childID := "sha256:" + strings.Repeat("2", 64)
+	diffID := "sha256:" + strings.Repeat("3", 64)
+	author := "localhost/reploy-base:mutable"
+	var calls [][]string
+	run := func(_ context.Context, args ...string) (string, error) {
+		calls = append(calls, append([]string{}, args...))
+		switch {
+		case reflect.DeepEqual(args, []string{"image", "inspect", author}):
+			return fmt.Sprintf(`[{"Id":%q}]`, nativeID), nil
+		case reflect.DeepEqual(args, []string{"image", "inspect", "--platform", platform.Canonical, nativeID}):
+			return fmt.Sprintf(`[{"Id":%q,"Descriptor":{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":%q},"Os":"linux","Architecture":"arm64","RootFS":{"Layers":[%q]},"Config":{}}]`, childID, childID, diffID), nil
+		default:
+			t.Fatalf("unexpected local lookup or registry access: %v", args)
+			return "", nil
+		}
+	}
+	descriptor, config, err := resolveBase(t.Context(), author, platform, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptor.ImmutableReference != nativeID || string(descriptor.ConfigDigest) != nativeID || descriptor.AuthorReference != author || descriptor.Platform != platform || !reflect.DeepEqual(descriptor.RootFSDiffIDs, []canonical.Digest{canonical.Digest(diffID)}) {
+		t.Fatalf("descriptor = %#v", descriptor)
+	}
+	cached, cachedConfig, found, err := inspectCachedBase(t.Context(), author, platform, run, &descriptor)
+	if err != nil || !found || !reflect.DeepEqual(cached, descriptor) || !reflect.DeepEqual(cachedConfig, config) {
+		t.Fatalf("cache found=%v descriptor=%#v error=%v", found, cached, err)
+	}
+	if len(calls) != 4 {
+		t.Fatalf("lookup count = %d", len(calls))
+	}
+}
+
+func TestResolveDaemonLocalBaseRejectsInvalidNativeAndSelectedEvidence(t *testing.T) {
+	platform, _ := blueprint.ParsePlatform("linux/amd64")
+	id := "sha256:" + strings.Repeat("1", 64)
+	for _, test := range []struct{ name, native, selected string }{
+		{"invalid ID", `[{"Id":"invalid"}]`, ""},
+		{"ambiguous", `[{"Id":"invalid"},{"Id":"invalid"}]`, ""},
+		{"wrong platform", fmt.Sprintf(`[{"Id":%q}]`, id), fmt.Sprintf(`[{"Id":%q,"Os":"linux","Architecture":"arm64","RootFS":{"Layers":[%q]},"Config":{}}]`, id, id)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, err := resolveBase(t.Context(), "localhost/reploy-base:test", platform, func(_ context.Context, args ...string) (string, error) {
+				if reflect.DeepEqual(args, []string{"image", "inspect", "localhost/reploy-base:test"}) {
+					return test.native, nil
+				}
+				if !reflect.DeepEqual(args, []string{"image", "inspect", "--platform", platform.Canonical, id}) {
+					t.Fatalf("unexpected operation: %v", args)
+				}
+				return test.selected, nil
+			})
+			if err == nil {
+				t.Fatal("invalid local image evidence accepted")
+			}
+		})
 	}
 }

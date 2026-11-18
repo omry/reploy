@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -303,6 +304,23 @@ func TestPreparedPythonGraphDockerIntegrationPTD2337PlaywrightBinding(t *testing
 		t.Fatalf("projected Playwright request distributions = %v, want greenlet,playwright,pyee", distributions)
 	}
 	dependencyOverrides := ptd2337SyntheticDependencyOverridesV1(t)
+	// The fixture supplies local sources for the complete dependency closure.
+	// Declare those overrides in the canonical request as production callers
+	// do, without changing any projected root requirement.
+	requestWithOverrides := components[0].Request
+	requestWithOverrides.Value = canonical.Object{}
+	for name, value := range components[0].Request.Value {
+		requestWithOverrides.Value[name] = value
+	}
+	overrides := make([]any, 0, len(dependencyOverrides))
+	for _, override := range dependencyOverrides {
+		overrides = append(overrides, canonical.Object{"distribution": override.Distribution, "kind": "local"})
+	}
+	requestWithOverrides.Value["overrides"] = overrides
+	if err := pythonprovider.ValidateCanonicalProviderRequestV1(requestWithOverrides); err != nil {
+		t.Fatal(err)
+	}
+	components[0].Request = requestWithOverrides
 	baseRequest, err := providers.CanonicalBaseProviderRequestV1(providers.BaseProviderRequestV1{
 		Image: base,
 		Exports: map[string]blueprint.BaseExecutableExport{
@@ -436,7 +454,10 @@ func TestPreparedPythonGraphDockerIntegrationPTD2337PlaywrightBinding(t *testing
 	if !strings.Contains(strings.ToLower(unexpectedAlias), "unexpected synthetic playwright arguments") {
 		t.Fatalf("Playwright installer dispatch sentinel = %q", unexpectedAlias)
 	}
-	unexpectedModule := runDockerIntegration(t, ctx, "run", "--rm", "--platform", platform.Canonical, "--entrypoint", "/bin/sh", string(image), "-c", "set +e; output=$(\"$1\" -m playwright 2>&1); status=$?; test \"$status\" -ne 0; printf '%s\\n' \"$output\"", "reploy-module-probe", "/usr/local/bin/python3")
+	// Exercise the installed environment, just as the generated CLI does.
+	// The base interpreter deliberately cannot import this private package.
+	installedPython := path.Join(path.Dir(generatedPath), "python")
+	unexpectedModule := runDockerIntegration(t, ctx, "run", "--rm", "--platform", platform.Canonical, "--entrypoint", "/bin/sh", string(image), "-c", "set +e; output=$(\"$1\" -m playwright 2>&1); status=$?; test \"$status\" -ne 0; printf '%s\\n' \"$output\"", "reploy-module-probe", installedPython)
 	if !strings.Contains(strings.ToLower(unexpectedModule), "unexpected synthetic playwright module dispatch") {
 		t.Fatalf("Playwright module dispatch sentinel = %q", unexpectedModule)
 	}

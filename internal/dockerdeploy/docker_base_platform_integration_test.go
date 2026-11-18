@@ -1,8 +1,10 @@
 package dockerdeploy
 
 import (
+	"context"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -47,9 +49,40 @@ func TestDockerBasePlatformIntegration(t *testing.T) {
 	if _, err := run(ctx, "pull", "--platform", platform.Canonical, index); err != nil {
 		t.Fatal(err)
 	}
+	// Qualify the daemon-local path separately from registry child registration.
+	// The tag may name an index, but no registry pull may make its child runnable.
+	localReference := "localhost/reploy-base-platform:" + strconv.Itoa(os.Getpid())
+	if _, err := run(ctx, "tag", index, localReference); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = run(ctx, "image", "rm", localReference) })
+	localRun := func(ctx context.Context, args ...string) (string, error) {
+		if len(args) != 0 && args[0] == "pull" {
+			t.Fatal("daemon-local base resolution attempted a registry pull")
+		}
+		return run(ctx, args...)
+	}
+	local, localConfig, err := resolveBase(ctx, localReference, platform, localRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cachedLocal, cachedLocalConfig, foundLocal, err := inspectCachedBase(ctx, localReference, platform, localRun, &local)
+	if err != nil || !foundLocal || !reflect.DeepEqual(cachedLocal, local) || !reflect.DeepEqual(cachedLocalConfig, localConfig) {
+		t.Fatalf("daemon-local cache found=%v error=%v", foundLocal, err)
+	}
+	if _, err := run(ctx, "image", "rm", localReference); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run(ctx, "run", "--rm", "--platform", platform.Canonical, "--pull", "never", "--entrypoint", "/bin/true", string(local.ConfigDigest)); err != nil {
+		t.Fatalf("daemon-local image cannot run before registry child registration: %v", err)
+	}
+
 	first, firstConfig, err := resolveBase(ctx, index, platform, run)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(local.RootFSDiffIDs, first.RootFSDiffIDs) || !reflect.DeepEqual(localConfig, firstConfig) {
+		t.Fatal("daemon-local base differs from the selected platform's image")
 	}
 	again, againConfig, err := resolveBase(ctx, index, platform, run)
 	if err != nil || !reflect.DeepEqual(first, again) || !reflect.DeepEqual(firstConfig, againConfig) {
@@ -79,6 +112,7 @@ func TestDockerBasePlatformIntegration(t *testing.T) {
 		t.Fatalf("index lost its locked repository reference: %s", first.ImmutableReference)
 	}
 	t.Run("index validation", func(t *testing.T) { validate(t, first) })
+	t.Run("daemon-local immutable validation after tag removal", func(t *testing.T) { validate(t, local) })
 
 	store, err := providerstore.NewStore(dockerIntegrationSharedTempDir(t))
 	if err != nil {
