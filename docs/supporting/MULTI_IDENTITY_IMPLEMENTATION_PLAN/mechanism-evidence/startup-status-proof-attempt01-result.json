@@ -1,0 +1,61 @@
+{
+  "scope": "Linux private status FIFO + raw nonleader exec/CLOEXEC mechanism only; no production tail change, credential/capability qualification, engine transport or public startup claim",
+  "cases": [
+    {
+      "mode": "success",
+      "bound_header": true,
+      "unlinked_before_release": true,
+      "status_eof": true,
+      "errno_bytes": "",
+      "live_after_eof": true,
+      "accepted_start": true,
+      "application_control": {
+        "private_descriptor_leaks": [],
+        "same_executable_exec": true,
+        "status_path_absent": true
+      },
+      "exit_code": 0,
+      "stderr": ""
+    },
+    {
+      "mode": "exec-failure",
+      "bound_header": true,
+      "unlinked_before_release": true,
+      "status_eof": true,
+      "errno_bytes": "02000000",
+      "live_after_eof": false,
+      "accepted_start": false,
+      "exit_code": 125,
+      "stderr": ""
+    },
+    {
+      "mode": "before-exec-failure",
+      "bound_header": true,
+      "unlinked_before_release": true,
+      "status_eof": true,
+      "errno_bytes": "",
+      "live_after_eof": false,
+      "accepted_start": false,
+      "exit_code": 121,
+      "stderr": ""
+    },
+    {
+      "mode": "cancel-before-release",
+      "bound_header": true,
+      "unlinked_before_release": true,
+      "status_eof": true,
+      "errno_bytes": "",
+      "live_after_eof": false,
+      "accepted_start": false,
+      "exit_code": -9,
+      "stderr": ""
+    }
+  ],
+  "passed": true,
+  "private_root_removed": true,
+  "elapsed_seconds": 1.2376949559984496,
+  "source_sha256": {
+    "run_startup_status_probe.py": "f7613cf24c2e687a858f67f727d09ce6341c3525f810d5c28da6a0e5cfd63ff1",
+    "startup_status_probe.go": "eb0c9983289d52516334cf4bb8907b7aa876185bf95babff504c04d0ad9ad112"
+  }
+}

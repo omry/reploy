@@ -1,0 +1,52 @@
+// Disposable namespace proof, loaded via go test -overlay.
+package probe
+
+import (
+ "encoding/json"
+ "net"
+ "os"
+ "runtime"
+ "testing"
+ "time"
+
+ "github.com/google/nftables"
+ "golang.org/x/sys/unix"
+)
+
+func TestFGNetworkWaiter(t *testing.T) {
+ if os.Getenv("FG_NETWORK_WAITER")!="1" { t.Skip("private fixture only") }
+ t.Log("trusted inert waiter")
+ time.Sleep(90*time.Second)
+}
+
+func TestFGNetworkPeer(t *testing.T) {
+ if os.Getenv("FG_NETWORK_PEER")!="1" { t.Skip("private fixture only") }
+ listener,err:=net.Listen("tcp4",":34567");if err!=nil { t.Fatal(err) };defer listener.Close()
+ go func(){for { c,e:=listener.Accept();if e!=nil{return};c.Close() }}()
+ time.Sleep(90*time.Second)
+}
+
+func TestFGPreReleaseNetwork(t *testing.T) {
+ if os.Getenv("FG_NETWORK_PROOF")!="1" { t.Skip("private fixture only") }
+ runtime.LockOSThread(); defer runtime.UnlockOSThread()
+ if target:=os.Getenv("FG_JOIN_NETNS");target!="" {
+  fd,err:=unix.Open(target,unix.O_RDONLY|unix.O_CLOEXEC,0);if err!=nil { t.Fatal(err) };defer unix.Close(fd)
+  if err=unix.Setns(fd,unix.CLONE_NEWNET);err!=nil { t.Fatal(err) }
+ }
+ namespace,err:=os.Readlink("/proc/thread-self/ns/net")
+ if err!=nil || namespace==os.Getenv("FG_PARENT_NETNS") || namespace=="" { t.Fatalf("no private network namespace: %v",err) }
+ listener,err:=net.Listen("tcp4","127.0.0.1:0");if err!=nil { t.Fatal(err) };defer listener.Close()
+ go func(){ for { conn,err:=listener.Accept();if err!=nil{return};conn.Close() } }()
+ address:=os.Getenv("FG_NETWORK_TARGET");if address=="" { t.Fatal("separate private peer control is required") }
+ dial:=func()bool{c,e:=net.DialTimeout("tcp4",address,300*time.Millisecond);if c!=nil { c.Close() };return e==nil}
+ if !dial() { t.Fatal("unfiltered positive control failed") }
+ if err=installApplicationNetworkPolicyV1(applicationNetworkPolicyV1{});err!=nil { t.Fatalf("pre-release policy install: %v",err) }
+ c:=&nftables.Conn{}
+ tables,err:=c.ListTables();if err!=nil || len(tables)<2 { t.Fatalf("actual kernel table observation: %v",err) }
+ if dial() { t.Fatal("deny-local negative failed") }
+ if err=installApplicationNetworkPolicyV1(applicationNetworkPolicyV1{AllowLocal:true});err!=nil { t.Fatal(err) }
+ if !dial() { t.Fatal("allow-local positive failed") }
+ maps,_:=os.ReadFile("/proc/self/uid_map")
+ observation,_:=json.Marshal(map[string]any{"namespace":namespace,"uid_map":string(maps),"observed_kernel_tables":len(tables),"baseline_positive":true,"denied_local":true,"allowed_local":true,"application_release":"never performed"})
+ t.Logf("FG_NETWORK_OBSERVATION %s",observation)
+}

@@ -1,6 +1,6 @@
 ---
 status: Active
-updated: 2026-10-27
+updated: 2026-11-01
 summary: Podman-gated security contract and acceptance ledger for future isolated multi-identity Linux workloads.
 ---
 
@@ -252,7 +252,9 @@ while an installation is inactive but its owned data remains.
    contract may allow read-only inputs through filtered materialization and
    writable inputs only through an explicit reservation and migration boundary.
 6. **Fail closed without mutation.** Missing, revoked, overlapping, stale, or
-   inconsistent delegation and identity state fails before workload start.
+   inconsistent delegation and identity state fails before new-container or
+   external-entry admission. Only the explicitly qualified unchanged-container
+   retry exception below may reuse prior host admission.
    Failure does not silently repair, rewrite, or delete persistent state. A
    supported revocation operation also removes active workload resources and
    prevents autonomous restart before it reports success, while retained
@@ -279,20 +281,47 @@ while an installation is inactive but its owned data remains.
    no shared network namespace or peer-reachable network attachment and cannot
    connect to each other's TCP, UDP, or Linux abstract Unix-socket services.
 
-Every Reploy-controlled entry uses fresh host admission and the accepted
-generation/role policy: initial start, external command/hook/session, runtime
-exec and whole-container replacement. Normalize initial credentials, apply only
-accepted capabilities, close private descriptors and verify the final sandbox.
+Every Reploy-controlled creation, external command/hook/session, runtime exec
+and whole-container replacement uses fresh host admission and the accepted
+generation/role policy. The same exact unchanged, previously admitted container
+may reuse that approval for engine-triggered process restarts. This exception
+does not authorize another container, installation, engine, image, mapping, role,
+mount configuration or runtime policy. Its safe startup mechanism and engine
+behavior must be qualified before activation; an old one-shot release frame or
+application-written marker is not such proof. Every process start still
+normalizes initial credentials, applies only accepted capabilities, closes
+private descriptors and verifies the final sandbox.
 Native forks, execs and worker replacement use already admitted workload
 authority; they do not authorize new mappings, mounts, secrets or capabilities.
-The required foreground master's exit ends the instance. The host owns fresh
-replacement and revocation, fences every restart owner and stops the entire
-container. No engine restart policy or raw exec bypass is permitted.
+The required foreground master's exit ends its process instance and its
+descendants. A permitted engine restart may start that same admitted container
+again within its unchanged authority. Reploy owns lifecycle policy, fresh
+replacement and revocation. It fences every registered restart owner and proves
+the required runtime retirement before preparation, cleanup or successful
+revocation. Removing a container does not release its retained data or mappings.
+No engine retry may recreate or adopt a container or bypass those completed
+fences. Raw exec remains prohibited where its final transition is unqualified.
+
+The administrator must stop and fence affected workloads before changing host
+delegation, accounts or reservations. Restart checks are not continuous
+protection against such trusted administrator changes. Approval reuse does not
+permit automatic repair, remapping or substitution to keep an invalid workload
+running. Reploy-owned recovery semantics must cover supported user/system and
+OS/engine combinations; this does not expand the mapped backend cohort.
 
 Container-provided executable code and dependencies are read-only by default;
 reject writable mounts that shadow protected code paths. Mutation requires
 explicit opt-in and gives up replacement protection for the affected code.
-Trusted Reploy startup/control code remains protected. Binary-exclusive privilege
+Trusted Reploy startup/control code remains protected. For the initial mapped
+cohort, the default root policy uses a conservative image-content boundary:
+an application-declared writable managed mount must resolve to an absent,
+empty or directory-only image destination. Existing image files, including
+data-only files, cause refusal. The existing root-writable opt-in relinquishes
+application-image replacement protection; it never exposes trusted Reploy code.
+This restriction does not change ordinary installations. The
+[F/G mechanism contract](supporting/MULTI_IDENTITY_IMPLEMENTATION_PLAN/fg-mechanism-engineering.md)
+defines bounded immutable-image projection and actual mount observation.
+Binary-exclusive privilege
 inheritance is not promised by immutability: already privileged image code remains
 able to use its admitted authority. No host AppArmor/SELinux/IPE dependency is
 selected for this stage. Effective syscall policy must independently deny

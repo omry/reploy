@@ -1,0 +1,147 @@
+{
+  "schema": "reploy-restart-fence-investigation-v1",
+  "source_head": "87899abecced4c5f8b3513ecee66793ecdd2df37",
+  "platform": {
+    "host_kernel": "6.18.54.1-microsoft-standard-WSL2",
+    "docker_substrate": "Docker Desktop (containerized)"
+  },
+  "engines": {
+    "docker": {
+      "version": "29.8.1",
+      "status": "passed",
+      "image": "sha256:b116e155074440ffd9e449559433feb4cd2341eb3554b1da1c638c976e56451d",
+      "cases": [
+        {
+          "case": "automatic restart without Reploy",
+          "ok": true,
+          "container": "2c42bff8924cce0194b35416c4f6d83bc730d1a93bfa9558350671889f09933f",
+          "restart_count": 1
+        },
+        {
+          "case": "disable policy then failure stays stopped",
+          "ok": true
+        },
+        {
+          "case": "remove automatically restarting container",
+          "ok": true
+        },
+        {
+          "case": "explicit stop suppresses always policy during observation",
+          "ok": true,
+          "observation_seconds": 3,
+          "reboot_tested": false
+        },
+        {
+          "case": "removed exact container remains absent",
+          "ok": true
+        },
+        {
+          "case": "container removal preserves separate application data",
+          "ok": true
+        }
+      ],
+      "cleanup": [
+        {
+          "container": "2c42bff8924cce0194b35416c4f6d83bc730d1a93bfa9558350671889f09933f",
+          "absent": true
+        },
+        {
+          "container": "dcf19134c886698b0dcaaf004655dee14476e3ab4ee6f76453b7e27b518bff26",
+          "absent": true
+        }
+      ]
+    },
+    "podman": {
+      "version": "4.9.3",
+      "status": "passed",
+      "image": "sha256:b116e155074440ffd9e449559433feb4cd2341eb3554b1da1c638c976e56451d",
+      "cases": [
+        {
+          "case": "automatic restart without Reploy",
+          "ok": true,
+          "container": "bc77f9217a2322ad254d7b2568f911d4d400bba7cd7c0880c936ec40ac197b19",
+          "restart_count": 1
+        },
+        {
+          "case": "restart policy update unsupported or ineffective",
+          "observed": true,
+          "update_exit": 1,
+          "policy_after": "always",
+          "not_a_verified_fence": true
+        },
+        {
+          "case": "remove automatically restarting container",
+          "ok": true
+        },
+        {
+          "case": "explicit stop suppresses always policy during observation",
+          "ok": true,
+          "observation_seconds": 3,
+          "reboot_tested": false
+        },
+        {
+          "case": "removed exact container remains absent",
+          "ok": true
+        },
+        {
+          "case": "container removal preserves separate application data",
+          "ok": true
+        }
+      ],
+      "cleanup": [
+        {
+          "container": "bc77f9217a2322ad254d7b2568f911d4d400bba7cd7c0880c936ec40ac197b19",
+          "absent": true
+        },
+        {
+          "container": "1bcbd35e8ea5f45e24fa28e4b06790dd9cb3ebeccf45b3fe6f81c2a14470d004",
+          "absent": true
+        }
+      ]
+    }
+  },
+  "raw_files": {
+    "temp/reviews/fg-restart-fence-20261101/docker_probe.py": {
+      "sha256": "e88313d879f7d5edaca862672f9006bcc5156079b37322d9af461744ac207751",
+      "bytes": 6930
+    },
+    "temp/reviews/fg-restart-fence-20261101/podman_probe.py": {
+      "sha256": "cc5f58ad05625e392bef71c4b346c03e2be867c7ae801f4d1c88af1abac0b71f",
+      "bytes": 3350
+    },
+    "temp/reviews/fg-restart-fence-20261101/docker-probe-result.json": {
+      "sha256": "4665f37884cc029555468e7fa439ed267e88858ce7c112bfc3780474e7846df8",
+      "bytes": 623213
+    },
+    "temp/reviews/fg-restart-fence-20261101/podman-probe-result.json": {
+      "sha256": "fc0f4d7dbf2d9fc08449663598fc11df0ff85f0f358ff445fa99f573935a9a93",
+      "bytes": 593887
+    },
+    "temp/reviews/fg-restart-fence-20261101/docker-probe-commands.json": {
+      "sha256": "4119ef39d84b51cfea323c109013c6972dd97775d69578df356e0b2ea92f7357",
+      "bytes": 618186
+    },
+    "temp/reviews/fg-restart-fence-20261101/podman-probe-commands.json": {
+      "sha256": "3759f8fc6397fdf98b0493be1f103d4351905828eda9703f89825eae600f6590",
+      "bytes": 588758
+    },
+    "temp/reviews/fg-restart-fence-20261101/podman-orchestration-result.json": {
+      "sha256": "5966c62579e4c2c3bfd1e08524b40ce5a00cd7055be65e295035ce946b9acdbb",
+      "bytes": 5014
+    },
+    "temp/reviews/fg-restart-fence-20261101/cleanup-verification.json": {
+      "sha256": "2e341bc3ad93b94b595772054cc4c6ee4f5f80afed21cc41c675421c27670e9d",
+      "bytes": 1709
+    },
+    "temp/reviews/fg-restart-fence-20261101/initial-harness-failure.json": {
+      "sha256": "c17106b81b94c6cc1a1b5228c567da40b150a07165483fcafeb0d8b98614c113",
+      "bytes": 277
+    }
+  },
+  "not_claimed": [
+    "Reploy mapped startup/retry qualification",
+    "native Windows/macOS/Linux service-manager or reboot qualification",
+    "safe reusable permission protocol",
+    "final F/G LLD or estimate approval"
+  ]
+}

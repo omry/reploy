@@ -1,0 +1,43 @@
+{
+  "at": "2026-11-01T10:06:36.415555+00:00",
+  "command": [
+    "go",
+    "test",
+    "-json",
+    "-count=1",
+    "./internal/dockerdeploy",
+    "-run",
+    "^(TestInstalledService(NonzeroExitRequiresExactManagerStop|StopIntentIsIndependentOfContainerExitCode|WaitDoesNotQueryManagerForSuccessOrInvalidExit|WaitPreservesEngineFailureWithoutManagerQuery|EngineWait.*|StartupCompletionDoesNotCancelServiceMonitoring|StartupParentCancellationIsNotTimeout|PrivateStartFailureUsesOneCleanupDeadline)|Test(ConfirmedWorkloadSurvivesPrivateEnvironmentPresenceTransitionsV1|PrivateEnvironmentFreshStartupUsesNewProcessClaimV1|InterruptedStartupAndStopResumeRespectHookPrerequisitesV1|FailedStartupStillStopsWhenJournalIOFailsV1|RecoveryStopRequiresObservedShutdownV1)|TestControlledSessionWatchdog(ParentLossRemovesOnlyManifestResources|RetriesParentLossCleanupWhileDockerIsUnavailable|StopsParentLossRetryAfterBootChanges))$",
+    "-timeout=120s"
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 3.9432481810072204,
+  "passed_top_level_tests": [
+    "TestControlledSessionWatchdogParentLossRemovesOnlyManifestResources",
+    "TestControlledSessionWatchdogRetriesParentLossCleanupWhileDockerIsUnavailable",
+    "TestControlledSessionWatchdogStopsParentLossRetryAfterBootChanges",
+    "TestInstalledServiceEngineWaitUsesRemainingPreparationDeadline",
+    "TestInstalledServiceEngineWaitDefersWorkUntilSelectedEngineIsReady",
+    "TestInstalledServiceEngineWaitRetainsTimeoutAndUnderlyingFailure",
+    "TestInstalledServiceEngineWaitHonorsCancellationBeforeAndDuringBinding",
+    "TestInstalledServiceStartupCompletionDoesNotCancelServiceMonitoring",
+    "TestInstalledServiceStartupParentCancellationIsNotTimeout",
+    "TestInstalledServicePrivateStartFailureUsesOneCleanupDeadline",
+    "TestInstalledServiceNonzeroExitRequiresExactManagerStop",
+    "TestInstalledServiceStopIntentIsIndependentOfContainerExitCode",
+    "TestInstalledServiceWaitDoesNotQueryManagerForSuccessOrInvalidExit",
+    "TestInstalledServiceWaitPreservesEngineFailureWithoutManagerQuery",
+    "TestPrivateEnvironmentFreshStartupUsesNewProcessClaimV1",
+    "TestConfirmedWorkloadSurvivesPrivateEnvironmentPresenceTransitionsV1",
+    "TestRecoveryStopRequiresObservedShutdownV1",
+    "TestInterruptedStartupAndStopResumeRespectHookPrerequisitesV1",
+    "TestFailedStartupStillStopsWhenJournalIOFailsV1"
+  ],
+  "skipped": [],
+  "stdout_sha256": "45ad93d32aeb27e55fdd3e301d16660f44f4a4fb5d7b02ffffa8c32ac8db13a2",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "qualification": "Production functions exercised through existing fixtures; no live controller crash, host restart, native desktop or mapped integration qualification.",
+  "source_head": "87899abecced4c5f8b3513ecee66793ecdd2df37",
+  "raw_evidence_directory": "temp/reviews/fg-controller-evaluation-20261101",
+  "review": "current-agent evidence inspection only; no independent review or stamp"
+}

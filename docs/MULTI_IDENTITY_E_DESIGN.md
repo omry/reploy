@@ -8,11 +8,18 @@ summary: Concrete remaining E contracts, shared admission boundaries and source-
 
 ## Authority, scope and stopping point
 
+F/G continuation: the maintainer approved reuse of admission for the same
+unchanged container on 2026-11-01. The campaign/security contracts state that
+target. The E implementation and evidence below retain their delivered
+one-shot, zero-restart meaning; they do not qualify the new retry protocol.
+F/G owns its engineering, review and production proof before activation.
+
 This document refines the E contract in the [campaign plan](MULTI_IDENTITY_IMPLEMENTATION_PLAN.md).
 Its other explicit governing dependencies are the authoritative
 [security contract](MULTI_IDENTITY_SECURITY_CONTRACT.md), the approved native-process
 [mail reconciliation](MULTI_IDENTITY_MAIL_RECONCILIATION.md), and the
-[D design](MULTI_IDENTITY_D_DESIGN.md). Those four documents remain unchanged.
+[D design](MULTI_IDENTITY_D_DESIGN.md). The delivered E baseline retained those
+four documents; the F/G retry amendment above is a later governing change.
 Source, test receipts and supporting investigations are context, not extra authorities.
 
 The input implementation is merged E2.2 at
