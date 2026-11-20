@@ -1,0 +1,552 @@
+// Disposable F3.0 fixture, compiled only through the conformance overlay.
+package probe
+
+import (
+	"bufio"
+	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/nftables"
+	"github.com/mdlayher/netlink"
+	"golang.org/x/net/dns/dnsmessage"
+	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
+	"golang.org/x/sys/unix"
+)
+
+type f30Config struct {
+	Token, Namespace, Local4, Local6, Public4, Public6, Peer4, Peer6, App4, App6 string
+	GatewayPort                                                                  int
+	Mask                                                                         uint64
+}
+
+func f30Event(kind string, value any) {
+	b, err := json.Marshal(map[string]any{"event": kind, "value": value})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("F30 %s\n", b)
+}
+
+func f30Echo(c net.Conn, token string) {
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(time.Second))
+	b := make([]byte, len(token))
+	if _, err := io.ReadFull(c, b); err == nil && string(b) == token {
+		_, _ = c.Write(b)
+	}
+}
+
+func f30TCP(t *testing.T, network, address, token string) net.Listener {
+	t.Helper()
+	l, err := net.Listen(network, address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() {
+		for {
+			c, e := l.Accept()
+			if e != nil {
+				return
+			}
+			go f30Echo(c, token)
+		}
+	}()
+	return l
+}
+
+func f30UDP(t *testing.T, token string) {
+	t.Helper()
+	c, err := net.ListenPacket("udp4", ":18081")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	v4 := ipv4.NewPacketConn(c)
+	if err := v4.SetControlMessage(ipv4.FlagDst, true); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		b := make([]byte, 512)
+		for {
+			n, control, a, e := v4.ReadFrom(b)
+			if e != nil {
+				return
+			}
+			if string(b[:n]) == token && control != nil {
+				_, _ = v4.WriteTo(b[:n], &ipv4.ControlMessage{Src: control.Dst}, a)
+			}
+		}
+	}()
+	c6, err := net.ListenPacket("udp6", ":18081")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c6.Close() })
+	v6 := ipv6.NewPacketConn(c6)
+	if err := v6.SetControlMessage(ipv6.FlagDst, true); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		b := make([]byte, 512)
+		for {
+			n, control, a, e := v6.ReadFrom(b)
+			if e != nil {
+				return
+			}
+			if string(b[:n]) == token && control != nil {
+				_, _ = v6.WriteTo(b[:n], &ipv6.ControlMessage{Src: control.Dst}, a)
+			}
+		}
+	}()
+}
+
+func f30Reach(network, address, token string) bool {
+	c, err := net.DialTimeout(network, address, 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(400 * time.Millisecond))
+	if _, err = c.Write([]byte(token)); err != nil {
+		return false
+	}
+	b := make([]byte, len(token))
+	_, err = io.ReadFull(c, b)
+	return err == nil && string(b) == token
+}
+
+func f30Want(t *testing.T, name string, got, want bool) {
+	t.Helper()
+	f30Event("case", map[string]any{"name": name, "reachable": got, "expected": want})
+	if got != want {
+		t.Fatalf("%s: reachable=%v, want %v", name, got, want)
+	}
+}
+
+func f30Address(ip string, port int) string { return net.JoinHostPort(ip, strconv.Itoa(port)) }
+
+func f30DNSReply(request []byte, token string) ([]byte, error) {
+	var m dnsmessage.Message
+	if err := m.Unpack(request); err != nil {
+		return nil, err
+	}
+	if len(m.Questions) != 1 || m.Questions[0].Name.String() != token+".f30.invalid." {
+		return nil, fmt.Errorf("unexpected fixture question")
+	}
+	q := m.Questions[0]
+	answer := dnsmessage.Resource{Header: dnsmessage.ResourceHeader{Name: q.Name, Type: q.Type, Class: dnsmessage.ClassINET, TTL: 1}}
+	switch q.Type {
+	case dnsmessage.TypeA:
+		answer.Body = &dnsmessage.AResource{A: [4]byte{192, 0, 0, 9}}
+	case dnsmessage.TypeAAAA:
+		answer.Body = &dnsmessage.AAAAResource{AAAA: [16]byte{0x20, 1, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}}
+	default:
+		return nil, fmt.Errorf("unexpected fixture question type")
+	}
+	return (&dnsmessage.Message{Header: dnsmessage.Header{ID: m.Header.ID, Response: true, Authoritative: true, RecursionAvailable: true}, Questions: m.Questions, Answers: []dnsmessage.Resource{answer}}).Pack()
+}
+
+func f30DNSServer(t *testing.T, token string) {
+	u, err := net.ListenPacket("udp", ":53")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = u.Close() })
+	go func() {
+		b := make([]byte, 4096)
+		for {
+			n, a, e := u.ReadFrom(b)
+			if e != nil {
+				return
+			}
+			if reply, e := f30DNSReply(b[:n], token); e == nil {
+				_, _ = u.WriteTo(reply, a)
+			}
+		}
+	}()
+	l, err := net.Listen("tcp", ":53")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() {
+		for {
+			c, e := l.Accept()
+			if e != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				_ = c.SetDeadline(time.Now().Add(time.Second))
+				var n uint16
+				if binary.Read(c, binary.BigEndian, &n) != nil || n > 4096 {
+					return
+				}
+				b := make([]byte, n)
+				if _, e := io.ReadFull(c, b); e != nil {
+					return
+				}
+				reply, e := f30DNSReply(b, token)
+				if e != nil {
+					return
+				}
+				_ = binary.Write(c, binary.BigEndian, uint16(len(reply)))
+				_, _ = c.Write(reply)
+			}()
+		}
+	}()
+}
+
+func f30DNS(network, token string, typ dnsmessage.Type) bool {
+	resolvers, err := readApplicationResolverCIDRsV1("/etc/resolv.conf")
+	if err != nil || len(resolvers) == 0 {
+		return false
+	}
+	ip, _, err := net.ParseCIDR(resolvers[0])
+	if err != nil {
+		return false
+	}
+	name, err := dnsmessage.NewName(token + ".f30.invalid.")
+	if err != nil {
+		return false
+	}
+	message := dnsmessage.Message{Header: dnsmessage.Header{ID: 413, RecursionDesired: true}, Questions: []dnsmessage.Question{{Name: name, Type: typ, Class: dnsmessage.ClassINET}}}
+	request, err := message.Pack()
+	if err != nil {
+		return false
+	}
+	c, err := net.DialTimeout(network, net.JoinHostPort(ip.String(), "53"), 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(400 * time.Millisecond))
+	if network == "tcp" {
+		if binary.Write(c, binary.BigEndian, uint16(len(request))) != nil {
+			return false
+		}
+	}
+	if _, err = c.Write(request); err != nil {
+		return false
+	}
+	b := make([]byte, 4096)
+	if network == "tcp" {
+		var n uint16
+		if binary.Read(c, binary.BigEndian, &n) != nil || int(n) > len(b) {
+			return false
+		}
+		b = b[:n]
+		if _, err = io.ReadFull(c, b); err != nil {
+			return false
+		}
+	} else {
+		n, e := c.Read(b)
+		if e != nil {
+			return false
+		}
+		b = b[:n]
+	}
+	var reply dnsmessage.Message
+	if reply.Unpack(b) != nil || !reply.Response || reply.ID != 413 || len(reply.Answers) != 1 {
+		return false
+	}
+	switch answer := reply.Answers[0].Body.(type) {
+	case *dnsmessage.AResource:
+		return typ == dnsmessage.TypeA && answer.A == [4]byte{192, 0, 0, 9}
+	case *dnsmessage.AAAAResource:
+		return typ == dnsmessage.TypeAAAA && net.IP(answer.AAAA[:]).Equal(net.ParseIP("2001:3::1"))
+	}
+	return false
+}
+
+// Read actual rule envelopes without interpreting expressions. The pinned
+// nftables v0.3.0 decoder reads NFTA_CT_DIRECTION as uint32, while this kernel
+// returns its one-byte ABI value. Traffic controls below establish semantics;
+// this fixture does not claim production expression validation (F3.1.2).
+func f30RuleCount(t *testing.T, table *nftables.Table, chain *nftables.Chain) int {
+	t.Helper()
+	c, err := netlink.Dial(unix.NETLINK_NETFILTER, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := c.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	attrs, err := netlink.MarshalAttributes([]netlink.Attribute{
+		{Type: unix.NFTA_RULE_TABLE, Data: []byte(table.Name + "\x00")},
+		{Type: unix.NFTA_RULE_CHAIN, Data: []byte(chain.Name + "\x00")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := c.Execute(netlink.Message{
+		Header: netlink.Header{Type: netlink.HeaderType(unix.NFNL_SUBSYS_NFTABLES<<8 | unix.NFT_MSG_GETRULE), Flags: netlink.Request | netlink.Dump},
+		Data:   append([]byte{byte(table.Family), 0, 0, 0}, attrs...),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.New()
+	for _, message := range messages {
+		if len(message.Data) < 4 || message.Data[0] != byte(table.Family) {
+			t.Fatal("foreign rule envelope")
+		}
+		attributes, err := netlink.UnmarshalAttributes(message.Data[4:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var name, owner string
+		expressions := false
+		for _, attribute := range attributes {
+			switch attribute.Type & 0x3fff {
+			case unix.NFTA_RULE_TABLE:
+				name = strings.TrimRight(string(attribute.Data), "\x00")
+			case unix.NFTA_RULE_CHAIN:
+				owner = strings.TrimRight(string(attribute.Data), "\x00")
+			case unix.NFTA_RULE_EXPRESSIONS:
+				expressions = len(attribute.Data) > 0
+			}
+		}
+		if name != table.Name || owner != chain.Name || !expressions {
+			t.Fatal("unbound rule envelope")
+		}
+		_, _ = hash.Write(message.Data)
+	}
+	f30Event("rule-envelopes", map[string]any{"family": table.Family, "chain": chain.Name, "count": len(messages), "sha256": fmt.Sprintf("%x", hash.Sum(nil)), "expressions_decoded": false})
+	return len(messages)
+}
+
+func f30Observe(t *testing.T, expected string) {
+	t.Helper()
+	actual, err := os.Readlink("/proc/self/ns/net")
+	if err != nil || actual != expected {
+		t.Fatalf("network namespace changed: %q %v", actual, err)
+	}
+	c := &nftables.Conn{}
+	tables, err := c.ListTables()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chains, err := c.ListChains()
+	if err != nil {
+		t.Fatal(err)
+	}
+	families := map[nftables.TableFamily]int{}
+	rules := 0
+	for _, table := range tables {
+		if table.Name != "reploy" {
+			continue
+		}
+		for _, chain := range chains {
+			if chain.Table.Name != table.Name || chain.Table.Family != table.Family {
+				continue
+			}
+			if chain.Policy == nil || *chain.Policy != nftables.ChainPolicyDrop {
+				t.Fatal("non-drop effective chain policy")
+			}
+			families[table.Family]++
+			rules += f30RuleCount(t, table, chain)
+		}
+	}
+	if families[nftables.TableFamilyIPv4] != 3 || families[nftables.TableFamilyIPv6] != 3 || rules == 0 {
+		t.Fatalf("incomplete effective kernel rules: %v, rules=%d", families, rules)
+	}
+	f30Event("effective-policy", map[string]any{"namespace": actual, "families": 2, "drop_chains": 6, "rules": rules})
+}
+
+func f30Traffic(t *testing.T, c f30Config, p applicationNetworkPolicyV1, phase string) {
+	t.Helper()
+	for _, target := range []struct {
+		name, ip string
+		allowed  bool
+	}{
+		{"local4", c.Local4, p.AllowLocal}, {"local6", c.Local6, p.AllowLocal},
+		{"public4", c.Public4, p.AllowPublic}, {"public6", c.Public6, p.AllowPublic},
+		{"peer4", c.Peer4, false}, {"peer6", c.Peer6, false},
+	} {
+		f30Want(t, phase+"/"+target.name+"/tcp", f30Reach("tcp", f30Address(target.ip, 18080), c.Token), target.allowed)
+		f30Want(t, phase+"/"+target.name+"/udp", f30Reach("udp", f30Address(target.ip, 18081), c.Token), target.allowed)
+	}
+	for _, network := range []string{"udp", "tcp"} {
+		for _, typ := range []dnsmessage.Type{dnsmessage.TypeA, dnsmessage.TypeAAAA} {
+			f30Want(t, fmt.Sprintf("%s/dns/%s/%d", phase, network, typ), f30DNS(network, c.Token, typ), p.AllowLocal || p.AllowPublic)
+		}
+	}
+}
+
+func f30Abstract(t *testing.T, token string) {
+	t.Helper()
+	address := "@f30-" + token
+	f30Want(t, "abstract/other-workload", f30Reach("unix", address, token), false)
+	l := f30TCP(t, "unix", address, token)
+	f30Want(t, "abstract/same-namespace-positive", f30Reach("unix", address, token), true)
+	_ = l.Close()
+}
+
+func TestF30Network(t *testing.T) {
+	role, token := os.Getenv("F30_ROLE"), os.Getenv("F30_TOKEN")
+	if role == "" {
+		t.Skip("explicit private F3.0 fixture only")
+	}
+	if len(token) != 24 {
+		t.Fatal("missing exact fixture token")
+	}
+	if role == "server" {
+		f30TCP(t, "tcp", ":18080", token)
+		f30TCP(t, "tcp", ":18082", token)
+		f30UDP(t, token)
+		f30TCP(t, "unix", "@f30-"+token, token)
+		f30DNSServer(t, token)
+		f30Want(t, "server/tcp-positive", f30Reach("tcp", "127.0.0.1:18080", token), true)
+		f30Want(t, "server/udp-positive", f30Reach("udp", "127.0.0.1:18081", token), true)
+		f30Want(t, "server/abstract-positive", f30Reach("unix", "@f30-"+token, token), true)
+		f30Event("server-ready", map[string]any{"token": token})
+		select {}
+	}
+	var c f30Config
+	if role == "stage" {
+		f30Event("stage-ready", map[string]any{"token": token})
+		decoder := json.NewDecoder(io.LimitReader(os.Stdin, 16384))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&c); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		b, err := base64.StdEncoding.DecodeString(os.Getenv("F30_CONFIG"))
+		if err != nil || len(b) > 16384 {
+			t.Fatal("invalid fixture configuration")
+		}
+		if err = json.Unmarshal(b, &c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if c.Token != token {
+		t.Fatal("fixture identity changed")
+	}
+	if role == "client" {
+		switch os.Getenv("F30_CLIENT_CASE") {
+		case "peer-positive":
+			for _, ip := range []string{c.Peer4, c.Peer6} {
+				f30Want(t, "shared-attachment/tcp-positive", f30Reach("tcp", f30Address(ip, 18080), token), true)
+				f30Want(t, "shared-attachment/udp-positive", f30Reach("udp", f30Address(ip, 18081), token), true)
+			}
+		case "inbound":
+			for _, ip := range []string{c.App4, c.App6} {
+				f30Want(t, "declared-inbound/tcp", f30Reach("tcp", f30Address(ip, 18080), token), true)
+				f30Want(t, "undeclared-inbound/tcp", f30Reach("tcp", f30Address(ip, 18082), token), false)
+				f30Want(t, "undeclared-inbound/udp", f30Reach("udp", f30Address(ip, 18081), token), false)
+			}
+		default:
+			t.Fatal("unknown fixture client")
+		}
+		return
+	}
+	if role == "stage" {
+		for _, ip := range []string{c.Local4, c.Local6, c.Public4, c.Public6} {
+			f30Want(t, "unfiltered/"+ip+"/tcp", f30Reach("tcp", f30Address(ip, 18080), token), true)
+			f30Want(t, "unfiltered/"+ip+"/udp", f30Reach("udp", f30Address(ip, 18081), token), true)
+		}
+		f30Want(t, "unfiltered/dns", f30DNS("udp", token, dnsmessage.TypeA), true)
+		f30Abstract(t, token)
+		fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW|unix.SOCK_CLOEXEC, 0)
+		if err != nil {
+			t.Fatalf("setup raw-socket positive control: %v", err)
+		}
+		_ = unix.Close(fd)
+		for _, policy := range []struct {
+			name          string
+			public, local bool
+		}{
+			{"deny", false, false}, {"public", true, false}, {"local", false, true}, {"all", true, true},
+		} {
+			p := applicationNetworkPolicyV1{AllowPublic: policy.public, AllowLocal: policy.local, InboundTCP: []uint16{18080}}
+			if err := installApplicationNetworkPolicyV1(p); err != nil {
+				t.Fatal(err)
+			}
+			f30Observe(t, c.Namespace)
+			f30Traffic(t, c, p, policy.name)
+		}
+		// Gateway aliases must not turn another workload's host publication into
+		// an implicit private interface, even when ordinary local egress is allowed.
+		hosts, err := os.ReadFile("/etc/hosts")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(string(hosts), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) > 1 && strings.Contains(strings.Join(fields[1:], " "), "host.containers.internal") {
+				f30Want(t, "gateway-peer-bypass/"+fields[0], f30Reach("tcp", f30Address(fields[0], c.GatewayPort), token), false)
+			}
+		}
+		p := applicationNetworkPolicyV1{AllowPublic: true, InboundTCP: []uint16{18080}}
+		if err := installApplicationNetworkPolicyV1(p); err != nil {
+			t.Fatal(err)
+		}
+		f30Observe(t, c.Namespace)
+		config, _ := json.Marshal(c)
+		environment := append([]string{}, os.Environ()...)
+		for i, entry := range environment {
+			if strings.HasPrefix(entry, "F30_ROLE=") {
+				environment[i] = "F30_ROLE=final"
+			}
+		}
+		environment = append(environment, "F30_CONFIG="+base64.StdEncoding.EncodeToString(config))
+		plan := sandboxExecPlanV1{UID: 0, GID: 0, MappedCapabilities: &c.Mask, Argv: []string{"/probe", "-test.run=^TestF30Network$", "-test.v"}}
+		if err := validateMappedStartupV1(plan); err != nil {
+			t.Fatal(err)
+		}
+		if err := execMappedApplicationV1(plan, environment); err != nil {
+			t.Fatal(err)
+		}
+		t.Fatal("native mapped exec returned")
+	}
+	if role != "final" {
+		t.Fatal("unknown fixture role")
+	}
+	status, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := sandboxExecPlanV1{UID: 0, GID: 0, MappedCapabilities: &c.Mask}
+	if err := verifyMappedKernelStatusV1(status, plan); err != nil {
+		t.Fatal(err)
+	}
+	namespace, err := os.Readlink("/proc/self/ns/net")
+	if err != nil || namespace != c.Namespace {
+		t.Fatal("final namespace changed")
+	}
+	if fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW|unix.SOCK_CLOEXEC, 0); err == nil {
+		_ = unix.Close(fd)
+		t.Fatal("final raw packet authority survived")
+	}
+	nft := &nftables.Conn{}
+	nft.AddTable(&nftables.Table{Family: nftables.TableFamilyIPv4, Name: "f30-forbidden-mutation"})
+	if err := nft.Flush(); err == nil {
+		t.Fatal("final network-policy mutation was permitted")
+	}
+	f30Traffic(t, c, applicationNetworkPolicyV1{AllowPublic: true}, "final")
+	f30Abstract(t, token)
+	f30TCP(t, "tcp", ":18080", token)
+	f30TCP(t, "tcp", ":18082", token)
+	f30UDP(t, token)
+	f30Event("final-ready", map[string]any{"namespace": namespace, "mask": c.Mask, "kernel_status": string(status), "native_transition": true})
+	line, err := bufio.NewReader(io.LimitReader(os.Stdin, 32)).ReadString('\n')
+	if err != nil || !bytes.Equal([]byte(line), []byte("done\n")) {
+		t.Fatal("missing bounded fixture completion")
+	}
+	f30Event("final-complete", map[string]any{"token": token, "mask": c.Mask})
+}
