@@ -104,6 +104,23 @@ func mappedWaitV1(args []string, input *os.File) error {
 	}
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
+	if plan.MappedCapabilities != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if os.Geteuid() != 0 {
+			return fmt.Errorf("trusted sandbox setup must begin as container root")
+		}
+		if err := validateMappedStartupV1(plan); err != nil {
+			return err
+		}
+		// The host must observe effective policy while the payload is inhibited.
+		// Do not reinstall it after that observation and the release frame.
+		if err := prepareApplicationNetworkPolicyV1(plan); err != nil {
+			return err
+		}
+		plan.InstallRules = false
+	}
 	if err := waitMappedReleaseV1(ctx, input, binding); err != nil {
 		return err
 	}

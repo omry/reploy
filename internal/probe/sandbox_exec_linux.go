@@ -93,27 +93,8 @@ func sandboxAndExecApplicationV1(plan sandboxExecPlanV1) error {
 		}
 		defer statusFile.Close()
 	}
-	if plan.InstallRules {
-		sessionNetwork, err := readApplicationSessionNetworkConfigurationV1(plan.SessionNetworkPrefixes)
-		if err != nil {
-			return fmt.Errorf("read application session-network prefixes: %w", err)
-		}
-		sessionPeerCIDRs, sessionLocalCIDRs, err := prepareApplicationSessionPeerV1(
-			plan.SessionNetworkPeer, sessionNetwork.Prefixes, sessionNetwork.Peers[plan.SessionNetworkPeer],
-		)
-		if err != nil {
-			return fmt.Errorf("prepare application session-network peer: %w", err)
-		}
-		if err := installApplicationNetworkPolicyV1(applicationNetworkPolicyV1{
-			AllowPublic:       plan.AllowPublic,
-			AllowLocal:        plan.AllowLocal,
-			AllowAmbiguous:    plan.AllowAmbiguous,
-			InboundTCP:        plan.InboundTCP,
-			SessionPeerCIDRs:  sessionPeerCIDRs,
-			SessionLocalCIDRs: sessionLocalCIDRs,
-		}); err != nil {
-			return fmt.Errorf("install application network policy: %w", err)
-		}
+	if err := prepareApplicationNetworkPolicyV1(plan); err != nil {
+		return err
 	}
 	environment, err := sandboxExecEnvironmentV1(plan.EnvironmentProfile, plan.ContractEnvironment, os.Environ())
 	if err != nil {
@@ -141,6 +122,33 @@ func sandboxAndExecApplicationV1(plan sandboxExecPlanV1) error {
 	return verifyAndExecApplication(plan.Argv, readApplicationKernelStatus, func(argv []string) error {
 		return syscall.Exec(argv[0], argv, environment)
 	})
+}
+
+func prepareApplicationNetworkPolicyV1(plan sandboxExecPlanV1) error {
+	if !plan.InstallRules {
+		return nil
+	}
+	sessionNetwork, err := readApplicationSessionNetworkConfigurationV1(plan.SessionNetworkPrefixes)
+	if err != nil {
+		return fmt.Errorf("read application session-network prefixes: %w", err)
+	}
+	sessionPeerCIDRs, sessionLocalCIDRs, err := prepareApplicationSessionPeerV1(
+		plan.SessionNetworkPeer, sessionNetwork.Prefixes, sessionNetwork.Peers[plan.SessionNetworkPeer],
+	)
+	if err != nil {
+		return fmt.Errorf("prepare application session-network peer: %w", err)
+	}
+	if err := installApplicationNetworkPolicyV1(applicationNetworkPolicyV1{
+		AllowPublic:       plan.AllowPublic,
+		AllowLocal:        plan.AllowLocal,
+		AllowAmbiguous:    plan.AllowAmbiguous,
+		InboundTCP:        plan.InboundTCP,
+		SessionPeerCIDRs:  sessionPeerCIDRs,
+		SessionLocalCIDRs: sessionLocalCIDRs,
+	}); err != nil {
+		return fmt.Errorf("install application network policy: %w", err)
+	}
+	return nil
 }
 
 func dropApplicationAuthorityV1(uid uint32, gid uint32, groups []uint32) error {
