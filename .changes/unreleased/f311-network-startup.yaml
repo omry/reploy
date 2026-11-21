@@ -1,0 +1,2 @@
+kind: Fixed
+body: Prepare trusted mapped-startup network policy before the host release gate while retaining the final application authority drop.
