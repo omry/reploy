@@ -12,6 +12,13 @@ import (
 )
 
 func Main(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 1 && args[0] == "mapped-sandbox-observe-v1" {
+		if err := mappedNetworkObservationMainV1(stdin, stdout); err != nil {
+			_, _ = fmt.Fprintf(stderr, "reploy-probe: mapped observation: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 	if len(args) > 0 && args[0] == mappedlaunch.Command {
 		input, _ := stdin.(*os.File)
 		if err := mappedWaitV1(args[1:], input); err != nil {
