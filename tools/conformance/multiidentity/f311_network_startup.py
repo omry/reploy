@@ -22,6 +22,8 @@ import time
 
 ROOT = Path(__file__).resolve().parents[3]
 LABEL = "reploy.f311"
+SCOPE = "F3.1.1 setup before release only; no production provider or public activation"
+EXTRA_SOURCES = ()
 PAYLOAD = Path(__file__).with_name("f311_network_startup_payload.go.txt")
 F30 = Path(__file__).with_name("f30_network_payload.go.txt")
 
@@ -54,8 +56,8 @@ def main():
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     env = {**os.environ, **runtime["env"], "CGO_ENABLED": "0"}
     token = secrets.token_hex(12)
-    sources = [Path(__file__), PAYLOAD, F30, *sorted((ROOT / "internal/probe").glob("*.go"))]
-    result = {"scope": "F3.1.1 setup before release only; no production provider or public activation",
+    sources = [Path(__file__), PAYLOAD, F30, *EXTRA_SOURCES, *sorted((ROOT / "internal/probe").glob("*.go"))]
+    result = {"scope": SCOPE,
               "pass": False, "token": token, "commands": [], "cases": [], "cleanup": [],
               "sources": {str(p.relative_to(ROOT)): digest(p) for p in sources},
               "runtime_sha256": digest(runtime_path), "engine_sha256": digest(prefix[0])}

@@ -295,7 +295,7 @@ func TestMappedProductionStartupV1(t *testing.T) {
 			uid  uint32
 			gid  uint32
 			code int
-		}{{"deny-close", 0, 0, 125}, {"bad-exec", 0, 0, 125}, {"deny-setuid", 0, 0, 121}, {"deny-setgid", 0, 0, 121}, {"deny-groups", 0, 0, 121}, {"deny-capset", 0, 0, 121}, {"deny-prctl", 0, 0, 121}, {"deny-get-securebits", 0, 0, 122}, {"unmapped-uid", 999, 0, 121}, {"unmapped-gid", 0, 999, 121}} {
+		}{{"deny-close", 0, 0, 125}, {"bad-exec", 0, 0, 125}, {"deny-setuid", 0, 0, 121}, {"deny-setgid", 0, 0, 121}, {"deny-groups", 0, 0, 121}, {"deny-capset", 0, 0, 121}, {"deny-prctl", 0, 0, 121}, {"deny-get-nnp", 0, 0, 1}, {"deny-get-securebits", 0, 0, 122}, {"unmapped-uid", 999, 0, 121}, {"unmapped-gid", 0, 999, 121}} {
 			t.Run(profile+"/"+negative.mode, func(t *testing.T) {
 				mappedProductionCaseV1(t, bootstrap, probe, payload, directory, profile, uidBase, gidBase, negative.uid, negative.gid, nil, 0, negative.mode, negative.code)
 			})
@@ -306,7 +306,7 @@ func TestMappedProductionStartupV1(t *testing.T) {
 		t.Run(profile+"/clear-ambient", func(t *testing.T) {
 			mappedProductionCaseV1(t, bootstrap, probe, payload, directory, profile, uidBase, gidBase, 0, 0, nil, 0, "ambient", 0)
 		})
-		t.Run(profile+"/set-nnp", func(t *testing.T) {
+		t.Run(profile+"/startup-requires-nnp", func(t *testing.T) {
 			status, err := os.ReadFile("/proc/self/status")
 			if err != nil {
 				t.Fatal(err)
@@ -314,9 +314,9 @@ func TestMappedProductionStartupV1(t *testing.T) {
 			if !strings.Contains(string(status), "NoNewPrivs:\t0\n") {
 				t.Skip("cannot remove inherited host no-new-privileges for this control")
 			}
-			mappedProductionCaseV1(t, bootstrap, probe, payload, directory, profile, uidBase, gidBase, 0, 0, nil, 0, "unset-nnp", 0)
+			mappedProductionCaseV1(t, bootstrap, probe, payload, directory, profile, uidBase, gidBase, 0, 0, nil, 0, "unset-nnp", 1)
 		})
-		t.Run(profile+"/no-filter", func(t *testing.T) {
+		t.Run(profile+"/startup-requires-engine-filter", func(t *testing.T) {
 			status, err := os.ReadFile("/proc/self/status")
 			if err != nil {
 				t.Fatal(err)
@@ -324,7 +324,7 @@ func TestMappedProductionStartupV1(t *testing.T) {
 			if !strings.Contains(string(status), "Seccomp:\t0\n") {
 				t.Skip("cannot remove an inherited host seccomp filter for this negative control")
 			}
-			mappedProductionCaseV1(t, bootstrap, probe, payload, directory, profile, uidBase, gidBase, 0, 0, nil, 0, "no-filter", 122)
+			mappedProductionCaseV1(t, bootstrap, probe, payload, directory, profile, uidBase, gidBase, 0, 0, nil, 0, "no-filter", 1)
 		})
 	}
 	// Link the same production package with one test-only concurrent opener.
@@ -336,6 +336,25 @@ func TestMappedProductionStartupV1(t *testing.T) {
 		t.Fatalf("build descriptor adversary: %v: %s", err, output)
 	}
 	mappedVerifyExecTailV1(t, testProbe)
+	// Earlier startup refusals do not replace the native tail's own controls.
+	for _, profile := range []string{"exact", "exact-permuted-gids", "bounded"} {
+		for _, mode := range []string{"unset-nnp", "no-filter"} {
+			t.Run(profile+"/native-"+mode, func(t *testing.T) {
+				status, err := os.ReadFile("/proc/self/status")
+				if err != nil {
+					t.Fatal(err)
+				}
+				want, prerequisite := 0, "NoNewPrivs:\t0\n"
+				if mode == "no-filter" {
+					want, prerequisite = 122, "Seccomp:\t0\n"
+				}
+				if !strings.Contains(string(status), prerequisite) {
+					t.Skip("cannot remove inherited host authority constraint for native control")
+				}
+				mappedProductionCaseV1(t, bootstrap, testProbe, payload, directory, profile, uidBase, gidBase, 0, 0, nil, 0, "native-"+mode, want)
+			})
+		}
+	}
 	for _, profile := range []string{"exact", "bounded"} {
 		for _, mask := range []uint64{0, 0xc4, 0x400c1} {
 			for repetition := range 3 {
@@ -385,8 +404,14 @@ func mappedProductionCaseV1(t *testing.T, bootstrap, probe, payload, directory, 
 	if mode == "bad-exec" {
 		executable = filepath.Join(directory, "missing-executable")
 	}
-	args := []string{probe, fmt.Sprint(mask), mode, "/reploy-probe", mappedlaunch.Command, string(encoded), time.Now().Add(15 * time.Second).UTC().Format(time.RFC3339Nano), "sandbox-exec", fmt.Sprintf("%s%016x", mappedCapabilityArgumentV1, mask), "--uid", fmt.Sprint(uid), "--gid", fmt.Sprint(gid), "--groups", strings.Join(groupText, ","), "--public", "deny", "--local", "deny", "--ambiguous", "require-both", "--", executable}
+	fixtureMode := strings.TrimPrefix(mode, "native-")
+	args := []string{probe, fmt.Sprint(mask), fixtureMode, "/reploy-probe", mappedlaunch.Command, string(encoded), time.Now().Add(15 * time.Second).UTC().Format(time.RFC3339Nano), "sandbox-exec", fmt.Sprintf("%s%016x", mappedCapabilityArgumentV1, mask), "--uid", fmt.Sprint(uid), "--gid", fmt.Sprint(gid), "--groups", strings.Join(groupText, ","), "--public", "deny", "--local", "deny", "--ambiguous", "require-both", "--", executable}
 	args = append(args, identities...)
+	if strings.HasPrefix(mode, "native-") {
+		prefix := append([]string{}, args[:4]...)
+		prefix = append(prefix, "-test.run=^TestMappedNativeTransitionHelperV1$", "--", mode)
+		args = append(prefix, args[4:]...)
+	}
 	if strings.HasPrefix(mode, "descriptor-") {
 		prefix := append([]string{}, args[:4]...)
 		prefix = append(prefix, "-test.run=^TestMappedDescriptorRaceHelperV1$", "--", mode, canary.Name())
@@ -441,9 +466,24 @@ func mappedProductionCaseV1(t *testing.T, bootstrap, probe, payload, directory, 
 	if _, err := input.Write([]byte{'G'}); err != nil {
 		t.Fatal(err)
 	}
+	if !strings.HasPrefix(mode, "native-") && (mode == "unset-nnp" || mode == "no-filter" || mode == "deny-get-nnp") {
+		// No release frame is sent. Require the specific early refusal, so EOF
+		// or another unrelated failure cannot satisfy this control.
+		_ = input.Close()
+		stdout, readErr := io.ReadAll(reader)
+		waitErr := command.Wait()
+		want := "mapped filter requires effective no-new-privileges"
+		if mode == "no-filter" {
+			want = "mapped startup requires the qualified engine's existing single filter"
+		}
+		if readErr != nil || command.ProcessState.ExitCode() != expectedExit || len(stdout) != 0 || !strings.Contains(stderr.String(), want) {
+			t.Fatalf("startup precondition exit=%d want%d read=%v wait=%v stderr=%s stdout=%s", command.ProcessState.ExitCode(), expectedExit, readErr, waitErr, stderr.String(), stdout)
+		}
+		return
+	}
 	// Observe stronger peer threads in the actual production Go process while
 	// it waits for admission. They must not survive the later winning exec.
-	stronger, seeded := false, mode != "ambient" && mode != "unset-nnp"
+	stronger, seeded := false, fixtureMode != "ambient" && fixtureMode != "unset-nnp"
 	for !stronger && ctx.Err() == nil {
 		processStatus, _ := os.ReadFile(fmt.Sprintf("/proc/%d/status", command.Process.Pid))
 		if strings.Contains(string(processStatus), "State:\tZ") {
@@ -463,7 +503,7 @@ func mappedProductionCaseV1(t *testing.T, bootstrap, probe, payload, directory, 
 						bits, err := strconv.ParseUint(strings.TrimSpace(strings.TrimPrefix(line, "CapAmb:")), 16, 64)
 						seeded = seeded || err == nil && bits != 0
 					}
-					if mode == "unset-nnp" && line == "NoNewPrivs:\t0" {
+					if fixtureMode == "unset-nnp" && line == "NoNewPrivs:\t0" {
 						seeded = true
 					}
 				}

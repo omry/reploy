@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+
+	"github.com/omry/reploy/internal/mappedlaunch"
 )
 
-const mappedCloneNamespaceMaskV1 uint64 = 0x7e020080
+const mappedCloneNamespaceMaskV1 = uint64(mappedlaunch.CloneNamespaceMask)
 
 // This matches the closed Linux v6.6 capability catalog in blueprint. The
 // observed kernel limit is a separate caller-supplied qualification fact.
