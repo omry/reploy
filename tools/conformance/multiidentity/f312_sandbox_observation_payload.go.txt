@@ -1,0 +1,217 @@
+package probe
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/nftables"
+	"github.com/google/nftables/expr"
+	"github.com/omry/reploy/internal/canonical"
+	"github.com/omry/reploy/internal/mappedlaunch"
+	"golang.org/x/sys/unix"
+)
+
+func f311Event(kind string, value any) {
+	b, err := json.Marshal(struct {
+		Event string `json:"event"`
+		Value any    `json:"value"`
+	}{kind, value})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("F311 %s\n", b)
+}
+
+func TestF311NetworkStartup(t *testing.T) {
+	role, token := os.Getenv("F311_ROLE"), os.Getenv("F311_TOKEN")
+	if role == "" {
+		t.Skip("explicit private F3.1.1 fixture only")
+	}
+	if len(token) != 24 {
+		t.Fatal("missing fixture identity")
+	}
+	mask, err := strconv.ParseUint(os.Getenv("F311_MASK"), 16, 64)
+	if err != nil || mask != 0 && mask != 1<<10 {
+		t.Fatal("unqualified fixture ceiling")
+	}
+	binding := mappedWaitBindingV1()
+	binding.Installation = "f311-" + token
+	binding.Operation = binding.Installation + "-" + os.Getenv("F311_CASE")
+	switch role {
+	case "frame":
+		frame, err := mappedlaunch.Frame(mappedlaunch.Request{Binding: binding, Container: os.Getenv("F311_CONTAINER")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f311Event("frame", base64.StdEncoding.EncodeToString(frame))
+	case "observe":
+		// Reuse F3.0's actual namespace-bound kernel observation. A missing
+		// table is readiness evidence only, never successful qualification.
+		tables, err := (&nftables.Conn{}).ListTables()
+		if err != nil {
+			t.Fatal(err)
+		}
+		families := map[nftables.TableFamily]bool{}
+		for _, table := range tables {
+			if table.Name == "reploy" {
+				families[table.Family] = true
+			}
+		}
+		if !families[nftables.TableFamilyIPv4] || !families[nftables.TableFamilyIPv6] {
+			f311Event("pending", nil)
+			return
+		}
+		f30Observe(t, os.Getenv("F311_NAMESPACE"))
+		args := []string{"--mapped-capabilities=0000000000000000", "--uid", "0", "--gid", "0", "--public", "deny", "--local", "deny", "--ambiguous", "require-both", "--", "/probe"}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		input := MappedNetworkObservationV1{Arguments: args}
+		if err := VerifyMappedNetworkPolicyV1(ctx, input); err != nil {
+			t.Fatal(err)
+		}
+		threads, err := os.ReadDir("/proc/1/task")
+		if err != nil || len(threads) == 0 {
+			t.Fatal("missing actual main threads", err)
+		}
+		for _, thread := range threads {
+			status, err := os.ReadFile(filepath.Join("/proc/1/task", thread.Name(), "status"))
+			if err != nil || !strings.Contains(string(status), "Seccomp_filters:\t2\n") || !strings.Contains(string(status), "NoNewPrivs:\t1\n") {
+				t.Fatalf("main thread lacks exact synchronized policy: %v %s", err, status)
+			}
+		}
+		input.Request, err = canonical.Sum("f312-observation", "v1", os.Getenv("F311_TOKEN"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		input.Namespace = os.Getenv("F311_NAMESPACE")
+		encoded, err := canonical.Marshal(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var output, diagnostic bytes.Buffer
+		if code := Main([]string{"mapped-sandbox-observe-v1"}, bytes.NewReader(encoded), &output, &diagnostic); code != 0 {
+			t.Fatal("observer command refused exact bound input", code, diagnostic.String())
+		}
+		expected, err := canonical.Marshal(struct {
+			Request   canonical.Digest
+			Namespace string
+		}{input.Request, input.Namespace})
+		if err != nil || !bytes.Equal(output.Bytes(), expected) {
+			t.Fatal("bound observer reply changed", err)
+		}
+		input.Namespace = "net:[0]"
+		encoded, err = canonical.Marshal(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		output.Reset()
+		diagnostic.Reset()
+		if code := Main([]string{"mapped-sandbox-observe-v1"}, bytes.NewReader(encoded), &output, &diagnostic); code != 1 || output.Len() != 0 || !strings.Contains(diagnostic.String(), "different network namespace") {
+			t.Fatal("wrong namespace produced admission evidence or unrelated refusal", code, diagnostic.String())
+		}
+		if os.Getenv("F311_CASE") == "empty" {
+			table := &nftables.Table{Family: nftables.TableFamilyIPv4, Name: "reploy"}
+			connection := &nftables.Conn{}
+			connection.AddRule(&nftables.Rule{Table: table, Chain: &nftables.Chain{Table: table, Name: "input"}, Exprs: []expr.Any{&expr.Verdict{Kind: expr.VerdictAccept}}})
+			if err := connection.Flush(); err != nil {
+				t.Fatal(err)
+			}
+			input.Namespace = os.Getenv("F311_NAMESPACE")
+			if err := VerifyMappedNetworkPolicyV1(ctx, input); err == nil {
+				t.Fatal("actual extra accept rule was not refused")
+			}
+			if err := installApplicationNetworkPolicyV1(applicationNetworkPolicyV1{}); err != nil {
+				t.Fatal(err)
+			}
+			if err := VerifyMappedNetworkPolicyV1(ctx, input); err != nil {
+				t.Fatal(err)
+			}
+			connection = &nftables.Conn{}
+			connection.DelTable(&nftables.Table{Family: nftables.TableFamilyIPv6, Name: "reploy"})
+			if err := connection.Flush(); err != nil {
+				t.Fatal(err)
+			}
+			if err := VerifyMappedNetworkPolicyV1(ctx, input); err == nil {
+				t.Fatal("missing actual IPv6 table was not refused")
+			}
+			if err := installApplicationNetworkPolicyV1(applicationNetworkPolicyV1{}); err != nil {
+				t.Fatal(err)
+			}
+			if err := VerifyMappedNetworkPolicyV1(ctx, input); err != nil {
+				t.Fatal(err)
+			}
+			f311Event("actual-policy-refusals", []string{"extra-accept-rule", "missing-ipv6-table", "wrong-namespace"})
+		}
+		f311Event("exact-effective-policy", true)
+		f311Event("policy-observed", os.Getenv("F311_NAMESPACE"))
+	case "stage":
+		fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW|unix.SOCK_CLOEXEC, 0)
+		if err != nil {
+			t.Fatalf("setup raw-network positive control: %v", err)
+		}
+		_ = unix.Close(fd)
+		encoded, err := canonical.Marshal(binding)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seconds, err := strconv.Atoi(os.Getenv("F311_DEADLINE_SECONDS"))
+		if err != nil || seconds < 1 || seconds > 30 {
+			t.Fatal("invalid fixture deadline")
+		}
+		deadline := time.Now().Add(time.Duration(seconds) * time.Second).UTC().Format(time.RFC3339Nano)
+		args := []string{string(encoded), deadline, "sandbox-exec",
+			fmt.Sprintf("--mapped-capabilities=%016x", mask), "--uid", "0", "--gid", "0",
+			"--public", "deny", "--local", "deny", "--ambiguous", "require-both",
+			"--", "/probe", "-test.run=^TestF311NetworkStartup$", "-test.v"}
+		if os.Getenv("F311_CASE") == "invalid-plan" {
+			args[len(args)-3] = "relative-probe"
+		}
+		if err := os.Setenv("F311_ROLE", "payload"); err != nil {
+			t.Fatal(err)
+		}
+		f311Event("stage-started", deadline)
+		if err := mappedWaitV1(args, os.Stdin); err != nil {
+			f311Event("refused", err.Error())
+			t.Fatal(err)
+		}
+		t.Fatal("mapped startup returned without exec")
+	case "payload":
+		want := []byte(token + "\n")
+		got := make([]byte, len(want))
+		if _, err := io.ReadFull(os.Stdin, got); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("application stdin did not follow the consumed release frame: %q %v", got, err)
+		}
+		status, err := readApplicationKernelStatus()
+		plan := sandboxExecPlanV1{UID: 0, GID: 0, MappedCapabilities: &mask}
+		if err != nil || verifyMappedKernelStatusV1(status, plan) != nil {
+			t.Fatalf("final mapped authority: %v %s", err, status)
+		}
+		fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW|unix.SOCK_CLOEXEC, 0)
+		if err == nil {
+			_ = unix.Close(fd)
+			t.Fatal("setup raw-network authority survived release")
+		}
+		if !errors.Is(err, unix.EPERM) {
+			t.Fatalf("raw-network refusal has an unrelated cause: %v", err)
+		}
+		connection := &nftables.Conn{}
+		connection.AddTable(&nftables.Table{Family: nftables.TableFamilyIPv4, Name: "f311-payload"})
+		if err := connection.Flush(); !errors.Is(err, unix.EPERM) {
+			t.Fatalf("setup policy-write authority survived release or is unproved: %v", err)
+		}
+		f311Event("payload-complete", map[string]any{"mask": mask, "kernel_status": string(status)})
+	default:
+		t.Fatal("unknown fixture role")
+	}
+}
