@@ -61,7 +61,7 @@ func mappedCreateIntegrationSpecV1(t *testing.T, name, image, nonce, endpoint st
 	if err != nil {
 		t.Fatal(err)
 	}
-	args := []string{"create", "--name", name, "--user", "0:0", "--interactive", "--pull", "never", "--read-only", "--cap-drop", "ALL", "--security-opt", "seccomp=" + profile, "--security-opt", "no-new-privileges=true", "--network", "none", "--tmpfs", "/run:rw,noexec,nosuid,nodev,size=4m,mode=1777", "--label", "io.reploy.c1-fixture=" + nonce, "--entrypoint", "/reploy-probe", image}
+	args := []string{"create", "--name", name, "--user", "0:0", "--interactive", "--pull", "never", "--read-only", "--cap-drop", "ALL", "--cap-add", "NET_ADMIN", "--security-opt", "seccomp=" + profile, "--security-opt", "no-new-privileges=true", "--network", "none", "--tmpfs", "/run:rw,noexec,nosuid,nodev,size=4m,mode=1777", "--label", "io.reploy.c1-fixture=" + nonce, "--entrypoint", "/reploy-probe", image}
 	args = append(args, mappedCreateDiagnosticStartupV1(t, binding, nonce, 2*time.Minute)...)
 	return CommandSpec{Name: "docker", Args: args, Env: []string{"DOCKER_HOST=" + endpoint, "DOCKER_CONTEXT="}, builtinSeccompIndex: slices.Index(args, "seccomp="+profile)}
 }
@@ -178,10 +178,11 @@ func readMappedKernelIntervalsV1(t *testing.T, pid int, kind string) []identitym
 	return values
 }
 
-// This host check exercises the actual production dispatcher without requiring
-// a live engine. The production /reploy-probe waits on a real pipe for the
-// release frame; the conformance payload remains a separate /probe argv target.
-func TestMappedC1ProductionDispatcherWaitsWithoutReleaseV1(t *testing.T) {
+// This host check validates the exact C1 request, then exercises the production
+// dispatcher in its unqualified frame-only mode. Qualified startup now prepares
+// network policy before waiting and must run only in a disposable namespace;
+// the F3.1.1 fixture proves that path without changing the host firewall.
+func TestMappedC1ProductionDispatcherUnqualifiedWaitsWithoutReleaseV1(t *testing.T) {
 	probe := filepath.Join(t.TempDir(), "reploy-probe")
 	build := exec.CommandContext(t.Context(), "go", "build", "-buildvcs=false", "-o", probe, "../../cmd/reploy-probe")
 	if output, err := build.CombinedOutput(); err != nil {
@@ -198,19 +199,21 @@ func TestMappedC1ProductionDispatcherWaitsWithoutReleaseV1(t *testing.T) {
 	}}
 	binding := mappedCreateDiagnosticBindingV1(t, state, string(digest), "c1-host-operation")
 	spec := mappedCreateIntegrationSpecV1(t, "c1-host-fixture", string(digest), "0123456789abcdef0123456789abcdef", "unix:///tmp/c1-host-fixture.sock", binding)
-	policy := mappedCreatePolicyFixtureV1(t)
+	policy := mappedPolicyForSpecFixtureV1(t, spec, "amd64", 0)
 	request, err := mappedPodmanApplicationCreateRequestV1(spec, "c1-host-namespace", policy)
 	if err != nil {
 		t.Fatalf("generated C1 request rejected by strict mapped constructor: %v", err)
 	}
 	body := request.body
-	if request.policy != policy || policy.finalCapabilities != 0 || policy.setupCapabilities != 0 || body.Tty || !body.OpenStdin || !body.StdinOnce || !body.AttachStdin || !body.HostConfig.ReadonlyRootfs || !slices.Equal(body.HostConfig.CapDrop, []string{"ALL"}) || len(body.HostConfig.CapAdd) != 0 || body.HostConfig.AutoRemove || body.HostConfig.RestartPolicy == nil || *body.HostConfig.RestartPolicy != (mappedRestartPolicyV1{Name: "no", MaximumRetryCount: 0}) {
+	if request.policy != policy || policy.finalCapabilities != 0 || policy.setupCapabilities != 1<<12 || body.Tty || !body.OpenStdin || !body.StdinOnce || !body.AttachStdin || !body.HostConfig.ReadonlyRootfs || !slices.Equal(body.HostConfig.CapDrop, []string{"ALL"}) || !slices.Equal(body.HostConfig.CapAdd, []string{"NET_ADMIN"}) || body.HostConfig.AutoRemove || body.HostConfig.RestartPolicy == nil || *body.HostConfig.RestartPolicy != (mappedRestartPolicyV1{Name: "no", MaximumRetryCount: 0}) {
 		t.Fatalf("generated C1 request changed the exact fixed policy or stdin tuple: policy=%+v body=%+v", request.policy, body)
 	}
 	if err := validateMappedCreateStartupV1(body.Cmd, policy); err != nil {
 		t.Fatalf("generated C1 startup failed the actual parser: %v", err)
 	}
-	command := slices.Clone(body.Cmd)
+	command := slices.DeleteFunc(slices.Clone(body.Cmd), func(arg string) bool {
+		return strings.HasPrefix(arg, "--mapped-capabilities=")
+	})
 	input, inputWriter, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -266,7 +269,7 @@ func TestMappedPodmanCreateLiveV1(t *testing.T) {
 			}
 			binding := mappedCreateDiagnosticBindingV1(t, intent, image, operationID)
 			firstSpec := mappedCreateIntegrationSpecV1(t, "reploy-c1-"+nonce, image, nonce, endpoint, binding)
-			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, intent, active, operationID, firstSpec, mappedCreatePolicyFixtureV1(t)); err == nil {
+			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, intent, active, operationID, firstSpec, mappedPolicyForSpecFixtureV1(t, firstSpec, "amd64", 0)); err == nil {
 				t.Fatal("intent granted a dispatchable preparation")
 			}
 			pending, err := ops.BeginEffects(t.Context(), intent, operationID)
@@ -276,16 +279,16 @@ func TestMappedPodmanCreateLiveV1(t *testing.T) {
 			if profile == "exact" {
 				checkMappedEngineRefusalsV1(t, ops, pending, active, operationID, firstSpec)
 			}
-			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, "foreign-operation", firstSpec, mappedCreatePolicyFixtureV1(t)); err == nil {
+			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, "foreign-operation", firstSpec, mappedPolicyForSpecFixtureV1(t, firstSpec, "amd64", 0)); err == nil {
 				t.Fatal("foreign operation admitted")
 			}
-			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, intent, active, operationID, firstSpec, mappedCreatePolicyFixtureV1(t)); err == nil {
+			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, intent, active, operationID, firstSpec, mappedPolicyForSpecFixtureV1(t, firstSpec, "amd64", 0)); err == nil {
 				t.Fatal("stale revision admitted")
 			}
 			foreign := firstSpec
 			foreign.Args = slices.Clone(firstSpec.Args)
 			foreign.Args[slices.Index(foreign.Args, "--entrypoint")+2] = string(rendererDigest("a"))
-			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, foreign, mappedCreatePolicyFixtureV1(t)); err == nil || !strings.Contains(err.Error(), "selected generation") {
+			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, foreign, mappedPolicyForSpecFixtureV1(t, foreign, "amd64", 0)); err == nil || !strings.Contains(err.Error(), "selected generation") {
 				t.Fatal("foreign image was not rejected by current-generation binding", err)
 			}
 			for repeat := 0; repeat < 2; repeat++ {
@@ -294,7 +297,7 @@ func TestMappedPodmanCreateLiveV1(t *testing.T) {
 					if repeat == 1 {
 						spec.Args[slices.Index(spec.Args, "--entrypoint")+2] = pending.Current.Reference
 					}
-					prepared, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, spec, mappedCreatePolicyFixtureV1(t))
+					prepared, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, spec, mappedPolicyForSpecFixtureV1(t, spec, "amd64", 0))
 					if err != nil {
 						t.Fatal("production C1 preparation", err)
 					}
@@ -424,7 +427,7 @@ func checkMappedEngineRefusalsV1(t *testing.T, ops deploy.IdentityMappingOperati
 			spec.Args = slices.Clone(spec.Args)
 			if kind == "remote" {
 				spec.Env = []string{"DOCKER_HOST=tcp://127.0.0.1:1", "DOCKER_CONTEXT="}
-				if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, spec, mappedCreatePolicyFixtureV1(t)); err == nil {
+				if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, spec, mappedPolicyForSpecFixtureV1(t, spec, "amd64", 0)); err == nil {
 					t.Fatal("remote endpoint admitted")
 				}
 				return
@@ -493,7 +496,7 @@ func checkMappedEngineRefusalsV1(t *testing.T, ops deploy.IdentityMappingOperati
 			case "invalid generated policy":
 				spec.Args = slices.Delete(spec.Args, slices.Index(spec.Args, "--read-only"), slices.Index(spec.Args, "--read-only")+1)
 			}
-			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, spec, mappedCreatePolicyFixtureV1(t)); err == nil {
+			if _, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, spec, mappedPolicyForSpecFixtureV1(t, spec, "amd64", 0)); err == nil {
 				t.Fatal("incompatible engine admitted")
 			}
 		})
@@ -568,7 +571,7 @@ func checkMappedEngineRefusalsV1(t *testing.T, ops deploy.IdentityMappingOperati
 			go server.Serve(listener)
 			defer server.Close()
 			spec.Env = []string{"DOCKER_HOST=unix://" + path, "DOCKER_CONTEXT="}
-			p, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, spec, mappedCreatePolicyFixtureV1(t))
+			p, err := prepareMappedPodmanCreateV1(t.Context(), ops, pending, active, operationID, spec, mappedPolicyForSpecFixtureV1(t, spec, "amd64", 0))
 			if err != nil {
 				t.Fatal("valid preparation fixture", err)
 			}

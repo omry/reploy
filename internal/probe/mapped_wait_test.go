@@ -33,6 +33,34 @@ func mappedWaitPipeV1(t *testing.T) (*os.File, *os.File) {
 	return r, w
 }
 
+func TestMappedWaitQualifiedRefusesBeforeHostSetupV1(t *testing.T) {
+	encoded, err := canonical.Marshal(mappedWaitBindingV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"expired", "unprivileged"} {
+		t.Run(mode, func(t *testing.T) {
+			if mode == "unprivileged" && os.Geteuid() == 0 {
+				t.Skip("qualified setup must not run in the host root network namespace")
+			}
+			deadline := time.Now().Add(time.Second)
+			want := "trusted sandbox setup must begin as container root"
+			if mode == "expired" {
+				deadline = time.Now().Add(-time.Second)
+				want = "context deadline exceeded"
+			}
+			r, w := mappedWaitPipeV1(t)
+			_ = w.Close()
+			args := []string{string(encoded), deadline.UTC().Format(time.RFC3339Nano), "sandbox-exec",
+				"--mapped-capabilities=0000000000000000", "--uid", "0", "--gid", "0",
+				"--public", "deny", "--local", "deny", "--ambiguous", "require-both", "--", "/bin/true"}
+			if err := mappedWaitV1(args, r); err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("%s must refuse before policy setup or frame consumption: %v", mode, err)
+			}
+		})
+	}
+}
+
 func TestMappedWaitHandoffLeavesStdinAndClearsDeadlineV1(t *testing.T) {
 	r, w := mappedWaitPipeV1(t)
 	binding := mappedWaitBindingV1()
