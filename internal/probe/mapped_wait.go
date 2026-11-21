@@ -114,6 +114,9 @@ func mappedWaitV1(args []string, input *os.File) error {
 		if err := validateMappedStartupV1(plan); err != nil {
 			return err
 		}
+		if err := installMappedEscapeFilterV1(); err != nil {
+			return err
+		}
 		// The host must observe effective policy while the payload is inhibited.
 		// Do not reinstall it after that observation and the release frame.
 		if err := prepareApplicationNetworkPolicyV1(plan); err != nil {

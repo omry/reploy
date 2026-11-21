@@ -74,9 +74,6 @@ var applicationAmbiguousIPv6CIDRsV1 = []string{
 }
 
 func installApplicationNetworkPolicyV1(policy applicationNetworkPolicyV1) error {
-	ports := append([]uint16(nil), policy.InboundTCP...)
-	slices.Sort(ports)
-	ports = slices.Compact(ports)
 	resolverCIDRs := []string{}
 	if applicationNetworkPolicyAllowsDNSV1(policy) {
 		var err error
@@ -88,7 +85,43 @@ func installApplicationNetworkPolicyV1(policy applicationNetworkPolicyV1) error 
 			return fmt.Errorf("read application DNS resolvers: no nameserver entries")
 		}
 	}
-	connection := &nftables.Conn{}
+	connection := &applicationNetworkRuleBuilderV1{Conn: &nftables.Conn{}}
+	for _, family := range []nftables.TableFamily{nftables.TableFamilyIPv4, nftables.TableFamilyIPv6} {
+		tables, err := connection.ListTablesOfFamily(family)
+		if err != nil {
+			return fmt.Errorf("list nftables family %d: %w", family, err)
+		}
+		for _, table := range tables {
+			if table.Name == "reploy" {
+				connection.DelTable(table)
+			}
+		}
+	}
+	if err := applicationNetworkRulesV1(connection, policy, resolverCIDRs); err != nil {
+		return err
+	}
+	if err := connection.Flush(); err != nil {
+		return fmt.Errorf("apply nftables transaction: %w", err)
+	}
+	return nil
+}
+
+// Keep one rule producer for installation and effective observation. Producing
+// rules only buffers the transaction; kernel reads and flush belong to callers.
+type applicationNetworkRuleBuilderV1 struct {
+	*nftables.Conn
+	rules []*nftables.Rule
+}
+
+func (c *applicationNetworkRuleBuilderV1) AddRule(rule *nftables.Rule) *nftables.Rule {
+	c.rules = append(c.rules, rule)
+	return c.Conn.AddRule(rule)
+}
+
+func applicationNetworkRulesV1(connection *applicationNetworkRuleBuilderV1, policy applicationNetworkPolicyV1, resolverCIDRs []string) error {
+	ports := slices.Clone(policy.InboundTCP)
+	slices.Sort(ports)
+	ports = slices.Compact(ports)
 	for _, family := range []struct {
 		tableFamily      nftables.TableFamily
 		local            []string
@@ -99,26 +132,14 @@ func installApplicationNetworkPolicyV1(policy applicationNetworkPolicyV1) error 
 		{nftables.TableFamilyIPv4, applicationLocalIPv4CIDRsV1, applicationPublicIPv4ExceptionsV1, applicationAmbiguousIPv4CIDRsV1, 4},
 		{nftables.TableFamilyIPv6, applicationLocalIPv6CIDRsV1, applicationPublicIPv6ExceptionsV1, applicationAmbiguousIPv6CIDRsV1, 16},
 	} {
-		if err := replaceApplicationNetworkTableV1(connection, family.tableFamily, family.local, family.publicExceptions, family.ambiguous, resolverCIDRs, family.addressSize, policy, ports); err != nil {
+		if err := appendApplicationNetworkTableV1(connection, family.tableFamily, family.local, family.publicExceptions, family.ambiguous, resolverCIDRs, family.addressSize, policy, ports); err != nil {
 			return err
 		}
-	}
-	if err := connection.Flush(); err != nil {
-		return fmt.Errorf("apply nftables transaction: %w", err)
 	}
 	return nil
 }
 
-func replaceApplicationNetworkTableV1(connection *nftables.Conn, family nftables.TableFamily, local []string, publicExceptions []string, ambiguous []string, resolverCIDRs []string, addressSize uint32, policy applicationNetworkPolicyV1, ports []uint16) error {
-	tables, err := connection.ListTablesOfFamily(family)
-	if err != nil {
-		return fmt.Errorf("list nftables family %d: %w", family, err)
-	}
-	for _, table := range tables {
-		if table.Name == "reploy" {
-			connection.DelTable(table)
-		}
-	}
+func appendApplicationNetworkTableV1(connection *applicationNetworkRuleBuilderV1, family nftables.TableFamily, local []string, publicExceptions []string, ambiguous []string, resolverCIDRs []string, addressSize uint32, policy applicationNetworkPolicyV1, ports []uint16) error {
 	table := connection.AddTable(&nftables.Table{Family: family, Name: "reploy"})
 	drop := nftables.ChainPolicyDrop
 	input := connection.AddChain(&nftables.Chain{
@@ -467,7 +488,7 @@ func readApplicationResolverCIDRsV1(path string) ([]string, error) {
 	return resolverCIDRs, nil
 }
 
-func addDNSResolverVerdictsV1(connection *nftables.Conn, table *nftables.Table, chain *nftables.Chain, resolverCIDRs []string, addressSize uint32) error {
+func addDNSResolverVerdictsV1(connection *applicationNetworkRuleBuilderV1, table *nftables.Table, chain *nftables.Chain, resolverCIDRs []string, addressSize uint32) error {
 	for _, cidr := range resolverCIDRs {
 		ip, _, err := net.ParseCIDR(cidr)
 		if err != nil {
@@ -485,7 +506,7 @@ func addDNSResolverVerdictsV1(connection *nftables.Conn, table *nftables.Table, 
 	return nil
 }
 
-func addTransportPortCIDRVerdictV1(connection *nftables.Conn, table *nftables.Table, chain *nftables.Chain, cidr string, addressSize uint32, protocol byte, port uint16, verdict expr.VerdictKind) error {
+func addTransportPortCIDRVerdictV1(connection *applicationNetworkRuleBuilderV1, table *nftables.Table, chain *nftables.Chain, cidr string, addressSize uint32, protocol byte, port uint16, verdict expr.VerdictKind) error {
 	ip, network, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return fmt.Errorf("parse application network prefix %q: %w", cidr, err)
@@ -512,7 +533,7 @@ func addTransportPortCIDRVerdictV1(connection *nftables.Conn, table *nftables.Ta
 	return nil
 }
 
-func addCIDRVerdictsV1(connection *nftables.Conn, table *nftables.Table, chain *nftables.Chain, cidrs []string, addressSize uint32, verdict expr.VerdictKind) error {
+func addCIDRVerdictsV1(connection *applicationNetworkRuleBuilderV1, table *nftables.Table, chain *nftables.Chain, cidrs []string, addressSize uint32, verdict expr.VerdictKind) error {
 	for _, cidr := range cidrs {
 		if err := addCIDRVerdictV1(connection, table, chain, cidr, addressSize, verdict); err != nil {
 			return err
@@ -521,7 +542,7 @@ func addCIDRVerdictsV1(connection *nftables.Conn, table *nftables.Table, chain *
 	return nil
 }
 
-func addSessionPeerInputVerdictsV1(connection *nftables.Conn, table *nftables.Table, chain *nftables.Chain, peerCIDRs []string, localCIDRs []string, addressSize uint32) error {
+func addSessionPeerInputVerdictsV1(connection *applicationNetworkRuleBuilderV1, table *nftables.Table, chain *nftables.Chain, peerCIDRs []string, localCIDRs []string, addressSize uint32) error {
 	for _, peerCIDR := range peerCIDRs {
 		for _, localCIDR := range localCIDRs {
 			expressions, err := sessionPeerInputVerdictExpressionsV1(peerCIDR, localCIDR, addressSize)
@@ -548,7 +569,7 @@ func sessionPeerInputVerdictExpressionsV1(peerCIDR string, localCIDR string, add
 	return append(append(peer, local...), &expr.Verdict{Kind: expr.VerdictAccept}), nil
 }
 
-func addRelatedICMPErrorVerdictsV1(connection *nftables.Conn, table *nftables.Table, chain *nftables.Chain, family nftables.TableFamily) {
+func addRelatedICMPErrorVerdictsV1(connection *applicationNetworkRuleBuilderV1, table *nftables.Table, chain *nftables.Chain, family nftables.TableFamily) {
 	protocol := byte(unix.IPPROTO_ICMP)
 	types := applicationRelatedICMPv4TypesV1
 	if family == nftables.TableFamilyIPv6 {
@@ -571,7 +592,7 @@ func addRelatedICMPErrorVerdictsV1(connection *nftables.Conn, table *nftables.Ta
 	}
 }
 
-func addInterfaceVerdictV1(connection *nftables.Conn, table *nftables.Table, chain *nftables.Chain, key expr.MetaKey, name string, verdict expr.VerdictKind) {
+func addInterfaceVerdictV1(connection *applicationNetworkRuleBuilderV1, table *nftables.Table, chain *nftables.Chain, key expr.MetaKey, name string, verdict expr.VerdictKind) {
 	data := make([]byte, 16)
 	copy(data, name+"\x00")
 	connection.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: []expr.Any{
@@ -581,7 +602,7 @@ func addInterfaceVerdictV1(connection *nftables.Conn, table *nftables.Table, cha
 	}})
 }
 
-func addEstablishedVerdictV1(connection *nftables.Conn, table *nftables.Table, chain *nftables.Chain, verdict expr.VerdictKind) {
+func addEstablishedVerdictV1(connection *applicationNetworkRuleBuilderV1, table *nftables.Table, chain *nftables.Chain, verdict expr.VerdictKind) {
 	connection.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: []expr.Any{
 		&expr.Ct{Register: 1, Key: expr.CtKeySTATE},
 		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4,
@@ -592,7 +613,7 @@ func addEstablishedVerdictV1(connection *nftables.Conn, table *nftables.Table, c
 	}})
 }
 
-func addTCPPortVerdictV1(connection *nftables.Conn, table *nftables.Table, chain *nftables.Chain, port uint16, verdict expr.VerdictKind) {
+func addTCPPortVerdictV1(connection *applicationNetworkRuleBuilderV1, table *nftables.Table, chain *nftables.Chain, port uint16, verdict expr.VerdictKind) {
 	data := make([]byte, 2)
 	binary.BigEndian.PutUint16(data, port)
 	connection.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: []expr.Any{
@@ -604,7 +625,7 @@ func addTCPPortVerdictV1(connection *nftables.Conn, table *nftables.Table, chain
 	}})
 }
 
-func addIPv6NeighborDiscoveryRulesV1(connection *nftables.Conn, table *nftables.Table, chain *nftables.Chain) {
+func addIPv6NeighborDiscoveryRulesV1(connection *applicationNetworkRuleBuilderV1, table *nftables.Table, chain *nftables.Chain) {
 	for _, kind := range []byte{133, 134, 135, 136} {
 		connection.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: []expr.Any{
 			&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
@@ -616,11 +637,11 @@ func addIPv6NeighborDiscoveryRulesV1(connection *nftables.Conn, table *nftables.
 	}
 }
 
-func addCIDRVerdictV1(connection *nftables.Conn, table *nftables.Table, chain *nftables.Chain, cidr string, addressSize uint32, verdict expr.VerdictKind) error {
+func addCIDRVerdictV1(connection *applicationNetworkRuleBuilderV1, table *nftables.Table, chain *nftables.Chain, cidr string, addressSize uint32, verdict expr.VerdictKind) error {
 	return addAddressCIDRVerdictV1(connection, table, chain, cidr, addressSize, false, verdict)
 }
 
-func addAddressCIDRVerdictV1(connection *nftables.Conn, table *nftables.Table, chain *nftables.Chain, cidr string, addressSize uint32, source bool, verdict expr.VerdictKind) error {
+func addAddressCIDRVerdictV1(connection *applicationNetworkRuleBuilderV1, table *nftables.Table, chain *nftables.Chain, cidr string, addressSize uint32, source bool, verdict expr.VerdictKind) error {
 	expressions, err := addressCIDRVerdictExpressionsV1(cidr, addressSize, source, verdict)
 	if err != nil || expressions == nil {
 		return err

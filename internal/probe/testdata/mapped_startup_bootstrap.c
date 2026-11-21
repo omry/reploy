@@ -58,7 +58,7 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[3], "deny-setgid")) denied = SYS_setresgid;
     if (!strcmp(argv[3], "deny-groups")) denied = SYS_setgroups;
     if (!strcmp(argv[3], "deny-capset")) denied = SYS_capset;
-    if (!strcmp(argv[3], "deny-prctl")) denied = SYS_prctl;
+    /* Target the final mutation separately from the startup NNP observer. */
     /* Mode2 is a fixture precondition, not qualification of production policy.
      * The mapped effective default-deny policy remains an E2.3 responsibility. */
     if (strcmp(argv[3], "no-filter")) {
@@ -77,8 +77,11 @@ int main(int argc, char **argv) {
             BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
         };
         struct sock_fprog program = {4, filter};
-        if (!strcmp(argv[3], "deny-get-securebits")) {
+        if (!strcmp(argv[3], "deny-get-securebits") ||
+            !strcmp(argv[3], "deny-prctl") || !strcmp(argv[3], "deny-get-nnp")) {
             program.len = 6;
+            getter[3].k = !strcmp(argv[3], "deny-prctl") ? PR_CAPBSET_DROP :
+                !strcmp(argv[3], "deny-get-nnp") ? PR_GET_NO_NEW_PRIVS : PR_GET_SECUREBITS;
             program.filter = getter;
         }
         if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program)) die("fixture seccomp");
