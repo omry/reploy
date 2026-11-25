@@ -13,12 +13,14 @@ import (
 type VerifyCurrentBuildInputV1 struct {
 	DeploymentDir string
 	Runtime       StagedProviderBuildRuntimeV1
+	ReportJSON    bool
 }
 
 type VerifyCurrentBuildResultV1 struct {
 	Environment string
 	Reference   string
 	Details     CurrentBuildVerificationResultV1
+	JSON        []byte
 }
 
 type verifyCurrentBuildBackendV1 struct {
@@ -27,6 +29,7 @@ type verifyCurrentBuildBackendV1 struct {
 	readState   func(*deploy.OperationLock) (deploy.StateV1, bool, error)
 	loadCurrent currentBuildLoader
 	plan        func(CurrentRuntimePlanInputV1) (CurrentRuntimePlanV1, error)
+	unlock      func(*deploy.OperationLock) error
 	verify      func(context.Context, CurrentBuildVerificationInputV1) (CurrentBuildVerificationResultV1, error)
 }
 
@@ -38,6 +41,7 @@ func VerifyCurrentBuildV1(
 ) (VerifyCurrentBuildResultV1, error) {
 	return verifyCurrentBuildV1(ctx, input, verifyCurrentBuildBackendV1{
 		acquire:     deploy.AcquireExistingOperationLock,
+		unlock:      (*deploy.OperationLock).Unlock,
 		newStore:    providerstore.NewStore,
 		readState:   func(operation *deploy.OperationLock) (deploy.StateV1, bool, error) { return operation.ReadStateV1() },
 		loadCurrent: ValidateCurrentBuild,
@@ -76,8 +80,13 @@ func verifyCurrentBuildV1(
 	if err != nil {
 		return VerifyCurrentBuildResultV1{}, err
 	}
+	unlock := backend.unlock
+	if unlock == nil {
+		unlock = (*deploy.OperationLock).Unlock
+	}
 	defer func() {
-		if unlockErr := operation.Unlock(); err == nil && unlockErr != nil {
+		if unlockErr := unlock(operation); err == nil && unlockErr != nil {
+			result = VerifyCurrentBuildResultV1{}
 			err = unlockErr
 		}
 	}()
@@ -132,12 +141,20 @@ func verifyCurrentBuildV1(
 		return VerifyCurrentBuildResultV1{}, fmt.Errorf("plan current build verification: %w", err)
 	}
 	details, err := backend.verify(ctx, CurrentBuildVerificationInputV1{
-		Store: store, Current: current, Runtime: runtime, Operation: operation, DeploymentDir: dir,
+		Store: store, Current: current, Runtime: runtime, Operation: operation, DeploymentDir: dir, ReportJSON: input.ReportJSON,
 	})
 	if err != nil {
 		return VerifyCurrentBuildResultV1{}, err
 	}
+	var encoded []byte
+	if input.ReportJSON {
+		encoded, err = encodeVerifiedBuildReport(details.Report)
+		if err != nil {
+			return VerifyCurrentBuildResultV1{}, err
+		}
+	}
 	return VerifyCurrentBuildResultV1{
+		JSON:        encoded,
 		Environment: document.Environment.ID,
 		Reference:   current.Generation.Reference,
 		Details:     details,

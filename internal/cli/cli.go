@@ -1596,7 +1596,7 @@ func runDockerDoctor(args []string, stdout io.Writer, stderr io.Writer, globalOp
 }
 
 func runDockerVerify(args []string, stdout io.Writer, stderr io.Writer) int {
-	options, err := parseDockerCommandOptions(args, false)
+	options, reportJSON, err := parseDockerVerifyOptions(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "reploy verify usage error: %v\n", err)
 		fmt.Fprintln(stderr, "Usage: reploy verify [OPTIONS]")
@@ -1619,6 +1619,7 @@ func runDockerVerify(args []string, stdout io.Writer, stderr io.Writer) int {
 	result, err := dockerVerifyCurrentBuild(context.Background(), dockerdeploy.VerifyCurrentBuildInputV1{
 		DeploymentDir: options.Dir,
 		Runtime:       runtime,
+		ReportJSON:    reportJSON,
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -1637,6 +1638,21 @@ func runDockerVerify(args []string, stdout io.Writer, stderr io.Writer) int {
 			)
 		}
 		return 1
+	}
+	if reportJSON {
+		if len(result.JSON) == 0 {
+			fmt.Fprintln(stderr, "reploy verify error: verified-build JSON report is missing")
+			return 1
+		}
+		n, err := stdout.Write(result.JSON)
+		if err == nil && n != len(result.JSON) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "reploy verify error: write JSON report: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 	fmt.Fprintf(stdout, "verified current build: %s\n", result.Environment)
 	fmt.Fprintf(stdout, "image: %s\n", result.Reference)
@@ -3520,8 +3536,14 @@ update deployment state, or execute application commands. Temporary verification
 containers and workspaces are removed on every exit.
 
 Options:
-  --dir DIR    Staging directory, default current staging dir or reploy-staging
-  -h, --help   Show verification help
+  --dir DIR      Staging directory, default current staging dir or reploy-staging
+  --format json  Emit a versioned audit snapshot as JSON (maximum 1 MiB)
+  -h, --help     Show verification help
+
+JSON is published only after the complete audit and successful cleanup/unlock.
+The snapshot describes verified build facts and planned sandbox policy, not live
+kernel enforcement or an atomic guarantee for a later launch. Consumers must
+require exit 0 and a complete JSON object. Default output remains text.
 `, "\n"))
 }
 

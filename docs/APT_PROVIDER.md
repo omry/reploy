@@ -2212,6 +2212,10 @@ build or repair images, publish records, update deployment state, or execute
 application commands. Its temporary containers and workspaces are removed on
 every exit.
 
+`reploy verify --format json` emits a versioned snapshot of the same full audit.
+The default remains text. See [Verified-build JSON](VERIFY_JSON.md) for the
+version-1 contract, ownership rules, output bound and snapshot limitations.
+
 `reploy build --verify` applies the same audit only after the build pipeline has
 identified an otherwise reusable current or validated image. A successful
 verification permits ordinary reuse. A failed verification prevents reuse and

@@ -2,6 +2,8 @@ package deploy
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -485,5 +487,57 @@ func TestOperationLockRemovesOnlyOwnedProviderStoreAndRetainsLock(t *testing.T) 
 	}
 	if err := operation.RequireHeld(); err != nil {
 		t.Fatalf("provider store removal released operation lock: %v", err)
+	}
+}
+
+func TestBuildLockClosureCollectorRetainsValidatedPortableOwnership(t *testing.T) {
+	_, store, lock, _, _ := buildReachabilityFixture(t)
+	descriptor, err := store.Publish(t.Context(), "portable/shared.tar", "jdk-archive", strings.NewReader("portable"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.PortableTools = portableToolReachabilityLockV1(t, &lock, descriptor)
+	var artifacts []BuildLockClosureArtifact
+	_, err = BuildLockStoreClosureWithArtifacts(lock, store, acceptBuildLockProfile, acceptBuildLockBundle, func(a BuildLockClosureArtifact) error { artifacts = append(artifacts, a); return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	acquisition := lock.PortableTools.Acquisitions[0]
+	if len(artifacts) != 2 || artifacts[0].NodeID != "apt" || artifacts[0].Artifact.ID != "" || artifacts[1].Artifact != acquisition.Artifact || artifacts[1].Scope != acquisition.Scope || artifacts[1].Tool != acquisition.Tool || artifacts[1].Descriptor != descriptor {
+		t.Fatalf("ownership lost: %+v", artifacts)
+	}
+	sentinel := fmt.Errorf("collector overflow")
+	refs, err := BuildLockStoreClosureWithArtifacts(lock, store, acceptBuildLockProfile, acceptBuildLockBundle, func(BuildLockClosureArtifact) error { return sentinel })
+	if !errors.Is(err, sentinel) || refs != nil {
+		t.Fatalf("collector failure swallowed: %v %v", refs, err)
+	}
+}
+
+func TestBuildLockClosureCollectorRejectsCorruptionDespiteReusableStamp(t *testing.T) {
+	_, store, lock, ref, _ := buildReachabilityFixture(t)
+	path, err := store.BlobPath(ref.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("xxxx"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReusableBuildLockStoreClosure(lock, store, acceptBuildLockProfile, acceptBuildLockBundle); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	refs, err := BuildLockStoreClosureWithArtifacts(lock, store, acceptBuildLockProfile, acceptBuildLockBundle, func(BuildLockClosureArtifact) error { called = true; return nil })
+	if err == nil || called || refs != nil {
+		t.Fatalf("unverified descriptor reported: called=%t refs=%v err=%v", called, refs, err)
 	}
 }
