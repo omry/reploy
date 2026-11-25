@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -43,6 +44,11 @@ func installLocalAccountFiles(name string, uid string, gid string, home string, 
 	}
 	if err := writeLocalAccountFile(groupPath, group); err != nil {
 		return fmt.Errorf("write group entry: %w", err)
+	}
+	for _, directory := range []string{filepath.Dir(passwdPath), filepath.Dir(groupPath)} {
+		if err := os.Chtimes(directory, time.Unix(0, 0), time.Unix(0, 0)); err != nil {
+			return fmt.Errorf("set local account directory timestamps: %w", err)
+		}
 	}
 	return nil
 }
@@ -139,6 +145,9 @@ func writeLocalAccountFile(path string, content []byte) error {
 		return err
 	}
 	if _, err := temporary.Write(content); err != nil {
+		return err
+	}
+	if err := os.Chtimes(temporaryPath, time.Unix(0, 0), time.Unix(0, 0)); err != nil {
 		return err
 	}
 	if err := temporary.Sync(); err != nil {

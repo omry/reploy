@@ -72,7 +72,7 @@ func ApplicationRuntimeLayerDockerfile(request ApplicationRuntimeLayerBuildReque
 		}
 	}
 	installAccount, err := json.Marshal([]string{
-		request.Verifier.Path, "install-local-account",
+		"/reploy-build-probe", "install-local-account",
 		request.Account.Name, request.Account.UID, request.Account.GID, request.Account.Home,
 	})
 	if err != nil {
@@ -81,20 +81,11 @@ func ApplicationRuntimeLayerDockerfile(request ApplicationRuntimeLayerBuildReque
 	var output bytes.Buffer
 	fmt.Fprintf(&output, "# syntax=%s\n", MaterializationDockerfileSyntax)
 	output.WriteString("ARG REPLOY_BASE_IMAGE=scratch\n")
-	output.WriteString("FROM ${REPLOY_BASE_IMAGE} AS reploy-runtime-account\n")
-	output.WriteString("USER 0:0\n")
-	fmt.Fprintf(
-		&output,
-		"RUN --mount=type=bind,source=%s,target=/reploy-build-probe,readonly [\"/reploy-build-probe\", \"install-runtime-verifier\", %s]\n",
-		probearchive.ExtractedFileName,
-		strconv.Quote(request.Verifier.Path),
-	)
-	fmt.Fprintf(&output, "RUN %s\n", installAccount)
 	output.WriteString("FROM ${REPLOY_BASE_IMAGE}\n")
 	if originalUser != "" {
 		output.WriteString("USER 0:0\n")
 	}
-	output.WriteString("COPY --from=reploy-runtime-account /etc/passwd /etc/group /etc/\n")
+	fmt.Fprintf(&output, "RUN --mount=type=bind,source=%s,target=/reploy-build-probe,readonly %s\n", probearchive.ExtractedFileName, installAccount)
 	fmt.Fprintf(
 		&output,
 		"RUN --mount=type=bind,source=%s,target=/reploy-build-probe,readonly [\"/reploy-build-probe\", \"install-runtime-verifier\", %s]\n",

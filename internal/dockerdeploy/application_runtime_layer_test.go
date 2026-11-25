@@ -51,18 +51,18 @@ func TestApplicationRuntimeLayerDockerfileAddsOnlyFixedVerifier(t *testing.T) {
 	dockerfile := string(content)
 	for _, want := range []string{
 		"# syntax=" + MaterializationDockerfileSyntax,
-		"FROM ${REPLOY_BASE_IMAGE} AS reploy-runtime-account",
-		"USER 0:0",
-		`RUN ["/reploy-probe","install-local-account","reploy","1000","1000","/mnt/reploy-home"]`,
+		`RUN --mount=type=bind,source=reploy-probe,target=/reploy-build-probe,readonly ["/reploy-build-probe","install-local-account","reploy","1000","1000","/mnt/reploy-home"]`,
 		"FROM ${REPLOY_BASE_IMAGE}",
 		`RUN --mount=type=bind,source=reploy-probe,target=/reploy-build-probe,readonly ["/reploy-build-probe", "install-runtime-verifier", "/reploy-probe"]`,
-		"COPY --from=reploy-runtime-account /etc/passwd /etc/group /etc/",
 	} {
 		if !strings.Contains(dockerfile, want) {
 			t.Fatalf("Dockerfile missing %q:\n%s", want, dockerfile)
 		}
 	}
-	for _, forbidden := range []string{"ADD ", "ENTRYPOINT ", "CMD "} {
+	if strings.Count(dockerfile, "\nRUN ") != 2 || strings.Count(dockerfile, "\nFROM ") != 1 {
+		t.Fatalf("expected one final stage and two filesystem RUNs:\n%s", dockerfile)
+	}
+	for _, forbidden := range []string{"ADD ", "COPY ", "ENTRYPOINT ", "CMD ", "SOURCE_DATE_EPOCH", "AS reploy-runtime-account"} {
 		if strings.Contains(dockerfile, forbidden) {
 			t.Fatalf("Dockerfile contains %q:\n%s", forbidden, dockerfile)
 		}
@@ -82,7 +82,7 @@ func TestApplicationRuntimeLayerDockerfilePreservesRootPrimaryGID(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `RUN ["/reploy-probe","install-local-account","root","0","1000","/mnt/reploy-home"]`; !strings.Contains(string(content), want) {
+	if want := `RUN --mount=type=bind,source=reploy-probe,target=/reploy-build-probe,readonly ["/reploy-build-probe","install-local-account","root","0","1000","/mnt/reploy-home"]`; !strings.Contains(string(content), want) {
 		t.Fatalf("Dockerfile missing %q:\n%s", want, content)
 	}
 }
@@ -95,12 +95,12 @@ func TestApplicationRuntimeLayerDockerfileRestoresInheritedUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	dockerfile := string(content)
-	if !strings.Contains(dockerfile, "USER 0:0\nCOPY --from=reploy-runtime-account") || !strings.HasSuffix(dockerfile, "USER \"12345:23456\"\n") {
+	if !strings.Contains(dockerfile, "USER 0:0\nRUN --mount=") || !strings.HasSuffix(dockerfile, "USER \"12345:23456\"\n") {
 		t.Fatalf("Dockerfile does not switch to root and restore the inherited user:\n%s", dockerfile)
 	}
 }
 
-func TestValidateInspectedApplicationRuntimeLayerCandidatePreservesConfigAndAddsOneLayer(t *testing.T) {
+func TestValidateInspectedApplicationRuntimeLayerCandidatePreservesConfigAndAddsTwoLayers(t *testing.T) {
 	request := applicationRuntimeLayerTestRequest(t)
 	candidate := applicationRuntimeLayerTestCandidate(t, request)
 	if err := ValidateInspectedApplicationRuntimeLayerCandidate(request, candidate); err != nil {
