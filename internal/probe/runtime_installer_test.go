@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func TestInstallRuntimeVerifierReplacesInheritedSymlink(t *testing.T) {
@@ -46,7 +47,20 @@ func TestInstallRuntimeVerifierReplacesInheritedSymlink(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		expectedMode = 0o444
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm() != expectedMode || string(installed) != string(content) || string(attacker) != "attacker" {
+	if !info.ModTime().Equal(time.Unix(0, 0)) || !info.Mode().IsRegular() || info.Mode().Perm() != expectedMode || string(installed) != string(content) || string(attacker) != "attacker" {
 		t.Fatalf("installed mode=%v content=%q attacker=%q", info.Mode(), installed, attacker)
+	}
+}
+
+func TestInstallRuntimeVerifierCleansFailedCopy(t *testing.T) {
+	root := t.TempDir()
+	destination := filepath.Join(root, "reploy-probe")
+	if err := installRuntimeVerifier(root, destination); err == nil {
+		t.Fatal("expected directory source copy to fail")
+	}
+	for _, path := range []string{destination, destination + ".tmp"} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("failed install retained %s: %v", path, err)
+		}
 	}
 }

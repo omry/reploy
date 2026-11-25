@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestInstallLocalAccountFilesPrependsResolvableAccountAndPreservesAliases(t *testing.T) {
@@ -148,5 +149,70 @@ func TestInstallLocalAccountFilesRejectsPrivilegedGroupMismatch(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "must not use GID 0") {
 			t.Fatalf("account %#v error = %v", account, err)
 		}
+	}
+}
+
+func TestInstallLocalAccountFilesUsesStableGeneratedTimestamps(t *testing.T) {
+	for _, timestamp := range []time.Time{time.Unix(123, 0), time.Unix(456, 0)} {
+		root := t.TempDir()
+		passwd, group := filepath.Join(root, "passwd"), filepath.Join(root, "group")
+		other := filepath.Join(root, "unrelated")
+		if err := os.WriteFile(other, []byte("preserved"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(other, timestamp, timestamp); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(root, timestamp, timestamp); err != nil {
+			t.Fatal(err)
+		}
+		before, err := os.Stat(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := installLocalAccountFiles("reploy", "12345", "12345", "/mnt/reploy-home", passwd, group); err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range []string{passwd, group, root} {
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !info.ModTime().Equal(time.Unix(0, 0)) {
+				t.Fatalf("%s mtime = %v", path, info.ModTime())
+			}
+		}
+		after, err := os.Stat(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.Mode() != before.Mode() {
+			t.Fatalf("directory mode changed: %v to %v", before.Mode(), after.Mode())
+		}
+		info, err := os.Stat(other)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.ModTime().Equal(timestamp) || info.Mode().Perm() != 0o600 {
+			t.Fatalf("unrelated file changed: %v", info)
+		}
+	}
+}
+
+func TestWriteLocalAccountFileCleansTemporaryOnCommitFailure(t *testing.T) {
+	root := t.TempDir()
+	destination := filepath.Join(root, "passwd")
+	if err := os.Mkdir(destination, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeLocalAccountFile(destination, []byte("account")); err == nil {
+		t.Fatal("expected replacement of directory to fail")
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "passwd" || !entries[0].IsDir() {
+		t.Fatalf("unexpected remaining entries: %v", entries)
 	}
 }

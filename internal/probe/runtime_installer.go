@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 func installApplicationRuntimeVerifier(destinationPath string) error {
@@ -63,6 +64,9 @@ func installRuntimeVerifier(sourcePath string, destinationPath string) (resultEr
 	}
 	if err := temporary.Chmod(0o555); err != nil {
 		return fmt.Errorf("protect runtime verifier: %w", err)
+	}
+	if err := os.Chtimes(temporaryPath, time.Unix(0, 0), time.Unix(0, 0)); err != nil {
+		return fmt.Errorf("set runtime verifier timestamps: %w", err)
 	}
 	if err := temporary.Sync(); err != nil {
 		return fmt.Errorf("sync runtime verifier: %w", err)

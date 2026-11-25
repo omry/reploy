@@ -1,0 +1,2 @@
+kind: Fixed
+body: Use stable timestamps for generated runtime account files, their directory metadata, and the startup verifier. Image creation/history timestamps and provenance remain unchanged.
