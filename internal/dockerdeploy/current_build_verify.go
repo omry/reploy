@@ -22,12 +22,14 @@ type CurrentBuildVerificationInputV1 struct {
 	Current       CurrentBuild
 	Runtime       CurrentRuntimePlanV1
 	RunValidation FullImageValidationRunner
+	ReportJSON    bool
 }
 
 type CurrentBuildVerificationResultV1 struct {
 	StoreObjects int
 	Images       int
 	Commands     int
+	Report       *VerifiedBuildReportV1
 }
 
 type CurrentBuildImageMissingErrorV1 struct {
@@ -55,7 +57,8 @@ type currentBuildVerificationBackendV1 struct {
 		providers.RequirementProfileOwnerValidator,
 		providers.ResolvedBundleOwnerValidator,
 	) ([]providerstore.StoreObjectRef, error)
-	inspectImage providerGraphImageInspector
+	verifyClosureWithArtifacts func(deploy.BuildLockV1, providerstore.Store, providers.RequirementProfileOwnerValidator, providers.ResolvedBundleOwnerValidator, func(deploy.BuildLockClosureArtifact) error) ([]providerstore.StoreObjectRef, error)
+	inspectImage               providerGraphImageInspector
 }
 
 // VerifyLoadedCurrentBuildV1 audits an already loaded current generation. It
@@ -71,8 +74,9 @@ func VerifyLoadedCurrentBuildV1(
 		input.RunValidation = runner.Run
 	}
 	return verifyLoadedCurrentBuildV1(ctx, input, currentBuildVerificationBackendV1{
-		verifyClosure: deploy.BuildLockStoreClosure,
-		inspectImage:  InspectBuiltImageCandidate,
+		verifyClosure:              deploy.BuildLockStoreClosure,
+		verifyClosureWithArtifacts: deploy.BuildLockStoreClosureWithArtifacts,
+		inspectImage:               InspectBuiltImageCandidate,
 	})
 }
 
@@ -124,7 +128,18 @@ func verifyLoadedCurrentBuildV1(
 		}
 	}
 
-	closure, err := backend.verifyClosure(
+	var collector *verifiedBuildReportCollector
+	verifyClosure := backend.verifyClosure
+	if input.ReportJSON {
+		if backend.verifyClosureWithArtifacts == nil {
+			return CurrentBuildVerificationResultV1{}, fmt.Errorf("JSON verification requires artifact collection")
+		}
+		collector = newVerifiedBuildReportCollector()
+		verifyClosure = func(lock deploy.BuildLockV1, store providerstore.Store, profile providers.RequirementProfileOwnerValidator, bundle providers.ResolvedBundleOwnerValidator) ([]providerstore.StoreObjectRef, error) {
+			return backend.verifyClosureWithArtifacts(lock, store, profile, bundle, collector.collect)
+		}
+	}
+	closure, err := verifyClosure(
 		input.Current.Lock,
 		input.Store,
 		registry.ValidateRequirementProfileV1,
@@ -163,11 +178,18 @@ func verifyLoadedCurrentBuildV1(
 			return CurrentBuildVerificationResultV1{}, fmt.Errorf("recheck portable build ownership: %w", err)
 		}
 	}
-	return CurrentBuildVerificationResultV1{
+	result := CurrentBuildVerificationResultV1{
 		StoreObjects: len(closure),
 		Images:       images,
 		Commands:     len(document.Environment.Commands),
-	}, nil
+	}
+	if collector != nil {
+		result.Report, err = collector.finish(input.Current, input.Runtime, final, storedValidation, result)
+		if err != nil {
+			return CurrentBuildVerificationResultV1{}, err
+		}
+	}
+	return result, nil
 }
 
 func verifyLockedRuntimeV1(lock deploy.BuildLockV1, runtime CurrentRuntimePlanV1) error {

@@ -1,0 +1,2 @@
+kind: Added
+body: Add `reploy verify --format json` for a bounded, versioned snapshot of fully verified build inputs, images, owned artifacts and planned runtime policy while preserving default text output.

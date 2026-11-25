@@ -12,15 +12,20 @@ import (
 	"github.com/omry/reploy/internal/providerstore"
 )
 
-type buildLockClosureArtifact struct {
+// BuildLockClosureArtifact is an owned descriptor from the validated closure.
+// Portable acquisition identity is retained without source records or locators.
+type BuildLockClosureArtifact struct {
 	NodeID     providers.NodeID
 	Descriptor providerstore.ArtifactDescriptor
+	Scope      string
+	Tool       string
+	Artifact   providers.PortableToolRecordReferenceV1
 }
 
 type buildLockStoreClosurePlan struct {
 	References       []providerstore.StoreObjectRef
 	Artifacts        map[providerstore.StoreObjectRef]providerstore.ArtifactDescriptor
-	OrderedArtifacts []buildLockClosureArtifact
+	OrderedArtifacts []BuildLockClosureArtifact
 	Manifests        map[providerstore.StoreObjectRef][]byte
 	Validation       []byte
 }
@@ -31,6 +36,19 @@ func BuildLockStoreClosure(
 	validateProfileOwner providers.RequirementProfileOwnerValidator,
 	validateBundleOwner providers.ResolvedBundleOwnerValidator,
 ) ([]providerstore.StoreObjectRef, error) {
+	return BuildLockStoreClosureWithArtifacts(lock, store, validateProfileOwner, validateBundleOwner, nil)
+}
+
+// BuildLockStoreClosureWithArtifacts performs the same full body audit and
+// optionally observes each owned descriptor after its body passes verification.
+// A collector error fails the audit; no partial inventory is a successful result.
+func BuildLockStoreClosureWithArtifacts(
+	lock BuildLockV1,
+	store providerstore.Store,
+	validateProfileOwner providers.RequirementProfileOwnerValidator,
+	validateBundleOwner providers.ResolvedBundleOwnerValidator,
+	collect func(BuildLockClosureArtifact) error,
+) ([]providerstore.StoreObjectRef, error) {
 	plan, err := loadBuildLockStoreClosure(lock, store, validateProfileOwner, validateBundleOwner)
 	if err != nil {
 		return nil, err
@@ -38,6 +56,11 @@ func BuildLockStoreClosure(
 	for _, artifact := range plan.OrderedArtifacts {
 		if err := store.VerifyArtifact(artifact.Descriptor); err != nil {
 			return nil, fmt.Errorf("verify build lock node %q artifact %q: %w", artifact.NodeID, artifact.Descriptor.LogicalPath, err)
+		}
+		if collect != nil {
+			if err := collect(artifact); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return plan.References, nil
@@ -161,7 +184,7 @@ func loadBuildLockStoreClosure(
 
 	objects := map[string]providerstore.StoreObjectRef{}
 	artifacts := map[providerstore.StoreObjectRef]providerstore.ArtifactDescriptor{}
-	orderedArtifacts := []buildLockClosureArtifact{}
+	orderedArtifacts := []BuildLockClosureArtifact{}
 	manifests := map[providerstore.StoreObjectRef][]byte{}
 	addStoreClosureReference(objects, lock.ValidationRecord)
 	for _, node := range lock.Nodes {
@@ -204,7 +227,7 @@ func loadBuildLockStoreClosure(
 			if _, found := artifacts[reference]; !found {
 				artifacts[reference] = artifact
 			}
-			orderedArtifacts = append(orderedArtifacts, buildLockClosureArtifact{NodeID: node.NodeID, Descriptor: artifact})
+			orderedArtifacts = append(orderedArtifacts, BuildLockClosureArtifact{NodeID: node.NodeID, Descriptor: artifact})
 		}
 	}
 	if lock.PortableTools != nil {
@@ -220,9 +243,10 @@ func loadBuildLockStoreClosure(
 			if _, found := artifacts[reference]; !found {
 				artifacts[reference] = acquisition.Descriptor
 			}
-			orderedArtifacts = append(orderedArtifacts, buildLockClosureArtifact{
+			orderedArtifacts = append(orderedArtifacts, BuildLockClosureArtifact{
 				NodeID:     providers.NodeID("portable-tool:" + acquisition.Scope + "/" + acquisition.Tool),
 				Descriptor: acquisition.Descriptor,
+				Scope:      acquisition.Scope, Tool: acquisition.Tool, Artifact: acquisition.Artifact,
 			})
 		}
 	}
