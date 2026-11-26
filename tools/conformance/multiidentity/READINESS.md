@@ -69,9 +69,8 @@ supervisor-thread repair below has fresh mechanism and operation-audit evidence.
 
 The private mechanism checkpoint below passed. The merged hotfixes address
 the reported generated-build, healthcheck and application-sandbox gaps, as
-described below. Flux reports that Podman looks OK and is continuing its
-evaluation. That is preliminary operator feedback, not final qualification
-or multi-identity acceptance.
+described below. Preliminary operator feedback reports that Podman looks OK;
+evaluation continues. This is not final qualification or multi-identity acceptance.
 
 On 2026-10-19, the maintainer accepted separating general composition from
 multi-identity. The active design adds operator-supplied mapping input and durable
@@ -253,7 +252,7 @@ The following fixes are merged into the stack's stated main baseline:
 | HF3 [#241](https://github.com/omry/reploy/pull/241), HF4 [#242](https://github.com/omry/reploy/pull/242) | Image cleanup accepts repeated identical IDs while rejecting distinct or incorrect IDs; covers temporary references, environment publication and legacy-generation cleanup. | Unexplained conmon monitors remain a separate investigation; image-ID fixes do not establish their cause. |
 | HF5 [#243](https://github.com/omry/reploy/pull/243) | Selects BuildKit for Docker and the compatible build API for identified local Linux Podman. Checks local-image access, offline RUN, read-only mounts and result loading. No user-set `DOCKER_BUILDKIT` is required. | C2 must reuse and assess this implementation against its requirements. The old shared-builder local-image failure is no longer an unimplemented fix. |
 | HF6 [#244](https://github.com/omry/reploy/pull/244) | Recovers omitted healthcheck metadata from an image export through the selected endpoint and verifies the config against the immutable image ID. Missing metadata is never interpreted as disabled. | The full archive has server-side disk and client-side time costs; see the [product notes](../../../README.md). |
-| HF7 [#245](https://github.com/omry/reploy/pull/245) | Prepares new Podman containers before startup through the selected engine's native update API, preventing disabled healthchecks from creating timers. Includes Compose replacements. | Final Flux lifecycle evaluation is pending. This does not diagnose every reported conmon monitor. |
+| HF7 [#245](https://github.com/omry/reploy/pull/245) | Prepares new Podman containers before startup through the selected engine's native update API, preventing disabled healthchecks from creating timers. Includes Compose replacements. | Final operator lifecycle evaluation is pending. This does not diagnose every reported conmon monitor. |
 | HF8 [#246](https://github.com/omry/reploy/pull/246) | Supplies pinned Docker seccomp data on eligible Podman engines and prepares private home tmpfs ownership in the trusted helper. All setup capabilities are dropped before application execution. | Requires upstream inline-profile support and rebuilt runtime images; details below. |
 | HF9 [#247](https://github.com/omry/reploy/pull/247) | Preserves effective base overrides through build finalization and validation. | Reuse the merged implementation; mapped-workload integration remains to be qualified. |
 | HF10 [#248](https://github.com/omry/reploy/pull/248) | Binds Podman base pulls to returned image IDs and authoritative image metadata. | This establishes ordinary image-reference handling, not multi-identity admission. |
@@ -274,7 +273,7 @@ and changes only its root ownership before dropping setup authority.
 The [policy and workaround notes](../../../internal/dockerdeploy/seccomp/README.md)
 define engine scope and removal conditions. Docker behavior is unchanged.
 
-Flux's preliminary report does not identify a complete test matrix or final
+The preliminary operator report does not identify a complete test matrix or final
 acceptance receipt. Retain its final engine/build identities and results when
 available. The 2026-10-22 baseline update did not rerun the private mechanism trials.
 Fresh 2026-10-24 mechanism and audit evidence is recorded above for its exact

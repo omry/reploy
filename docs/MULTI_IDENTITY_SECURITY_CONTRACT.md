@@ -10,9 +10,8 @@ summary: Podman-gated security contract and acceptance ledger for future isolate
 
 This document defines the security properties Reploy must prove before it adds
 support for an untrusted Linux-container workload that uses multiple
-container-local identities. It normalizes
-`migration/reploy-user-namespace-handover.md` from the Flux mail-stack
-assessment at Flux commit `47470aad477e44ee0c222d917fd8ce05384aa1a1`.
+container-local identities. It covers stock mail workloads that require
+application-managed identity separation within explicitly bounded authority.
 
 The initial product boundary requires Podman for both planned mapping
 profiles. Docker Engine is not an eligible backend for this capability, even

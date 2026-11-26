@@ -1584,15 +1584,13 @@ approval evidence. Earlier heads and dated trial records below remain historical
   The [readiness disposition](../tools/conformance/multiidentity/READINESS.md)
   records each result and remaining limits. HF8 requires an engine with upstream
   #29726 and rebuilt runtime images; stock Podman 6.1.4 remains insufficient.
-  Flux reports that Podman looks OK and is continuing evaluation. Final
-  qualification, unexplained conmon monitors and multi-identity acceptance remain
+  Preliminary operator feedback reports that Podman looks OK; evaluation
+  continues. Final qualification, unexplained conmon monitors and multi-identity acceptance remain
   open. The stack now includes these fixes through its main baseline; the
   earlier private mechanism and operation audits have not been rerun by this
   rebase. These hotfixes do not establish multi-identity acceptance.
-- The original detailed campaign is the private, untracked
-  [`temp/flux-support-work-plan.md`](../temp/flux-support-work-plan.md).
-  Its old baseline, gap map and sprint status are historical planning context,
-  not a current completion ledger. The contract introduction also retains
+- Earlier campaign baselines, gap maps and sprint status are historical planning
+  context, not a current completion ledger. The contract introduction also retains
   historical one-off-probe wording. A wording correction alone cannot close a
   harness defect; the reviewed 1B baseline and current A1 source-bound trials supply that proof.
 
@@ -1937,7 +1935,7 @@ Acceptance checkpoints inside A1:
 5. Update curated evidence and the source-grounded plan with dispositions and
    bounded downstream estimates where supported; do not invent a total for
    unresolved alternatives. All runtime resources are disposable and uniquely
-   owned. Do not change production Flux, Arbiter checkout, host delegation or
+   owned. Do not change production services, unrelated checkouts, host delegation or
    unrelated containers/volumes to make a probe pass.
 
 A1 completion requires the mandatory fresh dual-profile mechanism checkpoint

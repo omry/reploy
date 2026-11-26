@@ -51,9 +51,9 @@ remains historical.
 
 ## Existing use case and the gap
 
-Flux's [identity handover](https://github.com/omry/flux.firefang.net/blob/6fe3ddeee2c7ed267fdcaf2dd20a2dececa5eff6/migration/reploy-user-namespace-handover.md)
-requires stock application identity separation, subordinate-only host mappings,
-stable ownership and narrow explicit interfaces. All image-provided application
+The mail workload requires stock application identity separation,
+subordinate-only host mappings, stable ownership and narrow explicit interfaces.
+All image-provided application
 code remains untrusted. Its masters need bounded workload authority, not a
 trusted Reploy preparation phase.
 
@@ -66,8 +66,6 @@ synthetic profiles, not production minima or complete per-thread observations.
 | Postfix | `postfix start-fg`; root `master`; observed children at image `postfix` UID/GID | `SETUID`, `SETGID`, `DAC_READ_SEARCH` |
 | Dovecot | `dovecot -F`; root master and root-role services; package service accounts; SQL-selected synthetic `vmail` | `CHOWN`, `SETUID`, `SETGID`, `SYS_CHROOT` |
 
-See the [Postfix assessment](https://github.com/omry/flux.firefang.net/blob/6fe3ddeee2c7ed267fdcaf2dd20a2dececa5eff6/migration/postfix-reploy-assessment.md)
-and [Dovecot assessment](https://github.com/omry/flux.firefang.net/blob/6fe3ddeee2c7ed267fdcaf2dd20a2dececa5eff6/migration/dovecot-reploy-assessment.md).
 The checked-in scripts test a root master and child identity classes. They do not
 retain a full PPID/thread/capability inventory of every descendant. A complete
 stock-binary process inventory remains mail qualification work.
@@ -92,7 +90,7 @@ shared-interface mechanism across disjoint rootless mappings.
 2. Designate stock masters as trusted supervisors. An immutable image identifies
    bytes; it does not establish trust. This would require separate audits and
    adaptation of master/helper credentials, capabilities, sessions, descriptors
-   and restart behavior. It also changes Flux's treatment of application code.
+   and restart behavior. It also changes the selected treatment of application code.
 3. Add mediation, nested namespaces or a broker around those masters. No such
    implementation is selected or proved. It adds another authority and lifecycle.
    A process with `SETUID`/`SETGID` can select a supposedly protected supervisor ID
