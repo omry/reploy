@@ -42,8 +42,8 @@ This file is the day-to-day queue for design and implementation gaps.
       independent hotfix PR and complete its review/check gates before returning
       to milestone delivery. Delivery is active; the F/G design PR is approved.
 
-- [ ] `P2` Evaluate an operator-authorized host-session service profile for Flux
-      packaged SSH. Follow [the consumer requirements and evidence](consumers/flux-ssh.md).
+- [ ] `P2` Evaluate an operator-authorized host-session service profile for
+      distribution-packaged SSH. Follow [the consumer requirements and evidence](consumers/packaged-ssh.md).
       Agree the smallest disposable-host qualification scope before design;
       preserve ordinary defaults and the current multi-identity E priority.
       This is a separate capability proposal, not an approved hotfix or authority

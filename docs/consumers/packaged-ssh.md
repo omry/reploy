@@ -4,26 +4,17 @@ updated: 2026-10-30
 summary: Operator-authorized packaged SSH for direct host sessions; separate from the rootless multi-identity campaign.
 ---
 
-# Flux SSH
+# Packaged SSH host sessions
 
 ## Outcome and source
 
-Flux requests an official Debian 13 OpenSSH daemon managed through Reploy, with
+This use case calls for an official Debian 13 OpenSSH daemon managed through Reploy, with
 distribution-maintained daemon/authentication libraries and ordinary direct
-sessions in a Bullseye host filesystem. Programs entered in that host filesystem
+sessions in an older Debian host filesystem. Programs entered in that host filesystem
 still use its libraries. Host kernel/runtime and native emergency SSH maintenance
 remain separate obligations. Per-user environments are deferred.
 
-Source: the 2026-10-30 email titled **[Reploy hotfix] Service-specific host-session
-profile blocks packaged SSH qualification**, with `reploy-host-profile-gap.md`,
-`packaged-ssh.blueprint.yaml` and `controlled-host-gate-results.json`. The sender
-reports the current handover in [Flux commit b991828ce484](https://github.com/omry/flux.firefang.net/commit/b991828ce484)
-and raw-engine preflight in [Flux commit 95f01d2210c0](https://github.com/omry/flux.firefang.net/commit/95f01d2210c0).
-Those Flux revisions were not independently inspected during this evaluation.
-The attachments were read without saving their original bytes in this repository.
-
-The sender labels this P0 for its SSH qualification. That does not change the
-maintainer's current Reploy priority: multi-identity E. See [the backlog](../BACKLOG.md).
+The maintainer's current Reploy priority remains multi-identity E. See [the backlog](../BACKLOG.md).
 This record captures a consumer proposal and evaluation, not accepted product
 requirements, an approved API, implementation authorization or qualification.
 
@@ -38,28 +29,28 @@ requirements, an approved API, implementation authorization or qualification.
   Reject unauthorized drift and unavailable authority before effects.
 - Permit deliberately authorized host-session filesystem access and live account,
   key and host-key sources. Preserve atomic replacement, locking and revocation;
-  do not embed credentials in images or graft Bullseye PAM binaries into Debian 13.
+  do not embed credentials in images or graft older host PAM binaries into Debian 13.
 - Declare required devices, kernel/runtime trees and systemd/logind/journal
   endpoints individually. Keep stock OpenSSH privilege separation and pre-auth
   sandboxing. Host-root session authority is trusted host authority, without an
   additional containment claim.
-- Qualify actual Reploy lifecycle behavior on a disposable Bullseye guest with
+- Qualify actual Reploy lifecycle behavior on a disposable older Debian guest with
   synthetic accounts. Production changes require separate approval and verified
   administrative access independent of guest Podman/Reploy.
 
 ## Evidence and current gap
 
-The sender reports 44/44 passing **raw rootful Podman synthetic checks** with the
+Isolated evaluation reported 44/44 passing **raw rootful Podman synthetic checks** with the
 official Debian OpenSSH package. These do not establish a Reploy deployment,
 realistic host integration, ordinary sudo or rootless Podman support. The supplied
 VM qualification matrix is explicitly **NOT RUN**. No disposable VM was created.
 
-The supplied blueprint validates package acquisition and an `sshd -V` command;
+The evaluation blueprint validates package acquisition and an `sshd -V` command;
 it does not define a deployable host-session service. Illustrative capability,
 NNP, namespace and Compose override fields are rejected, not proposed public API.
 
 Reploy's evaluation independently checked that all five source files below still
-match the attachment's hashes from [merged E2.2](https://github.com/omry/reploy/commit/944d564fc3565cf91f3d72af4f4730fbd6155b3a):
+match the evaluated baseline from [merged E2.2](https://github.com/omry/reploy/commit/944d564fc3565cf91f3d72af4f4730fbd6155b3a):
 
 | Boundary | Current behavior |
 | --- | --- |
@@ -88,7 +79,7 @@ reinterpret its proofs or add this scope to its remaining slices.
 
 ## Proposed preliminary scope and questions
 
-Before design, ask Flux to distinguish the first required host session from the
+Before design, distinguish the first required host session from the
 eventual complete administrative shell:
 
 1. Can initial qualification cover packaged sshd, real PAM/account restrictions,
