@@ -591,7 +591,7 @@ func filterPythonSourcesForBuildEnvironment(
 		if err := pythonprovider.ValidateResolvedSourceInputV2(source); err != nil {
 			return nil, nil, err
 		}
-		if source.BuildEnvironmentDigest != buildEnvironmentDigest {
+		if !pythonprovider.SourceUsesCurrentBuilderV1(source) || source.BuildEnvironmentDigest != buildEnvironmentDigest {
 			droppedWheelDigests[source.OutputArtifactDigest] = struct{}{}
 			continue
 		}

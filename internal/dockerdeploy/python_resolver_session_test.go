@@ -350,7 +350,7 @@ func TestPythonResolverSessionBuildsSdistThenWheelWithSelectedInterpreterAndPinn
 	if !containsInOrder(bootstrapCommand, []string{
 		"/usr/bin/python3", "-m", "pip", "--disable-pip-version-check", "install",
 	}) || !containsInOrder(bootstrapCommand, []string{
-		"--find-links", artifacts.InputContainerDir, "--target", pythonSourceBuilderRoot, pythonprovider.SourceBuilderRequirementV1,
+		"--find-links", artifacts.InputContainerDir, "--target", pythonSourceBuilderRoot, "uv==0.13.4",
 	}) {
 		t.Fatalf("uv bootstrap command = %#v", bootstrapCommand)
 	}

@@ -1,0 +1,2 @@
+kind: Security
+body: Upgrade the internal Python source builder to uv 0.13.4 to update its bundled CA certificates following the eMudhra/emSign incident. Existing build locks remain readable, while source artifacts built with the previous uv pin are rebuilt.
