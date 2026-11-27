@@ -1,0 +1,238 @@
+{
+  "status": "bounded startup-input mechanism probes passed; production integration unqualified",
+  "engines": {
+    "docker": {
+      "engine": "docker",
+      "token": "reploy-startup-proof-05e14736ccaf",
+      "directory": "/home/omry/dev/reploy/temp/reviews/fg-restart-fence-20261101/reploy-startup-proof-05e14736ccaf-ah859b0w",
+      "limits": [
+        "trusted BusyBox/shell fixture; not the production Go startup transition",
+        "ordinary disposable containers, not complete private mapped qualification",
+        "host-side exact-container association and crash publication not implemented",
+        "no native platform or reboot qualification"
+      ],
+      "image": "sha256:b116e155074440ffd9e449559433feb4cd2341eb3554b1da1c638c976e56451d",
+      "status": "passed",
+      "cases": [
+        {
+          "case": "initial startup waits before host approval",
+          "passed": true
+        },
+        {
+          "case": "host publishes permission once then closes its writer",
+          "passed": true
+        },
+        {
+          "case": "same container retries with no new host grant; record unchanged",
+          "passed": true
+        },
+        {
+          "case": "old record does not match a different launch binding",
+          "passed": true,
+          "limit": "fresh nonce selection is the trusted host creator responsibility"
+        },
+        {
+          "case": "writable-mount control confirms file mode alone is insufficient",
+          "passed": true
+        }
+      ],
+      "cleanup": [
+        {
+          "container": "6a415b9b32d9b545fc6f3fa2a9bba8ee607f73d6997162e6d6ff8f637db22590",
+          "absent": true
+        },
+        {
+          "container": "454ad1c932209efb8ebdb845a76b83855d1bc3b54bc0f11d987bc427078c6be0",
+          "absent": true
+        },
+        {
+          "container": "44a8e107a9a22ef964c2f1f1ba72c978bf3336744d63be72a7d0421561fe3ffe",
+          "absent": true
+        }
+      ]
+    },
+    "podman": {
+      "engine": "podman",
+      "token": "reploy-startup-proof-3a9e0ee1a9a0",
+      "directory": "/home/omry/dev/reploy/temp/reviews/fg-restart-fence-20261101/reploy-startup-proof-3a9e0ee1a9a0-bphkho3h",
+      "limits": [
+        "trusted BusyBox/shell fixture; not the production Go startup transition",
+        "ordinary disposable containers, not complete private mapped qualification",
+        "host-side exact-container association and crash publication not implemented",
+        "no native platform or reboot qualification"
+      ],
+      "image": "sha256:b116e155074440ffd9e449559433feb4cd2341eb3554b1da1c638c976e56451d",
+      "status": "passed",
+      "cases": [
+        {
+          "case": "initial startup waits before host approval",
+          "passed": true
+        },
+        {
+          "case": "host publishes permission once then closes its writer",
+          "passed": true
+        },
+        {
+          "case": "same container retries with no new host grant; record unchanged",
+          "passed": true
+        },
+        {
+          "case": "old record does not match a different launch binding",
+          "passed": true,
+          "limit": "fresh nonce selection is the trusted host creator responsibility"
+        },
+        {
+          "case": "writable-mount control confirms file mode alone is insufficient",
+          "passed": true
+        }
+      ],
+      "cleanup": [
+        {
+          "container": "0dd4481ed5590a1fa3ea4bbeb35aee18abd4e534a7468fee5898e7dc157e79dd",
+          "absent": true
+        },
+        {
+          "container": "23080c66ab5a5f4142e22a6d9c633e9dee4e55de9d8537e4ff24c689f9daca31",
+          "absent": true
+        },
+        {
+          "container": "ccb54452feca6a8df5ee559b01726a505a3f5b991f7ae3101b2bdb8c330c7762",
+          "absent": true
+        }
+      ]
+    }
+  },
+  "filesystem_probe": {
+    "directory": "/home/omry/dev/reploy/temp/reviews/fg-restart-fence-20261101/mapped-file-q4ob5svf",
+    "limits": [
+      "no application code or real secret",
+      "filesystem feasibility only, not complete F preparation or sandbox qualification",
+      "private parent path protects the temporary handoff directory; no storage attachment/race proof"
+    ],
+    "status": "passed",
+    "creation": {
+      "phase": "create",
+      "created": true,
+      "recipient_uid": 200,
+      "mode": "0400"
+    },
+    "recipient": {
+      "phase": "recipient",
+      "read": true,
+      "digest": "e4392b67d66387f6fe2455f8f5a19ede2fc5d594c48702c5cf6b957994a05a1b"
+    },
+    "other_role": {
+      "phase": "other-role",
+      "read": false
+    },
+    "host_owner": [
+      100200,
+      100200
+    ],
+    "cleanup": {
+      "phase": "cleanup",
+      "cleaned": true
+    },
+    "mapper_operations": [
+      {
+        "tool": "newuidmap",
+        "phase": "create",
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "tool": "newgidmap",
+        "phase": "create",
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "tool": "newuidmap",
+        "phase": "recipient",
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "tool": "newgidmap",
+        "phase": "recipient",
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "tool": "newuidmap",
+        "phase": "other-role",
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "tool": "newgidmap",
+        "phase": "other-role",
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "tool": "newuidmap",
+        "phase": "cleanup",
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "tool": "newgidmap",
+        "phase": "cleanup",
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    ]
+  },
+  "raw_files": {
+    "temp/reviews/fg-restart-fence-20261101/docker-startup-probe-source.py": {
+      "sha256": "a14ff1c529ee753efe0ada1f45835f58b97e7f66dfd8540465c3e620d3a8b133",
+      "bytes": 6824
+    },
+    "temp/reviews/fg-restart-fence-20261101/startup_retry_probe.py": {
+      "sha256": "ea481ae69211b10b4014841a85bcd1146fa3b18333c432e65dc9cc1ab979bad5",
+      "bytes": 6850
+    },
+    "temp/reviews/fg-restart-fence-20261101/podman_startup_probe.py": {
+      "sha256": "62023a8bf8aa56d0c23aa1a3da98dcad65cae62af0522e68f38660d14b19cdb3",
+      "bytes": 2577
+    },
+    "temp/reviews/fg-restart-fence-20261101/mapped_file_probe.py": {
+      "sha256": "c85c6255fca4caf2fcb122cacea0528eca2323e4026ed8696f0e8ed2018e714d",
+      "bytes": 5691
+    },
+    "temp/reviews/fg-restart-fence-20261101/docker-startup-result.json": {
+      "sha256": "e2e919dc95b4907c63d832ad4856ad375a1c264057e39bbb9d62bf98a70bf83f",
+      "bytes": 1629
+    },
+    "temp/reviews/fg-restart-fence-20261101/podman-startup-result.json": {
+      "sha256": "cf472503687b1f5d442f0e0b2840c24f4fd2940b2d758084a052d79d103e76d5",
+      "bytes": 1629
+    },
+    "temp/reviews/fg-restart-fence-20261101/docker-startup-commands.json": {
+      "sha256": "f973a899f40b4801a2684c31168875418e37542b0cbca52ba5838e4fd1fce80d",
+      "bytes": 358544
+    },
+    "temp/reviews/fg-restart-fence-20261101/podman-startup-commands.json": {
+      "sha256": "15ec0c17d118488c17340e91c2829e6e97372133ebfd38e418be25954e223821",
+      "bytes": 403241
+    },
+    "temp/reviews/fg-restart-fence-20261101/podman-startup-orchestration.json": {
+      "sha256": "90ed324011cc707a60b3f673dc632d53452067b6aa08a10cd109a4513b232b08",
+      "bytes": 1815
+    },
+    "temp/reviews/fg-restart-fence-20261101/mapped-file-result.json": {
+      "sha256": "72d52f16f798906830e3ada2530ff93b3948e8327e4a1ff45b6a5990a9a8e5ce",
+      "bytes": 1863
+    }
+  },
+  "source_note": "Docker ran docker-startup-probe-source.py content; Podman ran startup_retry_probe.py with explicit json-file logging. Both are retained."
+}

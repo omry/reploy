@@ -1,0 +1,54 @@
+{
+  "scope": "private network namespace/setup feasibility on rootless Podman4.9.3; not product/eligible-engine or peer/endpoint qualification",
+  "attempt": "dcc925ca85104e73733be7d5",
+  "private_root": "/tmp/reploy-fg-network-6zr_3eh6",
+  "cases": [
+    {
+      "mode": "trusted-setup-inside-private-container",
+      "exit_code": 0,
+      "stdout": "=== RUN   TestFGPreReleaseNetwork\n    fg_network_design_test.go:56: FG_NETWORK_OBSERVATION {\"allowed_local\":true,\"application_release\":\"never performed\",\"baseline_positive\":true,\"denied_local\":true,\"namespace\":\"net:[4026532655]\",\"observed_kernel_tables\":2,\"uid_map\":\"         0          1          1\\n\"}\n--- PASS: TestFGPreReleaseNetwork (0.34s)\nPASS\n",
+      "stderr": ""
+    },
+    {
+      "mode": "bounded-host-setup-in-pinned-network-namespace",
+      "exit_code": 0,
+      "stdout": "=== RUN   TestFGPreReleaseNetwork\n    fg_network_design_test.go:56: FG_NETWORK_OBSERVATION {\"allowed_local\":true,\"application_release\":\"never performed\",\"baseline_positive\":true,\"denied_local\":true,\"namespace\":\"net:[4026532655]\",\"observed_kernel_tables\":2,\"uid_map\":\"         0       1000          1\\n         1     100000      65536\\n\"}\n--- PASS: TestFGPreReleaseNetwork (0.37s)\nPASS\n",
+      "stderr": ""
+    }
+  ],
+  "cleanup": [
+    {
+      "container": "dc44b54b31ed5c96fa72a463cfe5b6c2d1bb44cc337cb2089998caf71ea7025f",
+      "removed": true
+    },
+    {
+      "container": "9854fcf5595dee14f590641d7dfc0b903478a9779536e9cc911886c92373f38b",
+      "removed": true
+    },
+    {
+      "image": "sha256:51babf21c386e2412e8383fc60ff6b7064c79c9653cb2d494ee54d486e588bab",
+      "removed": true
+    }
+  ],
+  "engine": {
+    "version": {
+      "APIVersion": "4.9.3",
+      "Version": "4.9.3",
+      "GoVersion": "go1.22.2",
+      "GitCommit": "",
+      "BuiltTime": "Thu Jan  1 07:30:00 1970",
+      "Built": 0,
+      "OsArch": "linux/amd64",
+      "Os": "linux"
+    },
+    "kernel": "6.18.54.1-microsoft-standard-WSL2",
+    "rootless": true
+  },
+  "host_setup_supported": true,
+  "private_root_removed": true,
+  "elapsed_seconds": 31.25311080100073,
+  "source_sha256": {
+    "run_network_probe.py": "2611310d5d3509d525e26373f01137b7cf19db5f571258843f363a9a31e6cef3",
+    "network_overlay_test.go": "1e180891ab6a036323ed6ac7efdb3cbf58f3bf88d12d9bc9e58426754887b57f"
+  }
+}

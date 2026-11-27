@@ -1,0 +1,95 @@
+{
+  "scope": "Linux private status FIFO + raw nonleader exec/CLOEXEC mechanism only; no production tail change, credential/capability qualification, engine transport or public startup claim",
+  "cases": [
+    {
+      "mode": "success",
+      "bound_header": true,
+      "unlinked_before_release": true,
+      "inhibited_no_ack": true,
+      "status_eof": true,
+      "errno_bytes": "",
+      "live_after_eof": true,
+      "kernel_image_after_eof": true,
+      "accepted_start": true,
+      "application_control": {
+        "private_descriptor_leaks": [],
+        "same_executable_exec": true,
+        "status_path_absent": true
+      },
+      "exit_code": 0,
+      "stderr": "source_status_fd=64\n"
+    },
+    {
+      "mode": "success-natural-fd",
+      "bound_header": true,
+      "unlinked_before_release": true,
+      "inhibited_no_ack": true,
+      "status_eof": true,
+      "errno_bytes": "",
+      "live_after_eof": true,
+      "kernel_image_after_eof": true,
+      "accepted_start": true,
+      "application_control": {
+        "private_descriptor_leaks": [],
+        "same_executable_exec": true,
+        "status_path_absent": true
+      },
+      "exit_code": 0,
+      "stderr": "source_status_fd=4\n"
+    },
+    {
+      "mode": "exec-failure",
+      "bound_header": true,
+      "unlinked_before_release": true,
+      "inhibited_no_ack": true,
+      "status_eof": true,
+      "errno_bytes": "02000000",
+      "live_after_eof": true,
+      "kernel_image_after_eof": false,
+      "accepted_start": false,
+      "exit_code": 125,
+      "stderr": "source_status_fd=64\n"
+    },
+    {
+      "mode": "before-exec-failure",
+      "bound_header": true,
+      "unlinked_before_release": true,
+      "inhibited_no_ack": true,
+      "status_eof": true,
+      "errno_bytes": "",
+      "live_after_eof": true,
+      "kernel_image_after_eof": false,
+      "accepted_start": false,
+      "exit_code": 121,
+      "stderr": "source_status_fd=64\n"
+    },
+    {
+      "mode": "cancel-before-release",
+      "bound_header": true,
+      "unlinked_before_release": true,
+      "inhibited_no_ack": true,
+      "status_eof": true,
+      "errno_bytes": "",
+      "live_after_eof": false,
+      "kernel_image_after_eof": false,
+      "accepted_start": false,
+      "exit_code": -9,
+      "stderr": "source_status_fd=64\n"
+    }
+  ],
+  "mechanism": "existing close_range/UNSHARE + raw dup3(O_CLOEXEC) + immediate close_range4; raw nonblocking descriptor ownership; natural and deliberately high source layouts; source-fd3 branch remains a product qualification gate",
+  "compiler": "go version go1.26.8 linux/amd64",
+  "binary_sha256": "5b382503fd87181c61c8fe29b0758ef3cf4bd1caed82ae50dd5c378ea7352d71",
+  "compiled_tail": {
+    "raw_call_count": 6,
+    "no_runtime_calls": true,
+    "disassembly_sha256": "ddf9a21c836b93fdcc1c9dbc58c5f24145a386488488b88a33fa8c822bd4ae44"
+  },
+  "passed": true,
+  "private_root_removed": true,
+  "elapsed_seconds": 0.573929330999988,
+  "source_sha256": {
+    "run_startup_status_reservedfd_probe.py": "f7fe0e0214905d9376c54ba80b8e1bd346b3bcf0b92298f444152747fe8b3853",
+    "startup_status_reservedfd_probe.go": "c9e9debe56aaccc49d26acd1b696de588d816ff46588ff5776945145f6f9556c"
+  }
+}

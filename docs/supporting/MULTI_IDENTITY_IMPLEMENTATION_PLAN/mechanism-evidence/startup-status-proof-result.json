@@ -1,0 +1,76 @@
+{
+  "scope": "Linux private status FIFO + raw nonleader exec/CLOEXEC mechanism only; no production tail change, credential/capability qualification, engine transport or public startup claim",
+  "cases": [
+    {
+      "mode": "success",
+      "bound_header": true,
+      "unlinked_before_release": true,
+      "inhibited_no_ack": true,
+      "status_eof": true,
+      "errno_bytes": "",
+      "live_after_eof": true,
+      "kernel_image_after_eof": true,
+      "accepted_start": true,
+      "application_control": {
+        "private_descriptor_leaks": [],
+        "same_executable_exec": true,
+        "status_path_absent": true
+      },
+      "exit_code": 0,
+      "stderr": ""
+    },
+    {
+      "mode": "exec-failure",
+      "bound_header": true,
+      "unlinked_before_release": true,
+      "inhibited_no_ack": true,
+      "status_eof": true,
+      "errno_bytes": "02000000",
+      "live_after_eof": false,
+      "kernel_image_after_eof": false,
+      "accepted_start": false,
+      "exit_code": 125,
+      "stderr": ""
+    },
+    {
+      "mode": "before-exec-failure",
+      "bound_header": true,
+      "unlinked_before_release": true,
+      "inhibited_no_ack": true,
+      "status_eof": true,
+      "errno_bytes": "",
+      "live_after_eof": false,
+      "kernel_image_after_eof": false,
+      "accepted_start": false,
+      "exit_code": 121,
+      "stderr": ""
+    },
+    {
+      "mode": "cancel-before-release",
+      "bound_header": true,
+      "unlinked_before_release": true,
+      "inhibited_no_ack": true,
+      "status_eof": true,
+      "errno_bytes": "",
+      "live_after_eof": false,
+      "kernel_image_after_eof": false,
+      "accepted_start": false,
+      "exit_code": -9,
+      "stderr": ""
+    }
+  ],
+  "compiler": "go version go1.26.8 linux/amd64",
+  "binary_sha256": "dbe7e3797932188f025c039c394baea429cbdff4c097bd77db17a4d1afef6b90",
+  "compiled_tail": {
+    "raw_call_count": 4,
+    "no_runtime_calls": true,
+    "disassembly_sha256": "669adba70a202f9585934aa1828e34f99204da196a27d57e04ed8dfa6eadaf9d"
+  },
+  "passed": true,
+  "private_root_removed": true,
+  "elapsed_seconds": 0.4081675439956598,
+  "source_sha256": {
+    "run_startup_status_probe.py": "4414c52c4bb52ee906cb40761f49d73ff7cb82bce1a7f1365bca3304f69cca01",
+    "startup_status_probe.go": "86930283fb539e193603502247087a256f96a1b8d0182180a38d607d23899be1"
+  }
+}

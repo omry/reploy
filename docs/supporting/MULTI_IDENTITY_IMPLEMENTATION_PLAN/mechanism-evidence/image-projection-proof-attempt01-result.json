@@ -1,0 +1,38 @@
+{
+  "command": [
+    "go",
+    "test",
+    "-json",
+    "-count=1",
+    "-overlay",
+    "/home/omry/dev/reploy/temp/reviews/fg-finalization-20261101/image-projection-overlay.json",
+    "./internal/dockerdeploy",
+    "-run",
+    "^TestFGImageDestinationProjection$",
+    "-timeout=120s"
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 5.914950288992259,
+  "passed": [
+    "TestFGImageDestinationProjection/absent",
+    "TestFGImageDestinationProjection/empty",
+    "TestFGImageDestinationProjection/directories-only",
+    "TestFGImageDestinationProjection/data-is-protected-too",
+    "TestFGImageDestinationProjection/zero-size-file",
+    "TestFGImageDestinationProjection/prefix-is-not-overlap",
+    "TestFGImageDestinationProjection/whiteout-removes-lower",
+    "TestFGImageDestinationProjection/whiteout-keeps-same-layer",
+    "TestFGImageDestinationProjection/opaque-removes-lower",
+    "TestFGImageDestinationProjection/opaque-keeps-same-layer",
+    "TestFGImageDestinationProjection/absolute-image-alias",
+    "TestFGImageDestinationProjection/relative-image-alias",
+    "TestFGImageDestinationProjection/alias-to-populated-tree",
+    "TestFGImageDestinationProjection/alias-cycle",
+    "TestFGImageDestinationProjection/file-destination",
+    "TestFGImageDestinationProjection/layer-traverses-link",
+    "TestFGImageDestinationProjection/intrinsic-root-not-data",
+    "TestFGImageDestinationProjection"
+  ],
+  "failed": [],
+  "scope": "Disposable metadata projection bound to actual D-verified immutable archive/layers; no production reader change, extracted files, code classifier or admission qualification."
+}

@@ -1,0 +1,50 @@
+{
+  "scope": "private network namespace/setup feasibility on rootless Podman4.9.3; not product/eligible-engine or peer/endpoint qualification",
+  "attempt": "47f1f7b0cdb18d6ad80cd418",
+  "private_root": "/tmp/reploy-fg-network-0l_j_bfi",
+  "cases": [
+    {
+      "mode": "trusted-setup-inside-private-container",
+      "exit_code": 1,
+      "stdout": "=== RUN   TestFGPreReleaseNetwork\n    fg_network_design_test.go:38: deny-local negative failed\n--- FAIL: TestFGPreReleaseNetwork (0.01s)\nFAIL\n",
+      "stderr": ""
+    },
+    {
+      "mode": "bounded-host-setup-in-pinned-network-namespace",
+      "exit_code": 1,
+      "stdout": "=== RUN   TestFGPreReleaseNetwork\n    fg_network_design_test.go:38: deny-local negative failed\n--- FAIL: TestFGPreReleaseNetwork (0.01s)\nFAIL\n",
+      "stderr": ""
+    }
+  ],
+  "cleanup": [
+    {
+      "container": "00920258ddcc2ca1edc0d04b1a195b2b7cc24854cb7b03a599145cf5dc406cc3",
+      "removed": true
+    },
+    {
+      "image": "sha256:f352364254ccf9627f48de1310b205fb2578a923b94c4eec8bcafc1c080e3d45",
+      "removed": true
+    }
+  ],
+  "engine": {
+    "version": {
+      "APIVersion": "4.9.3",
+      "Version": "4.9.3",
+      "GoVersion": "go1.22.2",
+      "GitCommit": "",
+      "BuiltTime": "Thu Jan  1 07:30:00 1970",
+      "Built": 0,
+      "OsArch": "linux/amd64",
+      "Os": "linux"
+    },
+    "kernel": "6.18.54.1-microsoft-standard-WSL2",
+    "rootless": true
+  },
+  "host_setup_supported": false,
+  "private_root_removed": true,
+  "elapsed_seconds": 25.075334323002608,
+  "source_sha256": {
+    "run_network_probe.py": "40cbab241fece9fae2b4d2e2c256528b1c09764e1b5e889ed86c9122761a9f60",
+    "network_overlay_test.go": "60f63c1496aded513986e03fb27cd92e33c38be0d967163fc029dd9f6597d756"
+  }
+}

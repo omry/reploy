@@ -1,0 +1,98 @@
+"""Bounded private Podman mechanism proof. No default store or host service."""
+from pathlib import Path
+import hashlib, io, json, os, secrets, shutil, subprocess, tarfile, tempfile, time
+
+OUT = Path(__file__).resolve().parent
+WORK = Path(tempfile.mkdtemp(prefix="reploy-fg-storage-"))
+TOKEN = secrets.token_hex(12)
+ENV = dict(os.environ, XDG_RUNTIME_DIR=str(WORK/"xdg"),
+           XDG_CONFIG_HOME=str(WORK/"config"), XDG_DATA_HOME=str(WORK/"data"))
+for name in ("xdg", "config", "data"):
+    (WORK/name).mkdir(mode=0o700)
+PREFIX = ["/usr/bin/podman", "--remote=false", "--root", str(WORK/"graph"), "--runroot", str(WORK/"run"),
+          "--storage-driver", "vfs", "--cgroup-manager", "cgroupfs", "--events-backend", "file"]
+RESULT = {"scope":"private rootless mount feasibility; not Reploy admission, eligible-engine or full code-closure qualification",
+          "private_root":str(WORK), "attempt":TOKEN, "cases":[], "cleanup":[], "passed":False}
+NAMES = []
+IMAGE = None
+START = time.monotonic()
+
+def run(args, timeout=45, check=True, env=ENV):
+    p = subprocess.run(args, env=env, capture_output=True, text=True, timeout=timeout)
+    if check and p.returncode:
+        raise RuntimeError(f"command failed ({p.returncode}): {args[:3]}: {p.stderr[-2000:]}")
+    return p
+
+try:
+    assert os.geteuid() != 0
+    probe = WORK/"probe"
+    build_env = dict(ENV, CGO_ENABLED="0", GOOS="linux", GOARCH="amd64")
+    run(["go", "build", "-o", str(probe), str(OUT/"storage_probe.go")], env=build_env)
+    probe.chmod(0o555)
+    info = json.loads(run(PREFIX+["info", "--format", "json"]).stdout)
+    assert info["host"]["security"]["rootless"] is True
+    RESULT["engine"] = {"version":info["version"], "rootless":True,
+                         "kernel":info["host"]["kernel"], "runtime":info["host"]["ociRuntime"]}
+    # Prove the only exposed fixture UID maps to subordinate authority, not the caller.
+    parents = [tuple(map(int,line.split())) for line in run(PREFIX+["unshare","cat","/proc/self/uid_map"]).stdout.splitlines()]
+    host_id = next(h+1-c for c,h,n in parents if c <= 1 < c+n)
+    assert host_id != os.geteuid() and host_id != 0
+    RESULT["fixture_host_uid"] = host_id
+    archive = WORK/"rootfs.tar"
+    with tarfile.open(archive,"w") as tar:
+        for name in ("app", "tmp", "opt", "opt/reploy"):
+            t = tarfile.TarInfo(name); t.type=tarfile.DIRTYPE; t.mode=0o755; tar.addfile(t)
+        for name, data, mode in [("probe",probe.read_bytes(),0o555),
+                                 ("app/start",b"ORIGINAL",0o755)]:
+            t=tarfile.TarInfo(name); t.size=len(data); t.mode=mode; tar.addfile(t,io.BytesIO(data))
+    tag="localhost/reploy-fg-storage:"+TOKEN
+    IMAGE=run(PREFIX+["import","--change","LABEL reploy.fg-storage-proof="+TOKEN,str(archive),tag]).stdout.strip()
+    assert IMAGE
+    bind=WORK/"shadow"; bind.mkdir(mode=0o777); bind.chmod(0o777)
+    (bind/"start").write_text("SHADOW"); (bind/"start").chmod(0o666)
+    cases=[("readonly",["--read-only"]),
+           ("shadow-control",["--read-only","--volume",str(bind)+":/app:rw"]),
+           ("writable-protected",["--volume",str(probe)+":/probe:ro"]),
+           ("ancestor-control",["--volume",str(probe)+":/opt/reploy/probe:ro"])]
+    for mode, extra in cases:
+        name="reploy-fg-storage-"+TOKEN+"-"+mode; NAMES.append(name)
+        cmd=PREFIX+["run","--name",name,"--label","reploy.fg-storage-proof="+TOKEN,
+                    "--network","none","--cgroups","disabled","--uidmap","0:1:1",
+                    "--gidmap","0:1:1","--security-opt","label=disable",*extra,IMAGE,"/probe",mode]
+        p=run(cmd,check=False)
+        row={"mode":mode,"exit_code":p.returncode,"stderr":p.stderr[-1500:]}
+        try: row["observation"]=json.loads(p.stdout)
+        except ValueError: row["stdout"]=p.stdout[-1500:]
+        RESULT["cases"].append(row)
+        assert p.returncode == 0 and row["observation"]["passed"],row
+        run(PREFIX+["rm",name])
+    RESULT["passed"]=True
+except Exception as e:
+    RESULT["error"]=f"{type(e).__name__}: {e}"
+finally:
+    # Only explicitly owned IDs/names in our fresh private store are removed.
+    for name in NAMES:
+        p=run(PREFIX+["inspect",name],check=False)
+        if p.returncode == 0:
+            obj=json.loads(p.stdout)[0]
+            assert obj["Config"]["Labels"]["reploy.fg-storage-proof"] == TOKEN
+            q=run(PREFIX+["rm","--force",obj["Id"]],check=False)
+            RESULT["cleanup"].append({"container":obj["Id"],"removed":q.returncode==0})
+    if IMAGE:
+        p=run(PREFIX+["rmi",IMAGE],check=False)
+        RESULT["cleanup"].append({"image":IMAGE,"removed":p.returncode==0})
+    try:
+        rows=json.loads(run(PREFIX+["ps","--all","--format","json"]).stdout)
+        RESULT["private_inventory_empty"] = rows == []
+        assert rows == []
+        assert str(WORK).startswith("/tmp/reploy-fg-storage-") and WORK.resolve() == WORK
+        run(PREFIX+["unshare","/usr/bin/rm","-rf",str(WORK)])
+        RESULT["private_root_removed"] = not WORK.exists()
+    except Exception as e:
+        RESULT["cleanup_error"]=str(e)
+        RESULT["passed"]=False
+    RESULT["elapsed_seconds"]=time.monotonic()-START
+    RESULT["source_sha256"]={p.name:hashlib.sha256(p.read_bytes()).hexdigest()
+                              for p in (Path(__file__),OUT/"storage_probe.go")}
+    (OUT/"storage-proof-result.json").write_text(json.dumps(RESULT,indent=2)+"\n")
+    print(json.dumps(RESULT,indent=2))
