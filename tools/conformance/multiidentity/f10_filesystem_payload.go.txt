@@ -1,0 +1,236 @@
+// Disposable F1.0 fixture. Build outside the package; this is not shipped code.
+package main
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"golang.org/x/sys/unix"
+)
+
+func must(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+
+func require(ok bool, message string) {
+	if !ok {
+		panic(message)
+	}
+}
+
+func emit(value any) { must(json.NewEncoder(os.Stdout).Encode(value)) }
+
+func identity(fd int) unix.Stat_t {
+	var st unix.Stat_t
+	must(unix.Fstat(fd, &st))
+	return st
+}
+
+func confined(root int, name string, flags int) (int, error) {
+	return unix.Openat2(root, name, &unix.OpenHow{
+		Flags: uint64(flags | unix.O_CLOEXEC | unix.O_NOFOLLOW),
+		Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS |
+			unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV,
+	})
+}
+
+func host() {
+	root, err := os.MkdirTemp("", "f10-descriptors-")
+	must(err)
+	defer os.RemoveAll(root)
+	selected, foreign := filepath.Join(root, "selected"), filepath.Join(root, "foreign")
+	must(os.Mkdir(selected, 0700))
+	must(os.Mkdir(foreign, 0700))
+	canary := filepath.Join(foreign, "canary")
+	must(os.WriteFile(canary, []byte("UNCHANGED"), 0600))
+	fd, err := unix.Open(selected, unix.O_PATH|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	must(err)
+	defer unix.Close(fd)
+	checks := map[string]bool{}
+	for _, name := range []string{"../foreign/canary", canary, "/proc/self/fd/0"} {
+		x, err := confined(fd, name, unix.O_WRONLY)
+		if err == nil {
+			unix.Close(x)
+			panic("escape accepted: " + name)
+		}
+	}
+	checks["absolute_parent_and_magic_escape_refused"] = true
+	must(os.Symlink(foreign, filepath.Join(selected, "alias")))
+	_, err = confined(fd, "alias/canary", unix.O_WRONLY)
+	require(errors.Is(err, unix.ELOOP), "symlink ancestor did not refuse")
+	checks["symlink_ancestor_refused"] = true
+	must(os.Link(canary, filepath.Join(selected, "linked")))
+	x, err := confined(fd, "linked", unix.O_PATH)
+	must(err)
+	st := identity(x)
+	must(unix.Close(x))
+	require(st.Nlink == 2, "hardlink control missing")
+	checks["hardlink_rejected_by_held_metadata"] = st.Nlink != 1
+	// Replacement after opening never redirects an operation on the held object.
+	must(os.WriteFile(filepath.Join(selected, "leaf"), []byte("selected"), 0600))
+	x, err = confined(fd, "leaf", unix.O_RDWR)
+	must(err)
+	before := identity(x)
+	must(os.Rename(filepath.Join(selected, "leaf"), filepath.Join(selected, "retained")))
+	must(os.Symlink(canary, filepath.Join(selected, "leaf")))
+	_, err = unix.Write(x, []byte("PINNED"))
+	must(err)
+	after := identity(x)
+	must(unix.Close(x))
+	require(before.Ino == after.Ino && before.Dev == after.Dev, "descriptor identity changed")
+	data, err := os.ReadFile(canary)
+	must(err)
+	require(string(data) == "UNCHANGED", "foreign canary changed")
+	checks["leaf_substitution_cannot_redirect_held_descriptor"] = true
+	// Root-name replacement also cannot redirect the held directory descriptor.
+	must(os.Rename(selected, selected+"-held"))
+	defer os.RemoveAll(selected + "-held")
+	must(os.Symlink(foreign, selected))
+	x, err = confined(fd, "retained", unix.O_RDONLY)
+	must(err)
+	must(unix.Close(x))
+	_, err = confined(fd, "canary", unix.O_WRONLY)
+	require(errors.Is(err, unix.ENOENT), "root replacement redirected descriptor")
+	checks["root_substitution_cannot_redirect_held_descriptor"] = true
+	mountpoint := filepath.Join(selected+"-held", "nested")
+	must(os.Mkdir(mountpoint, 0700))
+	must(unix.Mount(foreign, mountpoint, "", unix.MS_BIND, ""))
+	defer unix.Unmount(mountpoint, 0)
+	_, err = confined(fd, "nested/canary", unix.O_WRONLY)
+	require(errors.Is(err, unix.EXDEV), "nested mount crossed")
+	checks["nested_mount_refused"] = true
+	data, err = os.ReadFile(canary)
+	must(err)
+	require(string(data) == "UNCHANGED", "foreign canary changed")
+	emit(map[string]any{"checks": checks, "canary": string(data), "uid": os.Getuid()})
+}
+
+func digest(path string) string {
+	b, err := os.ReadFile(path)
+	must(err)
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
+}
+
+func observe() {
+	pid, err := strconv.Atoi(os.Args[2])
+	must(err)
+	require(pid > 0, "invalid observed PID")
+	pidfd, err := unix.PidfdOpen(pid, 0)
+	must(err)
+	defer unix.Close(pidfd)
+	proc := filepath.Join("/proc", strconv.Itoa(pid))
+	before, err := os.ReadFile(filepath.Join(proc, "stat"))
+	must(err)
+	root, err := unix.Open(filepath.Join(proc, "root"), unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	must(err)
+	defer unix.Close(root)
+	fd, err := unix.Openat2(root, "reploy-probe", &unix.OpenHow{
+		Flags:   unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW,
+		Resolve: unix.RESOLVE_IN_ROOT | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS,
+	})
+	must(err)
+	f := os.NewFile(uintptr(fd), "observed-protected-artifact")
+	defer f.Close()
+	st := identity(fd)
+	require(st.Mode&unix.S_IFMT == unix.S_IFREG && st.Size > 0 && st.Size < 16<<20, "invalid observed artifact")
+	h := sha256.New()
+	n, err := io.Copy(h, io.LimitReader(f, 16<<20))
+	must(err)
+	require(n == st.Size, "observed artifact size changed")
+	mounts, err := os.ReadFile(filepath.Join(proc, "mountinfo"))
+	must(err)
+	after, err := os.ReadFile(filepath.Join(proc, "stat"))
+	must(err)
+	start := func(data []byte) string {
+		// Fields after the final comm delimiter start with field 3 (state).
+		return strings.Fields(string(data)[strings.LastIndex(string(data), ") ")+2:])[19]
+	}
+	require(start(before) == start(after), "observed process changed")
+	poll := []unix.PollFd{{Fd: int32(pidfd), Events: unix.POLLIN}}
+	nready, err := unix.Poll(poll, 0)
+	must(err)
+	require(nready == 0, "observed process exited")
+	emit(map[string]any{"pid": pid, "start_time": start(before), "device": st.Dev,
+		"inode": st.Ino, "size": st.Size, "sha256": hex.EncodeToString(h.Sum(nil)),
+		"mountinfo": string(mounts), "pinned_process_alive": true})
+}
+
+func container() {
+	mode := os.Args[2]
+	info, err := os.ReadFile("/proc/self/mountinfo")
+	must(err)
+	status, err := os.ReadFile("/proc/self/status")
+	must(err)
+	uidmap, err := os.ReadFile("/proc/self/uid_map")
+	must(err)
+	gidmap, err := os.ReadFile("/proc/self/gid_map")
+	must(err)
+	var root unix.Stat_t
+	must(unix.Stat("/", &root))
+	emit(map[string]any{"phase": "inhibited", "sha256": digest("/reploy-probe"),
+		"mountinfo": string(info), "status": string(status), "uid_map": string(uidmap), "gid_map": string(gidmap),
+		"root_uid": root.Uid, "root_gid": root.Gid, "root_mode": root.Mode})
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, err := os.Stat("/data/release"); err == nil {
+			break
+		}
+		require(time.Now().Before(deadline), "release deadline expired")
+		time.Sleep(10 * time.Millisecond)
+	}
+	checks := map[string]bool{}
+	// A read-only file bind must resist direct writes and all name replacement.
+	f, err := os.OpenFile("/reploy-probe", os.O_WRONLY, 0)
+	if err == nil {
+		f.Close()
+		panic("trusted file writable")
+	}
+	checks["trusted_write_refused"] = true
+	checks["trusted_unlink_refused"] = os.Remove("/reploy-probe") != nil
+	checks["trusted_rename_refused"] = os.Rename("/reploy-probe", "/replaced") != nil
+	must(os.WriteFile("/data/payload", []byte("managed"), 0600))
+	checks["managed_destination_writable"] = true
+	must(os.WriteFile(filepath.Join(os.Args[3], "target-payload"), []byte("target"), 0600))
+	checks["selected_destination_writable"] = true
+	err = os.WriteFile("/application-change", []byte("explicit"), 0600)
+	if mode == "writable" && err != nil {
+		panic(fmt.Sprintf("writable root uid=%d gid=%d mode=%o: %v", root.Uid, root.Gid, root.Mode, err))
+	}
+	checks["root_policy"] = (mode == "writable" && err == nil) || (mode == "readonly" && err != nil)
+	for name, ok := range checks {
+		require(ok, "failed: "+name)
+	}
+	require(strings.Contains(string(status), "CapEff:\t0000000000000000"), "fixture has capabilities")
+	emit(map[string]any{"phase": "completed", "checks": checks, "sha256": digest("/reploy-probe")})
+}
+
+func main() {
+	defer func() {
+		if problem := recover(); problem != nil {
+			fmt.Fprintln(os.Stderr, problem)
+			os.Exit(1)
+		}
+	}()
+	switch os.Args[1] {
+	case "host":
+		host()
+	case "container":
+		container()
+	case "observe":
+		observe()
+	default:
+		panic("unknown fixture mode")
+	}
+}
